@@ -1,0 +1,1163 @@
+use std::{
+    ops::DerefMut,
+    os::fd::{AsRawFd, FromRawFd},
+    str::FromStr,
+    sync::Arc,
+};
+
+use genvm_common::io::{set_fd_nonblocking, AsyncCustomFD, FdWrapper};
+use genvm_common::*;
+use tokio::io::AsyncBufReadExt;
+
+pub use genvm_modules_interfaces::GenVMId;
+
+use crate::common::{LogSink, LogSinkElement, LogSinkInner, LoggerWithId, GENVM_BY_ID_LOGGER};
+
+/// Spawn relay that passes the stream to the module handler
+async fn spawn_module_relay(
+    parent_fd: FdWrapper,
+    handler: super::modules::StreamHandler,
+    genvm_id: GenVMId,
+    module_name: &'static str,
+    exec_ctx: sync::DArc<super::execution_context::ExecutionContext>,
+) {
+    log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, module = module_name; "relay starting");
+
+    match parent_fd.into_async_fd() {
+        Ok(stream) => {
+            handler(Box::new(stream), Some(exec_ctx)).await;
+        }
+        Err(e) => {
+            log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, module = module_name, error:err = e; "failed to create async stream");
+        }
+    }
+
+    log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, module = module_name; "relay finished");
+}
+
+#[derive(Debug)]
+pub struct SingleGenVMContextDone {
+    pub finished_at: chrono::DateTime<chrono::Utc>,
+    pub stdout: String,
+    pub stderr: String,
+    pub genvm_log: Vec<serde_json::Map<String, serde_json::Value>>,
+    pub metrics: serde_json::Value,
+    pub consumed_result: Option<Vec<u8>>,
+    pub version_major: u16,
+    pub version_minor: u16,
+}
+
+impl serde::Serialize for SingleGenVMContextDone {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        let mut state = serializer.serialize_struct("SingleGenVMContextDone", 8)?;
+        state.serialize_field("finished_at", &self.finished_at.timestamp_millis())?;
+        state.serialize_field("stdout", &self.stdout)?;
+        state.serialize_field("stderr", &self.stderr)?;
+        state.serialize_field("genvm_log", &self.genvm_log)?;
+        state.serialize_field("metrics", &self.metrics)?;
+        state.serialize_field("consumed_result", &self.consumed_result)?;
+        state.serialize_field("version_major", &self.version_major)?;
+        state.serialize_field("version_minor", &self.version_minor)?;
+        state.end()
+    }
+}
+
+struct SingleGenVMContext {
+    id: GenVMId,
+    version: String,
+    version_major: u16,
+    version_minor: u16,
+    result: tokio::sync::OnceCell<SingleGenVMContextDone>,
+    started_at: chrono::DateTime<chrono::Utc>,
+    strict_deadline: chrono::DateTime<chrono::Utc>,
+
+    stdout_stderr_sem: Arc<tokio::sync::Semaphore>,
+    stdout: tokio::sync::OnceCell<String>,
+    stderr: tokio::sync::OnceCell<String>,
+    log_sink: LogSink,
+    consumed_result: tokio::sync::OnceCell<Vec<u8>>,
+
+    process_handle: tokio::sync::Mutex<tokio::process::Child>,
+    all_permits: crossbeam::atomic::AtomicCell<Option<Box<dyn std::any::Any + Send + Sync>>>,
+    _execution_context: Option<sync::DArc<super::execution_context::ExecutionContext>>,
+}
+
+struct PermitsData {
+    max: usize,
+    num_throttled: usize,
+    throttled: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+pub struct Ctx {
+    known_executions: papaya::HashMap<GenVMId, sync::DArc<SingleGenVMContext>>,
+    next_genvm_id: std::sync::atomic::AtomicU64,
+    pub permits: Arc<tokio::sync::Semaphore>,
+    max_permits: tokio::sync::Mutex<PermitsData>,
+
+    executors_path: std::path::PathBuf,
+}
+
+impl Ctx {
+    pub fn executors_path(&self) -> &std::path::Path {
+        &self.executors_path
+    }
+
+    pub async fn get_max_permits(&self) -> usize {
+        let max_permits = self.max_permits.lock().await;
+        max_permits.max
+    }
+
+    pub fn status_executions(&self) -> serde_json::Value {
+        let mut ret = serde_json::Map::new();
+
+        for (genvm_id, exec_ctx) in self.known_executions.pin().iter() {
+            let result = if let Some(result) = exec_ctx.result.get() {
+                serde_json::json!({
+                    "finished_at": result.finished_at.to_rfc3339(),
+                })
+            } else {
+                serde_json::Value::Null
+            };
+
+            ret.insert(
+                genvm_id.to_string(),
+                serde_json::json!({
+                    "result": result,
+                    "version": exec_ctx.version,
+                    "started_at": exec_ctx.started_at.to_rfc3339(),
+                    "strict_deadline": exec_ctx.strict_deadline.to_rfc3339()
+                }),
+            );
+        }
+
+        ret.into()
+    }
+
+    pub fn get_current_permits(&self) -> usize {
+        self.permits.available_permits()
+    }
+
+    pub async fn set_permits(&self, permits: usize) -> usize {
+        let mut permits_lock = self.max_permits.lock().await;
+
+        permits_lock.max += permits_lock.num_throttled;
+        permits_lock.num_throttled = 0;
+        permits_lock.throttled = None;
+        // actually this causes drop of previous one, so we can enter more genvms than we have permits, but it's ok for now
+        // especially since this method is expected to be called before starting any genvms at all
+
+        if permits < 2 {
+            log_warn!(permits = permits; "cannot set permits below 2");
+            return permits_lock.max;
+        }
+
+        if permits_lock.max > permits {
+            let delta = permits_lock.max - permits;
+            let p = self
+                .permits
+                .clone()
+                .acquire_many_owned(delta as u32)
+                .await
+                .unwrap();
+            permits_lock.max = permits;
+            permits_lock.num_throttled = delta;
+            permits_lock.throttled = Some(p);
+        } else {
+            let delta = permits - permits_lock.max;
+            self.permits.add_permits(delta);
+            permits_lock.max = permits;
+        }
+
+        permits_lock.max
+    }
+
+    pub async fn graceful_shutdown(&self, genvm_id: GenVMId) -> anyhow::Result<()> {
+        let Some(exec_ctx) = self.known_executions.pin().get(&genvm_id).cloned() else {
+            anyhow::bail!("GenVM with id {} not found", genvm_id);
+        };
+
+        if exec_ctx.result.get().is_some() {
+            return Ok(());
+        }
+
+        let mut child = exec_ctx.process_handle.lock().await;
+
+        if let Ok(Some(_)) = child.try_wait() {
+            log_trace_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "GenVM process already exited");
+            return Ok(());
+        }
+
+        let _ = child.start_kill();
+        child.wait().await?;
+
+        Ok(())
+    }
+
+    pub async fn get_genvm_status(
+        &self,
+        genvm_id: GenVMId,
+    ) -> Option<sync::DArc<SingleGenVMContextDone>> {
+        let Some(exec_ctx) = self.known_executions.pin().get(&genvm_id).cloned() else {
+            log_trace_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "genvm status requested for unknown id");
+            return None;
+        };
+
+        let proc_check = self.check_proc(exec_ctx.clone()).await;
+        log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, proc_exited = proc_check; "genvm status checked");
+
+        exec_ctx
+            .into_get_sub(|data| data.result.get())
+            .lift_option()
+            .map(sync::DArcStruct::into_arc)
+    }
+
+    pub async fn fetch_genvm_status(
+        &self,
+        genvm_id: GenVMId,
+    ) -> Option<sync::DArc<SingleGenVMContextDone>> {
+        let res = self.get_genvm_status(genvm_id).await;
+        if res.is_some() {
+            self.known_executions.pin().remove(&genvm_id);
+        }
+
+        res
+    }
+
+    #[cfg(target_os = "macos")]
+    fn get_default_permits() -> usize {
+        log_warn!("automatic permits detection is not supported on macOS, using default value");
+
+        8
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    fn get_default_permits() -> usize {
+        let mut sys = sysinfo::System::new_all();
+        sys.refresh_memory();
+        sys.refresh_all();
+
+        let free_memory = sys.free_memory();
+        let free_swap = sys.free_swap();
+
+        log_info!(
+            free_memory = free_memory,
+            free_swap = free_swap,
+            free_memory_gb = free_memory as f64 / (1024.0 * 1024.0 * 1024.0),
+            free_swap_gb = free_swap as f64 / (1024.0 * 1024.0 * 1024.0);
+            "memory status"
+        );
+
+        let total_mem_kb = free_memory / 1024 + free_swap / 1024;
+        let total_mem_gb = total_mem_kb / 1024 / 1024;
+
+        (total_mem_gb / 4).max(2) as usize
+    }
+
+    pub fn new(config: &crate::manager::Config) -> anyhow::Result<Self> {
+        let permits = if let Some(p) = config.permits {
+            p
+        } else {
+            Self::get_default_permits()
+        };
+        log_info!(permits = permits; "estimated concurrent GenVM permits");
+
+        let mut exe_path = std::env::current_exe()?;
+        exe_path.pop();
+        exe_path.pop();
+        exe_path.push("executor");
+
+        Ok(Self {
+            known_executions: Default::default(),
+            next_genvm_id: std::sync::atomic::AtomicU64::new(1),
+            permits: Arc::new(tokio::sync::Semaphore::new(permits)),
+            max_permits: tokio::sync::Mutex::new(PermitsData {
+                max: permits,
+                num_throttled: 0,
+                throttled: None,
+            }),
+
+            executors_path: exe_path,
+        })
+    }
+}
+
+async fn gc_step(ctx: &sync::DArc<Ctx>) {
+    let now = chrono::Utc::now();
+
+    // copy-out so that we don't hold the lock while doing async operations
+    let keys = ctx
+        .known_executions
+        .pin()
+        .iter()
+        .map(|kv| *kv.0)
+        .collect::<Vec<_>>();
+
+    for key in keys {
+        let Some(val) = ctx.known_executions.pin().get(&key).cloned() else {
+            continue;
+        };
+
+        if val.strict_deadline < now {
+            log_warn_into!(&LoggerWithId, genvm_id:id = key.0; "genvm execution exceeded strict deadline, terminating");
+            let _ = ctx.graceful_shutdown(key).await;
+        }
+        let _ = ctx.check_proc(val.clone()).await;
+    }
+
+    // Remove old finished executions
+    ctx.known_executions.pin().retain(|k, v| {
+        let Some(result) = v.result.get() else {
+            return true;
+        };
+        let passed = now.signed_duration_since(result.finished_at);
+        if passed > chrono::Duration::seconds(60) {
+            log_warn_into!(&LoggerWithId, genvm_id:id = k.0; "removing zombie genvm execution context");
+            return false;
+        }
+        true
+    });
+}
+
+pub async fn start_service(
+    ctx: sync::DArc<Ctx>,
+    cancel: Arc<cancellation::Token>,
+) -> anyhow::Result<()> {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = cancel.chan.closed() => {
+                    log_info!("shutting down run service waiter");
+                    break;
+                }
+                _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {
+                    gc_step(&ctx).await;
+                }
+            }
+        }
+    });
+
+    Ok(())
+}
+
+use serde_with::serde_as;
+
+fn decode_datetime_rfc3339(
+    val: calldata::Value,
+) -> std::result::Result<chrono::DateTime<chrono::Utc>, calldata::codec::DecodeError> {
+    let s = match val {
+        calldata::Value::Str(s) => s,
+        _ => return Err(calldata::codec::DecodeError::UnexpectedKind(val.kind())),
+    };
+    match chrono::DateTime::parse_from_rfc3339(&s) {
+        Ok(dt) => Ok(dt.to_utc()),
+        Err(e) => Err(calldata::codec::DecodeError::UserError(Box::new(e))),
+    }
+}
+
+fn encode_datetime_rfc3339<W: calldata::Writer>(
+    dt: &chrono::DateTime<chrono::Utc>,
+    enc: &mut calldata::Encoder<W>,
+) -> std::result::Result<(), W::Error> {
+    use chrono::SecondsFormat;
+    let s = dt.to_rfc3339_opts(SecondsFormat::AutoSi, true);
+    enc.push_str(&s)
+}
+
+fn default_extra_args() -> Vec<String> {
+    Vec::new()
+}
+
+fn default_debug_mode() -> genvm_common::DebugMode {
+    genvm_common::DebugMode::Disabled
+}
+
+fn default_no_modules() -> bool {
+    false
+}
+
+fn default_reroute_to() -> String {
+    String::new()
+}
+
+#[serde_as]
+#[derive(
+    serde::Serialize, serde::Deserialize, genlayer_calldata::Decode, genlayer_calldata::Encode,
+)]
+pub struct Request {
+    pub major: u32,
+    pub message: genvm_common::domain::MessageData,
+    pub is_sync: bool,
+    /// Executor debug level. Controls captured-output bounding, tracing, runner
+    /// `:latest`/`:test` resolution (under `unsafe`), and (under `unsafe-tracing`)
+    /// exposing non-deterministic data. See `genvm_common::DebugMode`.
+    #[serde(default)]
+    #[calldata(default = default_debug_mode)]
+    pub debug_mode: genvm_common::DebugMode,
+    #[serde(default = "default_max_execution_minutes")]
+    #[calldata(default = default_max_execution_minutes)]
+    pub max_execution_minutes: u64,
+    pub bucket_totals: Vec<num_bigint::BigInt>,
+    pub host_data: String,
+    #[calldata(serialize_with = encode_datetime_rfc3339, deserialize_with = decode_datetime_rfc3339)]
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+    pub host: String,
+    #[serde(default)]
+    #[calldata(default = default_extra_args)]
+    pub extra_args: Vec<String>,
+    pub calldata: bytes::Bytes,
+    pub code: Option<bytes::Bytes>,
+    #[serde(default = "default_permissions")]
+    #[calldata(default = default_permissions)]
+    pub permissions: String,
+    /// If true, don't require modules even if permissions suggest they're needed
+    #[serde(default)]
+    #[calldata(default = default_no_modules)]
+    pub no_modules: bool,
+    /// Debug-only override: force the executor directory (a version dir under the
+    /// executors path) instead of resolving it from the manifest. Honored only
+    /// when `debug_mode >= Safe`; ignored in production (`disabled`) so consensus
+    /// always runs the manifest-resolved version.
+    #[serde(default = "default_reroute_to")]
+    #[calldata(default = default_reroute_to)]
+    pub reroute_to: String,
+    pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    /// Host-provided `node` fee constants (moved off `host_data`).
+    #[serde(default)]
+    #[calldata(default = default_gas_data)]
+    pub gas_data: std::collections::BTreeMap<String, String>,
+    /// Message-fee allocation tree passed alongside the execution.
+    #[serde(default)]
+    #[calldata(default = default_message_fee_allocation)]
+    pub message_fee_allocation: Vec<genvm_common::domain::fees::MessageAllocationNode>,
+    /// Initial time-unit budget for this execution.
+    pub initial_time_units_allocation: u32,
+}
+
+fn default_gas_data() -> std::collections::BTreeMap<String, String> {
+    std::collections::BTreeMap::new()
+}
+
+fn default_message_fee_allocation() -> Vec<genvm_common::domain::fees::MessageAllocationNode> {
+    Vec::new()
+}
+
+fn default_permissions() -> String {
+    "rwscn".to_owned()
+}
+
+impl Request {
+    /// Returns true if this request needs modules to be running.
+    /// Modules are needed when running async (is_sync=false) with nondet permission ('n'),
+    /// unless no_modules flag is set.
+    pub fn needs_modules(&self) -> bool {
+        !self.no_modules && !self.is_sync && self.permissions.contains('n')
+    }
+}
+
+fn default_max_execution_minutes() -> u64 {
+    20
+}
+
+trait LogAppender {
+    async fn append_structured(
+        &mut self,
+        level: logger::Level,
+        data: serde_json::Map<String, serde_json::Value>,
+    );
+    async fn append_text(&mut self, serde_err: serde_json::Error, text: &str);
+}
+
+/// Used when capture is `disabled`: forwards the executor's logs to the
+/// manager's own log instead of buffering them into the result.
+struct LogAppenderToLog(GenVMId);
+
+// `read_log_pipe` takes `impl DerefMut<Target = LA>`. The value-capturing
+// appender is wrapped in `Arc<Mutex<..>>` (which derefs to it), but this
+// forwarding appender holds no shared state, so it derefs to itself.
+impl std::ops::Deref for LogAppenderToLog {
+    type Target = Self;
+
+    fn deref(&self) -> &Self::Target {
+        self
+    }
+}
+
+impl DerefMut for LogAppenderToLog {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self
+    }
+}
+
+impl LogAppender for LogAppenderToLog {
+    #[inline(always)]
+    async fn append_structured(
+        &mut self,
+        level: logger::Level,
+        data: serde_json::Map<String, serde_json::Value>,
+    ) {
+        log_with_level_into!(level, &LoggerWithId, log:serde = data, genvm_id:id = self.0.0; "genvm log");
+    }
+    #[inline(always)]
+    async fn append_text(&mut self, serde_err: serde_json::Error, text: &str) {
+        log_info_into!(&LoggerWithId, error:err = serde_err, genvm_id:id = self.0.0, line = text; "genvm log raw");
+    }
+}
+
+struct LogAppenderToValue(LogSink, GenVMId);
+
+impl LogAppender for LogAppenderToValue {
+    #[inline(always)]
+    async fn append_structured(
+        &mut self,
+        level: logger::Level,
+        mut data: serde_json::Map<String, serde_json::Value>,
+    ) {
+        log_trace!(log:serde = data; "genvm log");
+
+        data.insert("level".to_owned(), level.to_string().into());
+
+        self.0.push(LogSinkElement::Map(data));
+    }
+
+    #[inline(always)]
+    async fn append_text(&mut self, _serde_err: serde_json::Error, text: &str) {
+        self.0.push(LogSinkElement::Line(text.to_owned()));
+    }
+}
+
+async fn read_log_pipe<LA: LogAppender>(
+    reader_fd: std::os::unix::io::OwnedFd,
+    mut sink: impl DerefMut<Target = LA>,
+) -> std::io::Result<()> {
+    let file = AsyncCustomFD::new(reader_fd)?;
+
+    let reader = tokio::io::BufReader::new(file);
+
+    let mut lines = reader.lines();
+
+    while let Some(line) = lines.next_line().await? {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        match serde_json::from_str(line) {
+            Ok::<serde_json::Map<String, serde_json::Value>, _>(mut log_record) => {
+                let level = log_record
+                    .remove("level")
+                    .map(|x| {
+                        if let serde_json::Value::String(s) = x {
+                            Some(s)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(None)
+                    .and_then(|x| logger::Level::from_str(&x).ok())
+                    .unwrap_or(logger::Level::Info);
+
+                sink.append_structured(level, log_record).await;
+            }
+            Err(e) => {
+                sink.append_text(e, line).await;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Maximum bytes of stdout/stderr kept (as a tail) per execution when not in
+/// debug mode, to bound manager memory.
+const OUTPUT_TAIL_LIMIT: usize = 4 * 1024 * 1024;
+
+/// Keeps only the last `limit` bytes of `s`, trimming whole UTF-8 chars from the
+/// front (so the most recent output survives).
+fn keep_tail(s: &mut String, limit: usize) {
+    if s.len() <= limit {
+        return;
+    }
+    let mut cut = s.len() - limit;
+    while cut < s.len() && !s.is_char_boundary(cut) {
+        cut += 1;
+    }
+    s.drain(..cut);
+}
+
+async fn pipe_read<P: tokio::io::AsyncReadExt + Unpin>(
+    mut reader: P,
+    to: sync::DArc<tokio::sync::OnceCell<std::string::String>>,
+    permit: tokio::sync::OwnedSemaphorePermit,
+    max_bytes: Option<usize>,
+) {
+    let mut result = String::new();
+    let mut buf = vec![0u8; 8192];
+
+    loop {
+        let n = reader.read(&mut buf).await;
+
+        log_trace!(n:? = n; "read from genvm stdout/stderr");
+
+        let n = match n {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+
+        match std::str::from_utf8(&buf[..n]) {
+            Ok(s) => {
+                log_trace!(data = s; "read from genvm stdout/stderr");
+                result.push_str(s)
+            }
+            Err(_) => {
+                let s = String::from_utf8_lossy(&buf[..n]);
+                log_trace!(data = s; "read from genvm stdout/stderr");
+                result.push_str(&s);
+            }
+        }
+
+        // Bound memory while reading: keep only the tail when not in debug mode.
+        if let Some(limit) = max_bytes {
+            if result.len() > limit {
+                keep_tail(&mut result, limit);
+            }
+        }
+    }
+
+    if let Err(e) = to.set(result) {
+        log_error!(error:err = e; "failed to set stdout/stderr content");
+    }
+
+    std::mem::drop(permit);
+}
+
+async fn read_manager_host_stream(
+    parent_fd: FdWrapper,
+    consumed_result: sync::DArc<tokio::sync::OnceCell<Vec<u8>>>,
+    genvm_id: GenVMId,
+) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut file = match parent_fd.into_async_fd() {
+        Ok(f) => f,
+        Err(e) => {
+            log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to create async fd for manager host stream");
+            return;
+        }
+    };
+
+    loop {
+        let mut method_buf = [0u8; 1];
+        match file.read_exact(&mut method_buf).await {
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "manager host stream closed");
+                return;
+            }
+            Err(e) => {
+                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read method from manager host stream");
+                return;
+            }
+        }
+
+        if method_buf[0] == host_fns::Methods::ConsumeResult as u8 {
+            // Read length-prefixed data
+            let mut len_buf = [0u8; 4];
+            if let Err(e) = file.read_exact(&mut len_buf).await {
+                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read result length");
+                return;
+            }
+            let len = u32::from_le_bytes(len_buf) as usize;
+            let mut data = vec![0u8; len];
+            if let Err(e) = file.read_exact(&mut data).await {
+                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read result data");
+                return;
+            }
+            log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, len = len; "manager received consume_result");
+            let _ = consumed_result.set(data);
+            // Send ACK
+            if let Err(e) = file.write_all(&[0u8]).await {
+                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to send ACK for consume_result");
+                return;
+            }
+            let _ = file.flush().await;
+        } else {
+            log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, method = method_buf[0]; "unexpected method on manager host stream");
+            return;
+        }
+    }
+}
+
+impl Ctx {
+    async fn check_proc(&self, exec: sync::DArc<SingleGenVMContext>) -> bool {
+        if exec.result.initialized() {
+            return true;
+        }
+
+        tokio::task::spawn(async move {
+        let mut proc = exec.process_handle.lock().await;
+
+        match proc.try_wait() {
+            Ok(Some(status)) => {
+                log_debug!(id = exec.id, status = status; "genvm exited");
+
+                let _ = sync::DropGuard::new(|| {
+                    GENVM_BY_ID_LOGGER.pin().remove(&exec.id);
+                });
+
+                let metrics = exec
+                    ._execution_context
+                    .as_ref()
+                    .map(|ctx| ctx.collect_metrics())
+                    .unwrap_or(serde_json::Value::Null);
+
+                log_debug!(id = exec.id, metrics:serde = metrics; "metrics collected");
+
+                exec.all_permits.store(None); // drop all resources it owns
+                let _ = exec.stdout_stderr_sem.acquire_many(2).await; // wait for stderr/stdout to be fully read
+                log_debug!(id = exec.id, status = status; "stdout/stderr sem acquired");
+                let stdout = exec.stdout.get().map(|x| x.as_str()).unwrap_or("");
+                let stderr = exec.stderr.get().map(|x| x.as_str()).unwrap_or("");
+
+                let genvm_log = {
+                    let mut as_vec = Vec::new();
+                    while let Some(data) = exec.log_sink.pop() {
+                        as_vec.push(data.into_json());
+                    }
+                    as_vec
+                };
+
+                if let Err(e) = exec.result.set(SingleGenVMContextDone {
+                    finished_at: chrono::Utc::now(),
+                    stdout: stdout.to_owned(),
+                    stderr: stderr.to_owned(),
+                    genvm_log,
+                    metrics,
+                    consumed_result: exec.consumed_result.get().cloned(),
+                    version_major: exec.version_major,
+                    version_minor: exec.version_minor,
+                }) {
+                    log_warn!(error:err = e; "error setting genvm result; it can happen rarely due to concurrency");
+                }
+                true
+            }
+            Ok(None) => false,
+            Err(e) => {
+                log_error!(error:err = e; "error checking process status");
+                true
+            }
+        }
+        }).await.unwrap_or(false)
+    }
+}
+
+/// Creates a pipe for GenVM logging. Returns `(read_fd, write_fd)` with
+/// the read end set to nonblocking + cloexec.
+fn create_log_pipe() -> anyhow::Result<(std::os::unix::io::OwnedFd, std::os::unix::io::OwnedFd)> {
+    let mut read_write_fd = [0; 2];
+    let result_code = unsafe { libc::pipe(std::ptr::from_mut(&mut read_write_fd).cast()) };
+    if result_code != 0 {
+        anyhow::bail!("failed to create pipe for genvm logging: {result_code}");
+    }
+
+    let read_fd = unsafe { FdWrapper::from_raw_fd(read_write_fd[0]) };
+    let write_fd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(read_write_fd[1]) };
+
+    read_fd.set_nonblocking(true)?;
+    read_fd.set_cloexec(true)?;
+    Ok((read_fd.into_inner(), write_fd))
+}
+
+/// Builds the `tokio::process::Command` for GenVM with all standard arguments
+/// and stdio configuration.
+fn build_genvm_command(
+    command_path: std::path::PathBuf,
+    req: &Request,
+    genvm_id: GenVMId,
+    log_write_fd: &std::os::unix::io::OwnedFd,
+) -> tokio::process::Command {
+    let mut proc = tokio::process::Command::new(command_path);
+
+    proc.stdin(std::process::Stdio::piped());
+    proc.arg(format!("--log-fd={}", log_write_fd.as_raw_fd()));
+
+    proc.arg("run");
+    proc.args(&req.extra_args);
+
+    if req.is_sync {
+        proc.arg("--sync");
+    }
+
+    proc.arg("--host");
+    proc.arg(&req.host);
+
+    proc.arg("--permissions");
+    proc.arg(&req.permissions);
+
+    proc.arg(format!("--genvm-id={}", genvm_id.0));
+
+    proc.arg("--debug-mode");
+    proc.arg(req.debug_mode.as_arg());
+
+    if req.debug_mode.capture() == genvm_common::debug_mode::Capture::Disabled {
+        proc.stdout(std::process::Stdio::null());
+        proc.stderr(std::process::Stdio::null());
+    } else {
+        proc.stdout(std::process::Stdio::piped());
+        proc.stderr(std::process::Stdio::piped());
+    }
+
+    proc
+}
+
+/// Creates socketpairs for module communication, adds `--module-llm`/`--module-web`
+/// args to the command, and spawns relay tasks. Returns the child-side FDs that must
+/// be kept alive until after the child process is spawned.
+fn setup_module_relays(
+    proc: &mut tokio::process::Command,
+    handlers: (super::modules::StreamHandler, super::modules::StreamHandler),
+    execution_context: &sync::DArc<super::execution_context::ExecutionContext>,
+    genvm_id: GenVMId,
+) -> anyhow::Result<(FdWrapper, FdWrapper)> {
+    let (llm_handler, web_handler) = handlers;
+    let exec_ctx = execution_context.clone();
+
+    let (llm_parent, llm_child) = FdWrapper::socketpair()?;
+    let (web_parent, web_child) = FdWrapper::socketpair()?;
+
+    // Parent end: set cloexec (closed in child after exec)
+    llm_parent.set_cloexec(true)?;
+    web_parent.set_cloexec(true)?;
+    // Child end: clear cloexec (survives exec into child process)
+    llm_child.set_cloexec(false)?;
+    web_child.set_cloexec(false)?;
+
+    proc.arg(format!("--module-llm=fd://{}", llm_child.as_raw_fd()));
+    proc.arg(format!("--module-web=fd://{}", web_child.as_raw_fd()));
+
+    tokio::spawn(spawn_module_relay(
+        llm_parent,
+        llm_handler,
+        genvm_id,
+        "llm",
+        exec_ctx.clone(),
+    ));
+    tokio::spawn(spawn_module_relay(
+        web_parent,
+        web_handler,
+        genvm_id,
+        "web",
+        exec_ctx,
+    ));
+
+    Ok((llm_child, web_child))
+}
+
+/// Spawns an async task that writes execution data to the child's stdin.
+fn spawn_stdin_writer(
+    stdin: tokio::process::ChildStdin,
+    execution_data_bytes: bytes::Bytes,
+) -> tokio::task::JoinHandle<std::io::Result<()>> {
+    tokio::task::spawn(async move {
+        use tokio::io::AsyncWriteExt;
+
+        let owned_fd = stdin.into_owned_fd().map_err(|e| {
+            std::io::Error::other(format!("failed to get owned fd from stdin: {e}"))
+        })?;
+        set_fd_nonblocking(owned_fd.as_raw_fd())?;
+
+        let mut file = AsyncCustomFD::new(owned_fd)?;
+        file.write_all(&execution_data_bytes).await?;
+        Ok(())
+    })
+}
+
+/// Spawns a task that awaits the stdin writer and kills the process on failure.
+fn spawn_stdin_monitor(
+    stdin_task: tokio::task::JoinHandle<std::io::Result<()>>,
+    exec_ctx: sync::DArc<SingleGenVMContext>,
+    genvm_id: GenVMId,
+) {
+    tokio::task::spawn(async move {
+        let stdin_failed = match stdin_task.await {
+            Ok(Ok(())) => {
+                log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "execution data written");
+                false
+            }
+            Ok(Err(e)) => {
+                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to write execution data to child stdin, killing process");
+                true
+            }
+            Err(e) => {
+                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "stdin write task panicked, killing process");
+                true
+            }
+        };
+        if stdin_failed {
+            let mut proc = exec_ctx.process_handle.lock().await;
+            let _ = proc.start_kill();
+        }
+    });
+}
+
+pub async fn start_genvm(
+    full_ctx: sync::DArc<crate::manager::AppContext>,
+    req: Request,
+    modules_lock: Box<dyn std::any::Any + Send + Sync>,
+) -> anyhow::Result<(GenVMId, tokio::sync::oneshot::Receiver<()>)> {
+    // Get module handlers early, before consuming full_ctx
+    let module_handlers = if req.needs_modules() {
+        let (llm, web) = full_ctx
+            .mod_ctx
+            .get_handlers()
+            .await
+            .ok_or_else(|| anyhow::anyhow!("modules are required but not all are running"))?;
+        Some((llm, web))
+    } else {
+        None
+    };
+
+    let genvm_id = GenVMId(
+        full_ctx
+            .run_ctx
+            .next_genvm_id
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst),
+    );
+
+    // Create execution context if modules are needed
+    let execution_context = if req.needs_modules() {
+        let host_data: genvm_modules_interfaces::HostData = serde_json::from_str(&req.host_data)?;
+        let role = if req.leader_nondet_results.is_none() {
+            genvm_modules_interfaces::Role::Leader
+        } else {
+            genvm_modules_interfaces::Role::Validator
+        };
+        let hello = Arc::new(genvm_modules_interfaces::GenVMHello {
+            genvm_id,
+            role,
+            host_data,
+            gas_data: req.gas_data.clone(),
+            initial_time_units_allocation: req.initial_time_units_allocation,
+        });
+        Some(full_ctx.mod_ctx.create_execution_context(hello).await?)
+    } else {
+        None
+    };
+
+    let version = full_ctx
+        .ver_ctx
+        .get_version(req.major, req.timestamp)
+        .await
+        .ok_or_else(|| anyhow::anyhow!("no compatible version found for major {}", req.major))?;
+
+    let ctx = full_ctx.into_gep(|x| &x.run_ctx);
+
+    let permits = if req.needs_modules() {
+        ctx.permits.clone().acquire_many_owned(2).await?
+    } else {
+        ctx.permits.clone().acquire_owned().await?
+    };
+
+    // Capture controls how logs and stdout/stderr are kept: disabled (forwarded
+    // to the manager log only), bounded, or unbounded.
+    use genvm_common::debug_mode::Capture;
+    let capture = req.debug_mode.capture();
+    let log_sink: LogSink = Arc::new(LogSinkInner::new(capture == Capture::Unbounded));
+    // Only route per-id logs into the result sink when we actually capture; under
+    // `disabled` the sink stays unregistered so manager-internal logs (and the
+    // forwarded executor logs) go to the manager log, leaving `genvm_log` empty.
+    if capture != Capture::Disabled {
+        GENVM_BY_ID_LOGGER.pin().insert(genvm_id, log_sink.clone());
+    }
+    let log_sink_guard = sync::DropGuard::new(|| {
+        GENVM_BY_ID_LOGGER.pin().remove(&genvm_id);
+    });
+
+    // Resolve command path. A request may reroute to an explicit executor dir,
+    // but only when running with a debug mode of `safe` or above — production
+    // (`disabled`) always uses the manifest-resolved version so consensus can't
+    // be steered to a different binary.
+    let mut command_path = ctx.executors_path.clone();
+    let version_str_owned = version.orig_key.clone();
+    let mut version_str: &str = &version_str_owned;
+    if !req.reroute_to.is_empty() && req.debug_mode >= genvm_common::DebugMode::Safe {
+        version_str = &req.reroute_to;
+    }
+    command_path.push(version_str);
+    command_path.push("bin");
+    command_path.push("genvm");
+
+    log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, exe:? = command_path, version:? = version; "genvm path");
+
+    // Create log pipe and build command
+    let (read_fd, write_fd) = create_log_pipe()?;
+    let mut proc = build_genvm_command(command_path, &req, genvm_id, &write_fd);
+
+    // Setup manager host socketpair (host id=1 for consume_result and notify_finished)
+    let (manager_parent, manager_child) = FdWrapper::socketpair()?;
+    manager_parent.set_cloexec(true)?;
+    manager_child.set_cloexec(false)?;
+    proc.arg("--host");
+    proc.arg(format!("fd://{}", manager_child.as_raw_fd()));
+
+    // Setup module relays if needed
+    let module_child_fds = if let Some(handlers) = module_handlers {
+        let exec_ctx = execution_context
+            .as_ref()
+            .expect("execution context required when modules are running");
+        Some(setup_module_relays(
+            &mut proc, handlers, exec_ctx, genvm_id,
+        )?)
+    } else {
+        None
+    };
+
+    let mut method_hosts: Vec<u8> = vec![0; host_fns::Methods::SIZE];
+    method_hosts[host_fns::Methods::ConsumeResult as usize] = 1;
+
+    let execution_data = genvm_common::domain::ExecutionData {
+        calldata: req.calldata.clone(),
+        message: req.message.clone(),
+        host_data: req.host_data.clone(),
+        code: req.code.clone(),
+        leader_nondet_results: req.leader_nondet_results.clone(),
+        method_hosts,
+        bucket_totals: req.bucket_totals.clone(),
+        gas_data: req.gas_data.clone(),
+        message_fee_allocation: req.message_fee_allocation.clone(),
+        initial_time_units_allocation: req.initial_time_units_allocation,
+    };
+    let execution_data_bytes = genvm_common::calldata::encode_obj(&execution_data);
+
+    let execution_data_bytes = bytes::Bytes::from(execution_data_bytes);
+
+    // Spawn log reader: capture into the sink, or (when capture is disabled)
+    // forward to the manager log instead of buffering into the result.
+    if capture == Capture::Disabled {
+        tokio::spawn(read_log_pipe(read_fd, LogAppenderToLog(genvm_id)));
+    } else {
+        let logger = Arc::new(tokio::sync::Mutex::new(LogAppenderToValue(
+            log_sink.clone(),
+            genvm_id,
+        )));
+        let l = logger.clone().lock_owned().await;
+        tokio::spawn(read_log_pipe(read_fd, l));
+    }
+
+    // Spawn child process, then drop child-side FDs
+    let mut child = proc.spawn()?;
+    log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, pid:? = child.id(); "genvm process started");
+    std::mem::drop(module_child_fds);
+    std::mem::drop(manager_child);
+
+    // Spawn stdin writer
+    let stdin_task = child
+        .stdin
+        .take()
+        .map(|stdin| spawn_stdin_writer(stdin, execution_data_bytes));
+
+    // Create exec context and stdout/stderr permits
+    let stdout_stderr_sem = Arc::new(tokio::sync::Semaphore::new(2));
+    let stdout_perm = stdout_stderr_sem.clone().acquire_owned().await?;
+    let stderr_perm = stdout_stderr_sem.clone().acquire_owned().await?;
+
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<()>();
+    let all_resources = (permits, tx, modules_lock);
+
+    let exec_ctx = sync::DArc::new(SingleGenVMContext {
+        result: tokio::sync::OnceCell::new(),
+        version: version_str.to_owned(),
+        version_major: version.version.major as u16,
+        version_minor: version.version.minor as u16,
+        id: genvm_id,
+        process_handle: tokio::sync::Mutex::new(child),
+        started_at: chrono::Utc::now(),
+        // Cap at 24h so a huge value can't overflow the i64 cast / Duration.
+        strict_deadline: chrono::Utc::now()
+            + chrono::Duration::minutes(req.max_execution_minutes.min(24 * 60) as i64),
+
+        stdout_stderr_sem,
+        stdout: tokio::sync::OnceCell::new(),
+        stderr: tokio::sync::OnceCell::new(),
+        log_sink,
+        consumed_result: tokio::sync::OnceCell::new(),
+
+        all_permits: crossbeam::atomic::AtomicCell::new(Some(Box::new(all_resources))),
+        _execution_context: execution_context,
+    });
+
+    // Spawn manager host protocol handler
+    tokio::spawn(read_manager_host_stream(
+        manager_parent,
+        exec_ctx.gep(|x| &x.consumed_result),
+        genvm_id,
+    ));
+
+    // Spawn stdin monitor and pipe readers
+    if let Some(stdin_task) = stdin_task {
+        spawn_stdin_monitor(stdin_task, exec_ctx.clone(), genvm_id);
+    }
+
+    let out_limit = (capture == Capture::Bounded).then_some(OUTPUT_TAIL_LIMIT);
+    if let Some(stdout) = stdout {
+        tokio::spawn(pipe_read(
+            stdout,
+            exec_ctx.gep(|x| &x.stdout),
+            stdout_perm,
+            out_limit,
+        ));
+    }
+    if let Some(stderr) = stderr {
+        tokio::spawn(pipe_read(
+            stderr,
+            exec_ctx.gep(|x| &x.stderr),
+            stderr_perm,
+            out_limit,
+        ));
+    }
+
+    ctx.known_executions
+        .pin()
+        .insert(genvm_id, exec_ctx.clone());
+    log_sink_guard.forget();
+
+    Ok((genvm_id, rx))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::keep_tail;
+
+    #[test]
+    fn under_or_at_limit_is_unchanged() {
+        let mut s = String::from("hello");
+        keep_tail(&mut s, 10);
+        assert_eq!(s, "hello");
+        keep_tail(&mut s, 5);
+        assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn keeps_the_tail() {
+        let mut s = String::from("0123456789");
+        keep_tail(&mut s, 4);
+        assert_eq!(s, "6789");
+    }
+
+    #[test]
+    fn never_cuts_mid_char() {
+        // "aéb" = a(1) é(2) b(1) = 4 bytes; cutting at byte 2 is mid-'é', so the
+        // cut advances to the next boundary, dropping the partial char.
+        let mut s = String::from("aéb");
+        keep_tail(&mut s, 2);
+        assert_eq!(s, "b");
+        assert!(std::str::from_utf8(s.as_bytes()).is_ok());
+    }
+}

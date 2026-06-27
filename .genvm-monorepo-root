@@ -1,0 +1,6 @@
+{
+    "version": "v0.6.0-rc0",
+    "active-versions": ["v0.3"],
+    "artifacts_dir": "build/test-artifacts",
+    "extra_python_paths": ["tests/runner"]
+}

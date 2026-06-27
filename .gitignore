@@ -1,0 +1,43 @@
+# editors
+**/.vscode/*
+!**/.vscode/extensions.json
+!**/.vscode/settings.example.json
+
+.claude/hooks
+.idea
+.envrc
+*.log
+
+# non git-controlled code and tools
+/tools/downloaded
+/third-party/*
+!/third-party/.gitkeep
+/.direnv
+
+# build related directories
+/build
+target
+zig-out
+zig-build
+/mkmf.log
+
+# secrets
+/.env
+
+# py
+__pycache__
+*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+.coverage*
+
+# apple
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# perf
+perf.data*
+core.[0-9]*
+node_modules

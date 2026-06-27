@@ -1,0 +1,6 @@
+# Static fields merged into the generated data/manifest.yaml by
+# `genvm-tool build-manifest`. The version-specific section (`executor_versions`)
+# is derived from the active executor submodules; everything here is
+# build-independent and lives under version control.
+runners_download_urls:
+  - "https://storage.googleapis.com/gh-af/genvm_runners/{name}/{hash}.tar"

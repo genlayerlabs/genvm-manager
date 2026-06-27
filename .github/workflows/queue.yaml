@@ -1,0 +1,160 @@
+name: GenVM full
+
+# Full GenVM CI. The repo has NO GitHub merge queue: this is the
+# authoritative "genvm CI" gate the Merge action
+# (branch_merge_into_dev.yaml) requires to be green on the exact head it
+# fast-forwards.
+#
+# For every push to a PR targeting a dev branch (v<X>-dev):
+#   - `initial` (cheap pre-commit + 0-behind check) ALWAYS runs;
+#   - the heavy test jobs run only when a run-full-tests marker is set —
+#     the `rtm` (ready-to-merge) label or the `run-full-tests` label (the
+#     "Force run full tests" checkbox sets the latter);
+#   - without a marker `validate-end` fails, so the CI check stays red
+#     until a full run has happened.
+#
+# The action panel ("Force"/"Rerun full tests") triggers a run directly via
+# `workflow_dispatch` rather than relying on a label edit: a label applied by
+# the bot's GITHUB_TOKEN does NOT emit a `labeled` event (GitHub suppresses
+# recursive runs), but a `workflow_dispatch` from that same token DOES run.
+# The dispatch targets the PR head branch, so the run's head_sha equals the
+# PR head and the Merge gate (which matches by head_sha) counts it.
+on:
+  pull_request:
+    branches: ['v*-dev']
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number this manual run validates (used only for the run name)
+        type: string
+        required: false
+
+run-name: >-
+  GenVM full${{ github.event_name == 'workflow_dispatch' && format(' (manual, PR #{0})', inputs.pr) || '' }}
+
+defaults:
+  run:
+    shell: bash -x {0}
+
+env:
+  GCS_BUCKET: "gh-af"
+
+jobs:
+  initial:
+    uses: ./.github/workflows/incl_initial.yaml
+    secrets: inherit
+
+  module-test-python:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+    needs: [initial]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          load_submodules: "false"
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - run: ./support/ci/pipelines/test-python.sh
+
+  module-test-rust-fuzz:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+    needs: [initial]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses:  insightsengineering/disk-space-reclaimer@v1
+        with:
+          tools-cache: false
+          swap-storage: false
+          docker-images: false
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          load_submodules: "true"
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          echo core | sudo tee /proc/sys/kernel/core_pattern
+          echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
+          echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
+          ./support/ci/pipelines/test-rust-fuzz.sh && ./support/ci/cargo-clippy.sh
+        env:
+          OPENAIKEY: ${{ secrets.OPENAIKEY }}
+          HEURISTKEY: ${{ secrets.HEURISTKEY }}
+          ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
+          XAIKEY: ${{ secrets.XAIKEY }}
+          GEMINIKEY: ${{ secrets.GEMINIKEY }}
+
+  module-test-rust:
+    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+    needs: [initial]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+      - uses:  insightsengineering/disk-space-reclaimer@v1
+        with:
+          tools-cache: false
+          swap-storage: false
+          docker-images: false
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          load_submodules: "true"
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+      - name: Set up Cloud SDK # needed for gcloud to upload runners to GCS for caching
+        uses: google-github-actions/setup-gcloud@v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - run: |
+          ./support/ci/pipelines/test-rust.sh
+        env:
+          OPENAIKEY: ${{ secrets.OPENAIKEY }}
+          HEURISTKEY: ${{ secrets.HEURISTKEY }}
+          ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
+          XAIKEY: ${{ secrets.XAIKEY }}
+          GEMINIKEY: ${{ secrets.GEMINIKEY }}
+
+  validate-end:
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    needs:
+      - initial
+      - module-test-python
+      - module-test-rust
+      - module-test-rust-fuzz
+    env:
+      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+    steps:
+      - name: check
+        run: |
+          # initial (pre-commit + 0-behind) must always pass.
+          if [ "${{ needs.initial.result }}" != "success" ]; then
+            echo "::error::initial checks failed"
+            exit 1
+          fi
+          # No run-full-tests marker -> heavy tests were skipped; keep the
+          # gate red so the PR is not mergeable until they run.
+          if [ "$HAS_MARKER" != "true" ]; then
+            echo "::error::full tests have not run — add the 'rtm' label or check 'Force run full tests' on the action panel"
+            exit 1
+          fi
+          results="${{ needs.module-test-python.result }} ${{ needs.module-test-rust.result }} ${{ needs.module-test-rust-fuzz.result }}"
+          echo "$results"
+          if echo "$results" | grep -qiE '(failure|cancelled|skipped)'; then
+            echo "::error::one or more full-test jobs failed/cancelled/skipped"
+            exit 1
+          fi

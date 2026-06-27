@@ -1,0 +1,214 @@
+{
+  pkgs,
+  deps,
+  zig,
+  ...
+}@args0:
+let
+  lib = pkgs.lib;
+  importCargoLock = pkgs.rustPlatform.importCargoLock;
+  fetchCargoTarball = pkgs.rustPlatform.fetchCargoTarball;
+  fetchCargoVendor = pkgs.rustPlatform.fetchCargoVendor;
+  stdenv = pkgs.stdenv;
+  callPackage = pkgs.callPackage;
+  cargoBuildHook = pkgs.rustPlatform.cargoBuildHook;
+  cargoInstallHook = pkgs.rustPlatform.cargoInstallHook;
+  cargoSetupHook = pkgs.rustPlatform.cargoSetupHook;
+  cargo = pkgs.cargo;
+  cargo-auditable = pkgs.cargo-auditable;
+  buildPackages = pkgs.buildPackages;
+  libiconv = pkgs.libiconv;
+  windows = pkgs.windows;
+in
+{
+  name ? "${args.pname}-${args.version}",
+
+  # Name for the vendored dependencies tarball
+  cargoDepsName ? name,
+
+  src ? null,
+  srcs ? null,
+  preUnpack ? null,
+  unpackPhase ? null,
+  postUnpack ? null,
+  cargoPatches ? [ ],
+  patches ? [ ],
+  sourceRoot ? null,
+  logLevel ? "",
+  buildInputs ? [ ],
+  nativeBuildInputs ? [ ],
+  cargoUpdateHook ? "",
+  cargoDepsHook ? "",
+  profile ? "release",
+  meta ? { },
+  cargoLock,
+  buildNoDefaultFeatures ? false,
+  buildFeatures ? [ ],
+  auditable ? !cargo-auditable.meta.broken,
+
+  extraLibs ? [ ],
+
+  depsExtraArgs ? { },
+
+  # Toggles whether a custom sysroot is created when the target is a .json file.
+  __internal_dontAddSysroot ? false,
+
+  # Needed to `pushd`/`popd` into a subdir of a tarball if this subdir
+  # contains a Cargo.toml, but isn't part of a workspace (which is e.g. the
+  # case for `rustfmt`/etc from the `rust-sources).
+  # Otherwise, everything from the tarball would've been built/tested.
+  buildAndTestSubdir ? null,
+
+  target,
+  installPhase ? null,
+
+  omitDefaultRustFlags ? false,
+  verbose ? "",
+  ...
+}@args:
+assert builtins.any (x: verbose == x) [
+  ""
+  "--verbose"
+  "-vv"
+];
+let
+  targetAsRust =
+    {
+      amd64-linux = "x86_64-unknown-linux-musl";
+      arm64-linux = "aarch64-unknown-linux-musl";
+      arm64-macos = "aarch64-apple-darwin";
+
+      x86_64-linux = "x86_64-unknown-linux-gnu";
+    }
+    .${target};
+
+  # On a darwin host the arm64-macos target is native, so the native
+  # clang/ld64 toolchain links it correctly. zig is a cross-compiler whose
+  # 0.15.1 self-hosted MachO linker crashes (SIGABRT/SIGSEGV) on these
+  # links; skip the zig cargo wrapper on darwin and let cargo fall back to
+  # the native cc. zig stays in use for the linux cross targets.
+  rust-pkg = import ./rust.nix (args0 // { withZig = !pkgs.stdenv.hostPlatform.isDarwin; });
+in
+
+stdenv.mkDerivation (
+  (removeAttrs args [
+    "depsExtraArgs"
+    "cargoUpdateHook"
+    "cargoDeps"
+    "cargoLock"
+  ])
+  // {
+    cargoDeps = importCargoLock cargoLock;
+    inherit buildAndTestSubdir;
+
+    RUSTFLAGS =
+      (
+        if omitDefaultRustFlags then
+          ""
+        else
+          "-C target-feature=-crt-static -l dylib=c -C link-arg=-dynamic "
+      )
+      + (args.RUSTFLAGS or "");
+
+    hardeningDisable = [ "all" ];
+
+    cargoBuildNoDefaultFeatures = buildNoDefaultFeatures;
+
+    cargoBuildFeatures = buildFeatures;
+
+    nativeBuildInputs =
+      nativeBuildInputs
+      ++ [
+        cargoSetupHook
+        rust-pkg
+        zig
+      ]
+      ++ lib.optionals stdenv.hostPlatform.isLinux [
+        pkgs.glibc
+        pkgs.libllvm
+      ]
+      ++ lib.optionals stdenv.hostPlatform.isDarwin [ libiconv ];
+
+    buildInputs = buildInputs;
+
+    patches = cargoPatches ++ patches;
+
+    PKG_CONFIG_ALLOW_CROSS = 1;
+
+    postUnpack = ''
+      eval "$cargoDepsHook"
+
+      mkdir -p $NIX_BUILD_TOP/libs
+
+      export RUST_LOG=${logLevel}
+    ''
+    + (args.postUnpack or "")
+    + "\n"
+    + builtins.concatStringsSep "\n" (
+      builtins.map (x: "cp -r ${x}/lib/. $NIX_BUILD_TOP/libs/") extraLibs
+    );
+
+    configurePhase =
+      args.configurePhase or ''
+        runHook preConfigure
+        runHook postConfigure
+      '';
+
+    doCheck = false;
+
+    strictDeps = true;
+
+    meta = meta;
+
+    buildPhase = ''
+      runHook preBuild
+
+      export RUSTFLAGS="-L $NIX_BUILD_TOP/libs $RUSTFLAGS"
+
+      ls -l $NIX_BUILD_TOP/libs/
+
+      echo "PATH=$PATH"
+      echo "RUSTFLAGS=$RUSTFLAGS"
+      echo cargo build --target ${targetAsRust} -j $NIX_BUILD_CORES --offline --profile=${profile} ${verbose}
+      cargo build --target ${targetAsRust} -j $NIX_BUILD_CORES --offline --profile=${profile} ${verbose}
+      runHook postBuild
+
+      bins=$(find target/${targetAsRust}/${profile}/ \
+      -maxdepth 1 \
+      -type f \
+      -executable -not -regex ".*\.\(so.[0-9.]+\|so\|a\|dylib\)" )
+      echo "Found binary $bins"
+
+      cp "$bins" target/__out
+
+      if [[ "${target}" != arm64-macos ]]
+      then
+      # Static musl binaries have no .dynamic section; patchelf is a no-op
+      if patchelf --print-rpath target/__out >/dev/null 2>&1
+      then
+      patchelf --set-rpath '$ORIGIN/../lib:$ORIGIN/../../../lib:' target/__out
+      for i in $(patchelf --print-needed target/__out)
+      do
+      if [[ "$i" == $NIX_BUILD_TOP/libs/* ]]
+      then
+      echo "Replacing $i with $(basename $i)"
+      patchelf --replace-needed "$i" "$(basename $i)" target/__out
+      fi
+      done
+      else
+      echo "Binary is statically linked, skipping patchelf"
+      fi
+      fi
+    '';
+
+    installPhase =
+      if installPhase != null then
+        installPhase
+      else
+        ''
+          cp "target/__out" "$out"
+        '';
+
+    dontFixup = true;
+  }
+)

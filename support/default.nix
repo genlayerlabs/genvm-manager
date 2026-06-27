@@ -1,0 +1,160 @@
+{
+  pkgs,
+  deps,
+  root-src,
+  system,
+  # Source tree of the executor checkout (genvm-executor, branch v0.3.x). Merged
+  # into full-src at ${exec-prefix} so the former monorepo layout (executor/,
+  # runners/, tests/) is reconstructed for get-root-subtree / compile-rust.
+  executor-src,
+  exec-prefix ? "executors/v0.3.x",
+}:
+let
+  mergeDoubleDepthAttrs =
+    l: r:
+    let
+      allKeysWithDups = builtins.attrNames l ++ builtins.attrNames r;
+      allKeys = builtins.attrNames (
+        builtins.listToAttrs (
+          builtins.map (x: {
+            name = x;
+            value = true;
+          }) allKeysWithDups
+        )
+      );
+    in
+    builtins.listToAttrs (
+      builtins.map (k: {
+        name = k;
+        value =
+          (if builtins.hasAttr k l then l.${k} else { }) // (if builtins.hasAttr k r then r.${k} else { });
+      }) allKeys
+    );
+
+  zip-lists =
+    list1: list2:
+    let
+      len1 = builtins.length list1;
+      len2 = builtins.length list2;
+      minLen = if len1 < len2 then len1 else len2;
+    in
+    builtins.genList (i: [
+      (builtins.elemAt list1 i)
+      (builtins.elemAt list2 i)
+    ]) minLen;
+
+  trace-echo = x: builtins.trace x x;
+
+  git-third-party = import ./nix/git-third-party.nix { inherit pkgs; };
+
+  # Executor's .git-third-party repos (wasmtime/wasm-tools — its build deps).
+  # Keys are executor-relative (executor/third-party/...); mount them under
+  # ${exec-prefix} so full-src matches the former monorepo layout.
+  extra-repos = pkgs.lib.mapAttrsToList (path: drv: {
+    name = "${exec-prefix}/${path}";
+    inherit drv;
+  }) (git-third-party.load "${executor-src}/.git-third-party");
+  full-src = pkgs.stdenvNoCC.mkDerivation {
+    name = "genvm-full-src";
+    srcs = [
+      root-src
+    ]
+    ++ builtins.map (x: x.drv) extra-repos;
+    sourceRoot = ".";
+
+    dontUnpack = true;
+    dontConfigure = true;
+    dontBuild = true;
+
+    installPhase = ''
+      echo "Starting to install"
+      mkdir -p "$out"
+      cp --no-preserve=ownership -r ${root-src}/. "$out/."
+      chmod -R u+w "$out"
+
+      # Mount the executor checkout under ${exec-prefix} to rebuild the
+      # former monorepo layout (executor/, runners/, tests/ live here).
+      mkdir -p "$out/${exec-prefix}"
+      cp --no-preserve=ownership -r ${executor-src}/. "$out/${exec-prefix}/."
+      chmod -R u+w "$out"
+    ''
+    + builtins.concatStringsSep "\n" (
+      builtins.map (x: ''
+        mkdir -p "$out/${x.name}"
+        cp --no-preserve=ownership -r ${x.drv}/. "$out/${x.name}/."
+      '') extra-repos
+    );
+
+    dontFixup = true;
+  };
+  lua-src = builtins.fetchGit {
+    url = "https://github.com/lua/lua.git";
+    rev = "75ea9ccbea7c4886f30da147fb67b693b2624c26";
+    shallow = true;
+  };
+in
+rec {
+  inherit pkgs deps lua-src;
+
+  root-src = full-src;
+
+  zig = import ./zig.nix { inherit pkgs deps system; };
+
+  get-root-subtree =
+    paths:
+    let
+      paths-split = builtins.map (p: pkgs.lib.splitString "/" p) paths;
+    in
+    pkgs.lib.cleanSourceWith {
+      src = full-src;
+      filter =
+        path: type:
+        let
+          relPath = pkgs.lib.removePrefix (toString full-src + "/") (toString path);
+          relPathSplit = pkgs.lib.splitString "/" relPath;
+          allow-dflt = pkgs.lib.any (
+            prefix:
+            builtins.all (l_r: (builtins.head l_r) == (builtins.elemAt l_r 1)) (zip-lists relPathSplit prefix)
+          ) paths-split;
+        in
+        if pkgs.lib.hasSuffix ".nix" relPath then false else allow-dflt;
+      # builtins.trace "${relPath} -> ${if allow-dflt then "true" else "false"}" allow-dflt;
+    };
+
+  compile-rust = import ./compile-rust.nix {
+    inherit
+      pkgs
+      deps
+      zig
+      system
+      ;
+    withZig = true;
+  };
+
+  patch-yaml-schema = pkgs.writers.writePython3Bin "patch-yaml-schema" { doCheck = false; } (
+    builtins.readFile ./scripts/remove-schema.py
+  );
+
+  patch-llm-config = pkgs.writers.writePython3Bin "patch-llm-config" {
+    doCheck = false;
+    libraries = [ pkgs.python3Packages.ruamel-yaml ];
+  } (builtins.readFile ./scripts/patch-llm-config.py);
+
+  patch-web-config = pkgs.writers.writePython3Bin "patch-web-config" {
+    doCheck = false;
+    libraries = [ pkgs.python3Packages.ruamel-yaml ];
+  } (builtins.readFile ./scripts/patch-web-config.py);
+
+  patch-rpath = pkgs.writers.writePython3Bin "patch-rpath" {
+    doCheck = false;
+    libraries = [ pkgs.python3Packages.lief ];
+    makeWrapperArgs = [
+      "--prefix"
+      "PATH"
+      ":"
+      "${pkgs.rcodesign}/bin"
+    ];
+  } (builtins.readFile ./scripts/patch-rpath.py);
+
+  merge-components = builtins.foldl' mergeDoubleDepthAttrs { };
+}

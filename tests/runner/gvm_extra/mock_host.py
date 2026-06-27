@@ -1,0 +1,123 @@
+import asyncio
+import collections.abc
+import pickle
+import socket
+from pathlib import Path
+
+from origin.base_host import HostException, IHost, host_fns, public_abi
+from origin.calldata import Address
+
+
+class MockStorage:
+	_storages: dict[Address, dict[bytes, bytearray]]
+
+	def __init__(self):
+		self._storages = {}
+
+	def read(self, account: Address, slot: bytes, index: int, le: int) -> bytes:
+		res = self._storages.setdefault(account, {})
+		res = res.setdefault(slot, bytearray())
+		return res[index : index + le] + b'\x00' * (le - max(0, len(res) - index))
+
+	def write(
+		self,
+		account: Address,
+		slot: bytes,
+		index: int,
+		what: collections.abc.Buffer,
+	) -> None:
+		res = self._storages.setdefault(account, {})
+		res = res.setdefault(slot, bytearray())
+		what = memoryview(what)
+		res.extend(b'\x00' * (index + len(what) - len(res)))
+		memoryview(res)[index : index + len(what)] = what
+
+
+class MockHost(IHost):
+	sock: socket.socket | None
+	storage: MockStorage | None
+
+	def __init__(
+		self,
+		*,
+		path: str,
+		storage_path_pre: Path,
+		storage_path_post: Path,
+		balances: dict[Address, int],
+		running_address: Address,
+	):
+		self.running_address = running_address
+		self.path = path
+		self.storage_path_pre = storage_path_pre
+		self.storage_path_post = storage_path_post
+		self.storage = None
+		self.sock = None
+		self.thread = None
+		self.balances = balances
+		self.nondet_disagreement_call_no = None
+
+	def __enter__(self):
+		self.created = False
+		Path(self.path).unlink(missing_ok=True)
+		self.thread_should_stop = False
+		with open(self.storage_path_pre, 'rb') as f:
+			self.storage = pickle.load(f)
+
+		self.sock_listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+		self.sock_listener.bind(self.path)
+		self.sock_listener.setblocking(False)
+		self.sock_listener.listen(1)
+
+		return self
+
+	def __exit__(self, *_args):
+		if self.storage is not None:
+			with open(self.storage_path_post, 'wb') as f:
+				pickle.dump(self.storage, f)
+			self.storage = None
+		if self.sock is not None:
+			self.sock.close()
+		Path(self.path).unlink(missing_ok=True)
+
+	async def notify_nondet_disagreement(self, call_no: int) -> None:
+		self.nondet_disagreement_call_no = call_no
+		pass
+
+	async def loop_enter(self, cancellation: asyncio.Event):
+		async_loop = asyncio.get_event_loop()
+		assert self.sock_listener is not None
+
+		interesting = asyncio.ensure_future(async_loop.sock_accept(self.sock_listener))
+		canc = asyncio.ensure_future(cancellation.wait())
+
+		done, pending = await asyncio.wait(
+			[canc, interesting], return_when=asyncio.FIRST_COMPLETED
+		)
+		if canc in done:
+			raise Exception('Program failed')
+		cancellation.set()
+		canc.cancel()
+
+		self.sock, _addr = interesting.result()
+		self.sock.setblocking(False)
+		self.sock_listener.close()
+		self.sock_listener = None
+		return self.sock
+
+	async def storage_read(
+		self, mode: public_abi.StorageType, account: bytes, slot: bytes, index: int, le: int
+	) -> bytes:
+		assert self.storage is not None
+		return self.storage.read(Address(account), slot, index, le)
+
+	async def remaining_fuel_as_gen(self) -> int:
+		return 2**32
+
+	async def eth_call(self, account: bytes, calldata: bytes, /) -> bytes:
+		raise HostException(host_fns.Errors.FORBIDDEN)
+
+	async def consume_gas(self, gas: int):
+		pass
+
+	async def get_balance(self, account: bytes) -> int:
+		return self.balances.get(Address(account), 0)

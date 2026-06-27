@@ -1,0 +1,10 @@
+# yaml-language-server: $schema=../../docs/schemas/default-config.json#/manager
+# yaml-language-server: $schema=https://raw.githubusercontent.com/genlayerlabs/genvm/refs/heads/@GENVM_TAG@/docs/schemas/default-config.json#/manager
+
+threads: 4
+blocking_threads: 48
+log_disable: tracing*,polling*,tungstenite*,tokio_tungstenite*
+log_level: info
+
+manifest_path: ${exeDir}/../data/manifest.yaml
+permits: null # if null will be auto-discovered; full VM takes 2, sync VM takes 1

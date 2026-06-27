@@ -1,0 +1,14 @@
+{
+  "$schema": "vscode://schemas/settings/workspace",
+  "python.analysis.typeCheckingMode": "standard",
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/executors/v0.3.x/runners/genlayer-py-std/src/",
+    "${workspaceFolder}/executors/v0.3.x/runners/genlayer-py-std/src-emb/",
+    "${workspaceFolder}/executors/v0.3.x/runners/py-libs/pure-py",
+    "${workspaceFolder}/support/tools/genvm-tool",
+    "${workspaceFolder}/tests/runner"
+  ],
+  "python.analysis.stubPath": "${workspaceFolder}/executors/v0.3.x/runners/genlayer-py-std/src/",
+  "rust-analyzer.cargo.targetDir": "${workspaceFolder}/build/ya-build/rust-target",
+  "nixEnvSelector.args": ".?submodules=1#full"
+}

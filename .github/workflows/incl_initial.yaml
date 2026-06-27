@@ -1,0 +1,52 @@
+name: GenVM initial checks
+on:
+  workflow_call:
+
+env:
+  GCS_BUCKET: "gh-af"
+
+jobs:
+  pre-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      # genvm-tool runs every repo's hooks with tools from each repo's pinned
+      # support/nix/precommit flake (rustfmt included), so no separate toolchain
+      # setup is needed.
+      # --check: CI verifies formatting and fails on drift instead of fixing
+      # in place (fixing is the default for local/git-hook runs).
+      - name: Run hooks
+        run: nix develop '.?submodules=1#initial-check' --command genvm-tool hook run --all-files --check
+
+  # The Merge action only fast-forwards, so the PR head must already
+  # contain the base tip (0 commits behind). We assert it here too (as part
+  # of the always-on `initial` checks) so the gate goes red the moment the
+  # branch falls behind, instead of surfacing only at merge time.
+  behind-check:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Ensure 0 commits behind base
+        env:
+          BASE: ${{ github.event.pull_request.base.ref }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          # Resolve base tip and PR head via explicit refs so this also
+          # works for fork PRs (head.sha is not fetchable by sha there).
+          git fetch --no-tags origin \
+            "+refs/heads/${BASE}:refs/base" \
+            "refs/pull/${PR}/head:refs/prhead"
+          if ! git merge-base --is-ancestor refs/base refs/prhead; then
+            BEHIND="$(git rev-list --count refs/prhead..refs/base)"
+            echo "::error::PR is ${BEHIND} commit(s) behind ${BASE}; update/rebase the branch so it is 0 behind before merging"
+            exit 1
+          fi
+          echo "0 commits behind ${BASE}"

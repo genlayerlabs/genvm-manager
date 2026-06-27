@@ -1,0 +1,10 @@
+*.onnx linguist-vendored
+*.txt linguist-vendored
+*.stdout linguist-vendored
+*.hash linguist-vendored
+*.lock linguist-vendored
+doc/website/src/_static/** linguist-vendored
+runners/py-libs/pure-py/** linguist-vendored
+runners/models/** linguist-vendored
+runners/softfloat/berkeley-softfloat-3/** linguist-vendored
+**/fuzz/inputs*/** linguist-vendored

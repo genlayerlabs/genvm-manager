@@ -1,0 +1,394 @@
+{
+  "$id": "https://raw.githubusercontent.com/genlayerlabs/genvm/refs/heads/main/doc/schemas/default-config.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GenVM configuration",
+  "genvm": {
+    "allOf": [
+      {
+        "$ref": "#/definitions/base-conf"
+      },
+      {
+        "type": "object",
+        "properties": {
+          "modules": {
+            "type": "object",
+            "properties": {
+              "web": { "$ref": "#/definitions/genvm-module-conf" },
+              "llm": { "$ref": "#/definitions/genvm-module-conf" }
+            },
+            "required": ["web", "llm"]
+          }
+        },
+        "required": ["modules"]
+      },
+      {
+        "type": "object",
+        "properties": {
+          "fees": { "$ref": "#/definitions/genvm-fees-conf" }
+        }
+      }
+    ]
+  },
+  "llm": {
+    "allOf": [
+      {
+        "$ref": "#/definitions/base-conf"
+      },
+      {
+        "$ref": "#/definitions/base-module-conf"
+      },
+      {
+        "type": "object",
+        "properties": {
+          "backends": {
+            "type": "object",
+            "description": "all available backends",
+            "patternProperties": {
+              "": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "set to false to ignore this backend"
+                  },
+                  "host": {
+                    "type": "string",
+                    "description": "host to connect to",
+                    "format": "uri",
+                    "examples": [
+                      "https://api.openai.com",
+                      "https://llm-gateway.heurist.xyz",
+                      "https://api.anthropic.com",
+                      "https://api.x.ai",
+                      "https://generativelanguage.googleapis.com",
+                      "https://api.atoma.network"
+                    ]
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "api key",
+                    "examples": ["sk-proj-...", "${ENV[APIKEY]}"]
+                  },
+                  "provider": {
+                    "enum": [
+                      "openai-compatible",
+                      "ollama",
+                      "simulator",
+                      "anthropic",
+                      "google"
+                    ],
+                    "description": "provider id identifier"
+                  },
+                  "models": {
+                    "type": "object",
+                    "patternProperties": {
+                      "": {
+                        "type": "object",
+                        "properties": {
+                          "enabled": {
+                            "type": "boolean",
+                            "default": true
+                          },
+                          "supports_json": {
+                            "type": "boolean",
+                            "default": false
+                          },
+                          "supports_image": {
+                            "type": "boolean",
+                            "default": false
+                          },
+                          "use_max_completion_tokens": {
+                            "type": "boolean",
+                            "default": false,
+                            "description": "use max_completion_tokens instead of max_tokens for openai-compatible provider"
+                          },
+                          "meta": {
+                            "type": ["object", "null"],
+                            "default": null
+                          },
+                          "timeout": {
+                            "$ref": "#/definitions/timeout"
+                          }
+                        },
+                        "additionalProperties": false
+                      }
+                    }
+                  },
+                  "meta": {
+                    "type": ["object", "null"],
+                    "default": null
+                  },
+                  "timeout": {
+                    "$ref": "#/definitions/timeout"
+                  }
+                },
+                "required": ["host", "key", "provider", "models"],
+                "additionalProperties": false
+              }
+            }
+          },
+          "prompt_templates": {
+            "type": "object",
+            "properties": {
+              "eq_comparative": {
+                "$ref": "#/definitions/llm-template-conf",
+                "description": "must include #{leader_answer} #{validator_answer} #{principle} for templating"
+              },
+              "eq_non_comparative_leader": {
+                "$ref": "#/definitions/llm-template-conf",
+                "description": "must include #{task} #{criteria} #{input} for templating"
+              },
+              "eq_non_comparative_validator": {
+                "$ref": "#/definitions/llm-template-conf",
+                "description": "must include #{task} #{criteria} #{input} #{output} for templating"
+              }
+            },
+            "required": [
+              "eq_comparative",
+              "eq_non_comparative_leader",
+              "eq_non_comparative_validator"
+            ],
+            "additionalProperties": false
+          },
+          "meta": {
+            "type": ["object", "null"],
+            "default": null
+          },
+          "timeout": {
+            "$ref": "#/definitions/timeout"
+          }
+        }
+      }
+    ]
+  },
+  "manager": {
+    "allOf": [
+      {
+        "$ref": "#/definitions/base-conf"
+      },
+      {
+        "type": "object",
+        "properties": {
+          "manifest_path": {
+            "type": "string",
+            "description": "path to manifest file"
+          },
+          "permits": {
+            "type": ["integer", "null"],
+            "default": null,
+            "minimum": 1,
+            "description": "concurrency permits; if null will be auto-discovered; full VM takes 2, sync VM takes 1"
+          }
+        },
+        "required": ["manifest_path"]
+      }
+    ]
+  },
+  "web": {
+    "allOf": [
+      {
+        "$ref": "#/definitions/base-conf"
+      },
+      {
+        "$ref": "#/definitions/base-module-conf"
+      },
+      {
+        "type": "object",
+        "properties": {
+          "webdriver_host": {
+            "type": "string",
+            "format": "uri",
+            "description": "uri of webdriver to connect to",
+            "examples": [
+              "http://127.0.0.1:4444"
+            ]
+          },
+          "extra_tld": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "extra top-level domains to allow (ones that come after last `.`)"
+          },
+          "always_allow_hosts": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "hosts for which all ports are allowed"
+          },
+          "max_wait_after_loaded": {
+            "$ref": "#/definitions/timeout",
+            "description": "upper bound for `wait_after_loaded` requested by contracts; larger values are clamped (with a warning). Defaults to 60s"
+          },
+          "meta": {
+            "type": ["object", "null"],
+            "default": null
+          }
+        }
+      }
+    ]
+  },
+  "definitions": {
+    "timeout": {
+      "oneOf": [
+        { "type": "number", "description": "timeout in seconds" },
+        { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?(ms|s|m)$", "description": "timeout with unit suffix, e.g. \"1.5s\", \"500ms\", \"2m\"" }
+      ]
+    },
+    "llm-template-conf": {
+      "type": "object",
+      "properties": {
+        "system": {"type": "string"},
+        "user": {"type": "string"}
+      }
+    },
+    "genvm-module-conf": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string",
+          "description": "module address that accepts connection",
+          "examples": [
+            "127.0.0.1:3031",
+            "unix:///tmp/module.sock",
+            "fd://3"
+          ]
+        }
+      },
+      "required": ["address"]
+    },
+    "base-module-conf": {
+      "type": "object",
+      "properties": {
+        "bind_address": {
+            "type": ["string", "null"],
+            "description": "address to listen on (null if module shouldn't bind)",
+            "examples": [
+              "127.0.0.1:3032",
+              "unix:///tmp/module.sock",
+              null
+            ]
+        },
+        "lua_script_path": {
+            "type": "string",
+            "description": "path to script"
+        },
+        "vm_count": {
+            "type": "integer",
+            "description": "amount of lua vm to create",
+            "minimum": 1
+        },
+        "lua_path": {
+            "type": "string",
+            "description": "lua path to search for modules",
+            "default": "",
+            "examples": [
+              "/etc/a/?.lua;/etc/b/init.lua"
+            ]
+        },
+        "signer_url": {
+            "type": "string",
+            "description": "url of the signer service to use for signing requests, can have #{node_address} and other interpolations, present in --host-arg",
+            "examples": [
+              "localhost:#{node_port}/genvm/sign"
+            ]
+        },
+        "signer_headers": {
+            "type": "object",
+            "description": "headers to send with signer requests, can have #{node_address} and other interpolations, present in --host-arg",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {}
+        },
+        "data_dir": {
+            "type": "string",
+            "description": "path to data directory for persistent storage (e.g. stats database)"
+        }
+      },
+      "required": ["bind_address", "lua_script_path", "vm_count", "lua_path", "data_dir"]
+    },
+    "u256": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0,
+          "description": "a u64 integer"
+        },
+        {
+          "type": "string",
+          "pattern": "^(0x[0-9a-fA-F]+|[0-9]+)$",
+          "description": "a decimal or 0x-prefixed hex string"
+        }
+      ]
+    },
+    "genvm-fees-bucket-conf": {
+      "type": "object",
+      "properties": {
+        "bucket_no": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 255
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 255
+              },
+              "minItems": 1
+            }
+          ]
+        },
+        "subtract_on_start_expr": {
+          "type": "string",
+          "default": "0",
+          "description": "cost charged once, up-front, when the bucket is created (fixed part of `start + sum of per-change`); see `expr_prelude`"
+        },
+        "delta_expr": {
+          "type": "string",
+          "description": "cost charged per change, evaluated with the `units` variable; see `expr_prelude`"
+        }
+      },
+      "required": ["bucket_no", "delta_expr"],
+      "additionalProperties": false
+    },
+    "genvm-fees-conf": {
+      "type": "object",
+      "properties": {
+        "expr_prelude": {
+          "type": "string",
+          "description": "expression prelude prepended to every bucket expression (shared `let` definitions)"
+        },
+        "storage": { "$ref": "#/definitions/genvm-fees-bucket-conf" },
+        "message_receipt": { "$ref": "#/definitions/genvm-fees-bucket-conf" },
+        "nondet_output": { "$ref": "#/definitions/genvm-fees-bucket-conf" },
+        "message_fee": { "$ref": "#/definitions/genvm-fees-bucket-conf" },
+        "event": { "$ref": "#/definitions/genvm-fees-bucket-conf" }
+      },
+      "required": ["expr_prelude", "storage", "message_receipt", "nondet_output", "message_fee", "event"],
+      "additionalProperties": false
+    },
+    "base-conf": {
+      "type": "object",
+      "properties": {
+          "threads": {
+            "type": "number",
+            "exclusiveMinimum": 1,
+            "description": "amount of native threads on which coroutines run"
+          },
+          "blocking_threads": {
+            "type": "number",
+            "exclusiveMinimum": 1,
+            "description": "set to same relatively large number, they will be idle for most of the time"
+          },
+          "log_disable": { "type": "string" },
+          "log_level": {
+            "enum": ["trace", "debug", "info", "warning", "error", "off"]
+          }
+      },
+      "required": ["threads", "blocking_threads", "log_disable"]
+    }
+  }
+}

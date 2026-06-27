@@ -1,0 +1,174 @@
+{
+  pkgs,
+  deps,
+  system,
+  withLinters ? false,
+  withZig ? true,
+  withWasi ? false,
+  ...
+}@args:
+let
+  zig = import ./zig.nix args;
+
+  systemAsRust =
+    {
+      x86_64-linux = "x86_64-unknown-linux-gnu";
+      aarch64-linux = "aarch64-unknown-linux-gnu";
+      aarch64-darwin = "aarch64-apple-darwin";
+    }
+    .${system};
+
+  systemAsGenVM =
+    {
+      x86_64-linux = "amd64-linux";
+      aarch64-linux = "arm64-linux";
+      aarch64-darwin = "arm64-macos";
+    }
+    .${system};
+
+  is-macos = systemAsGenVM == "arm64-macos";
+
+  manifest-src = deps."rust-channel-stable-2026-03-05";
+
+  manifest = builtins.fromTOML (builtins.readFile manifest-src);
+
+  simpleComponent =
+    x:
+    builtins.fetchurl {
+      url = x.url;
+      sha256 = x.hash;
+    };
+
+  components = [
+    # core
+    (simpleComponent manifest.pkg.cargo.target.${systemAsRust})
+    (simpleComponent manifest.pkg.rustc.target.${systemAsRust})
+    (simpleComponent manifest.pkg.rust-std.target.${systemAsRust})
+
+    # cross compilation
+    (simpleComponent manifest.pkg.rust-std.target.x86_64-unknown-linux-musl)
+    (simpleComponent manifest.pkg.rust-std.target.aarch64-unknown-linux-musl)
+    (simpleComponent manifest.pkg.rust-std.target.aarch64-apple-darwin)
+  ]
+  ++ (
+    if !withLinters then
+      [ ]
+    else
+      [
+        (simpleComponent manifest.pkg.clippy-preview.target.${systemAsRust})
+        (simpleComponent manifest.pkg.rustfmt-preview.target.${systemAsRust})
+        (simpleComponent manifest.pkg.llvm-tools-preview.target.${systemAsRust})
+        (simpleComponent manifest.pkg.rust-src.target."*")
+      ]
+  )
+  ++ (
+    if !withWasi then
+      [ ]
+    else
+      [
+        (simpleComponent manifest.pkg.rust-std.target.wasm32-wasip1)
+      ]
+  );
+
+  rust-objcopy = pkgs.writeShellScript "rust-objcopy" ''
+    exec zig objcopy "$@"
+  '';
+in
+pkgs.stdenvNoCC.mkDerivation rec {
+  name = "genvm-rust";
+
+  srcs = components;
+  sourceRoot = ".";
+
+  dontConfigure = true;
+  dontBuild = true;
+
+  nativeBuildInputs = [ pkgs.makeWrapper ];
+
+  buildInputs = [
+    pkgs.zlib
+    pkgs.bash
+
+    zig
+  ]
+  ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
+    pkgs.glibc
+    pkgs.gcc.cc.lib
+  ];
+
+  dontAutoPatchelf = true;
+
+  fixupPhase =
+    if pkgs.stdenv.hostPlatform.isLinux then
+      ''
+        SEARCH_DIRS="$out/bin"
+        if [[ "${system}" == "x86_64-linux" ]]
+        then
+        SEARCH_DIRS="$SEARCH_DIRS $out/lib/rustlib/x86_64-unknown-linux-gnu/bin"
+        fi
+        if [[ "${system}" == "aarch64-linux" ]]
+        then
+        SEARCH_DIRS="$SEARCH_DIRS $out/lib/rustlib/aarch64-unknown-linux-gnu/bin"
+        fi
+        find $SEARCH_DIRS -type f -executable | while read binary; do
+        if file "$binary" | grep -q "ELF"
+        then
+        echo "Patching $binary"
+        patchelf \
+        --set-interpreter ${pkgs.glibc}/lib/ld-linux-x86-64.so.2 \
+        --set-rpath "${pkgs.lib.makeLibraryPath buildInputs}:$out/lib:"'$ORIGIN/../lib' \
+        "$binary"
+        fi
+        done
+
+        find $out/lib -type f -maxdepth 1 | while read binary; do
+        if file "$binary" | grep -q "ELF"
+        then
+        echo "Patching $binary"
+        patchelf \
+        --set-rpath "${pkgs.lib.makeLibraryPath buildInputs}:"'$ORIGIN/../lib' \
+        "$binary"
+        fi
+        done
+
+        runHook postInstall
+      ''
+    else
+      ''
+        runHook postInstall
+      '';
+
+  installPhase = ''
+    mkdir -p $out
+    for i in $(find . -type d -maxdepth 2 -mindepth 1) ;
+    do
+    cp -r "$i/." $out/.
+    done
+
+    ls -l "$out"
+
+    cp ${rust-objcopy} $out/bin/rust-objcopy
+  ''
+  + (
+    if withZig then
+      ''
+        wrapProgram $out/bin/cargo \
+        --set CC_x86_64_unknown_linux_musl zig-cc-amd64-linux \
+        --set CC_x86_64_unknown_linux_gnu zig-cc-amd64-linux-gnu \
+        --set CC_aarch64_unknown_linux_musl zig-cc-arm64-linux \
+        --set CC_aarch64_unknown_linux_gnu zig-cc-arm64-linux-gnu \
+        ${if is-macos then "" else "--set CC_aarch64_apple_darwin zig-cc-arm64-macos"} \
+        --set CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER zig-cc-amd64-linux \
+        --set CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER zig-cc-arm64-linux \
+        ${if is-macos then "" else "--set CARGO_TARGET_AARCH64_APPLE_DARWIN_LINKER zig-cc-arm64-macos"} \
+        --set CC zig-cc-${systemAsGenVM} \
+        --set CARGO_LINKER zig-cc-${systemAsGenVM} \
+        --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath buildInputs}"
+
+        #--set CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER zig-cc-arm64-linux-gnu \
+        #--set CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER zig-cc-amd64-linux-gnu \
+      ''
+    else
+      ""
+  );
+}
