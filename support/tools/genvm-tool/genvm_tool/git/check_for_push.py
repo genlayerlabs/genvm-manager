@@ -22,9 +22,10 @@ without a fetch — surfaced as `fetch (cannot compare with origin)`. Pass
 `--offline` to compare against the local `origin/<branch>` tracking ref (your
 last fetch) with no network.
 
-`same_branch_as_manager` is shown for submodules as context (the same-named
-mirror convention) but does not gate `ready`. Exit status is non-zero when any
-repo is not ready, so the command can gate a push.
+`same_branch_as_manager` is shown for submodules as context (the line-namespaced
+mirror convention: `feat/x` on the manager maps to `pr/v0.3/feat/x` in the
+executor — see `common.Repo.feature_branch`) but does not gate `ready`. Exit
+status is non-zero when any repo is not ready, so the command can gate a push.
 
 This NEVER fetches, resets, switches, or writes anything — `ls-remote` reads the
 remote without updating any local ref.
@@ -303,9 +304,16 @@ def main(ctx: common.Context, args) -> int:
 			'on_branch': 'yes' if branch else 'no (detached)',
 		}
 		if is_sub:
-			same = bool(branch) and branch == manager_branch
+			# A submodule mirrors the manager branch under the line-namespaced
+			# convention (`feat/x` on the manager -> `pr/v0.3/feat/x` here), so
+			# compare against the manager branch mapped through feature_branch,
+			# not the literal string.
+			mirror = repo.feature_branch(manager_branch) if manager_branch else ''
+			same = bool(branch) and branch == mirror
 			fields['same_branch_as_manager'] = (
-				'yes' if same else f'no (manager on {manager_branch or "DETACHED"})'
+				'yes'
+				if same
+				else f'no (manager on {manager_branch or "DETACHED"}, expected {mirror or "—"})'
 			)
 			fields['committed_in_manager'] = row['committed_msg']
 			ready = ready and row['committed_ok']

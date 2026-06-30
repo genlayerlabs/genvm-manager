@@ -2,24 +2,23 @@
 
 Surveys the manager and every checked-out executor submodule, keeps the ones
 that carry uncommitted or unpushed work, lets you tick which of those to branch,
-and creates one identically-named branch (`git checkout -b`) across all picked
-repos. The shared branch name keeps the manager and its executor submodule in
-lockstep, matching the `v<X>-dev` / same-named-mirror convention CI relies on.
+and creates the feature branch (`git checkout -b`) across all picked repos.
+
+The logical branch name is shared, but every executor submodule namespaces it
+under `pr/<line>/` (e.g. `pr/v0.3/<name>`) via :meth:`common.Repo.feature_branch`,
+because all executor submodules push to ONE remote (`genvm-executor`) and a bare
+name would collide between two lines branched at once — the `<line>` segment keeps
+them apart. The manager carries the bare name. This keeps the manager and its
+executor submodule in lockstep while staying collision-free, matching the
+line-scoped `v<X>-dev` release branches CI already relies on.
 """
 
-import re
 import subprocess
 
 from .. import common
 
 NAME = 'create-branches'
-HELP = 'create a same-named branch across selected sub-repos that have new content'
-
-# Branches that are part of the release/branch model rather than a feature branch
-# worth propagating: `main`, a version branch (`v0.3.x`), or a dev branch
-# (`v0.3-dev`). Used only to decide whether to offer the current branch as the
-# prompt default — never to filter what the user may type.
-_MODEL_BRANCH = re.compile(r'main|v[\d.]+\.x|v[\d.]+-dev')
+HELP = 'create a feature branch across selected sub-repos that have new content'
 
 
 def configure(parser):
@@ -95,7 +94,7 @@ def _default_name(repo: common.Repo) -> str:
 	branch-model branch (main / version / dev) or detached — then no default.
 	"""
 	cur = _current_branch(repo)
-	if not cur or _MODEL_BRANCH.fullmatch(cur):
+	if not cur or common._MODEL_BRANCH.fullmatch(cur):
 		return ''
 	return cur
 
@@ -150,28 +149,34 @@ def main(ctx: common.Context, args) -> int:
 			ctx.printer.put('no branch name given; no branches created')
 			return 0
 
-	# A repo already sitting on `name` needs nothing done — that is not a clash
+	# Each repo gets its own physical branch name: the manager carries `name`
+	# verbatim; every executor submodule line-namespaces it (`v0.3/<name>`) so two
+	# lines branching the shared executor remote at once never collide.
+	branch_of = {repo: repo.feature_branch(name) for repo in selected}
+
+	# A repo already sitting on its branch needs nothing done — that is not a clash
 	# (e.g. the manager you started this branch on). Leave it exactly as it is.
-	on_branch = [repo for repo in selected if _current_branch(repo) == name]
+	on_branch = [repo for repo in selected if _current_branch(repo) == branch_of[repo]]
 	todo = [repo for repo in selected if repo not in on_branch]
 
-	# Pre-flight: refuse if `name` already exists (as a ref) in any repo we would
-	# create it in, so we never half-create the set — and never reset/move an
-	# existing branch. Repos already on `name` are exempt (handled above).
-	clash = [repo.name for repo in todo if _branch_exists(repo, name)]
+	# Pre-flight: refuse if the branch already exists (as a ref) in any repo we
+	# would create it in, so we never half-create the set — and never reset/move an
+	# existing branch. Repos already on the branch are exempt (handled above).
+	clash = [repo.name for repo in todo if _branch_exists(repo, branch_of[repo])]
 	if clash:
 		raise common.ToolError(f'branch {name!r} already exists in: {", ".join(clash)}')
 
 	for repo in on_branch:
-		ctx.printer.put('already on branch', repo=repo.name, branch=name)
+		ctx.printer.put('already on branch', repo=repo.name, branch=branch_of[repo])
 
 	for repo in todo:
 		# `checkout -b` only creates a new ref and moves HEAD onto the same commit;
 		# it never touches the working tree, so pending work is carried, not lost.
-		r = _git(repo, 'checkout', '-b', name)
+		r = _git(repo, 'checkout', '-b', branch_of[repo])
 		if r.returncode != 0:
 			raise common.ToolError(
-				f'failed to create branch {name!r} in {repo.name}: {r.stderr.strip()}'
+				f'failed to create branch {branch_of[repo]!r} in {repo.name}: '
+				f'{r.stderr.strip()}'
 			)
-		ctx.printer.put('created branch', repo=repo.name, branch=name)
+		ctx.printer.put('created branch', repo=repo.name, branch=branch_of[repo])
 	return 0

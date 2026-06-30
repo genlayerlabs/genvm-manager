@@ -9,6 +9,7 @@ engine (tool profiles, filtering, runner, builtins) lives in
 import functools
 import json
 import os
+import re
 import subprocess
 import types
 from dataclasses import dataclass
@@ -103,6 +104,11 @@ def active_versions(root: Path) -> list[str]:
 	return sorted(vers, key=_ver_key)
 
 
+# Release/branch-model branches (`main`, a version branch `v0.3.x`, or a dev
+# branch `v0.3-dev`) — already line-scoped, so they are never feature-namespaced.
+_MODEL_BRANCH = re.compile(r'main|v[\d.]+\.x|v[\d.]+-dev')
+
+
 class Repo:
 	"""One git repo in the umbrella: the manager or an executor submodule."""
 
@@ -126,6 +132,30 @@ class Repo:
 	def prefix(self, rel_path: str) -> str:
 		"""Make a repo-relative path manager-root-relative."""
 		return f'{self.rel}/{rel_path}' if self.rel else rel_path
+
+	@property
+	def line(self) -> str | None:
+		"""The version-line tag (e.g. `v0.3`) for an executor submodule, or None
+		for the manager."""
+		m = re.fullmatch(r'executors/(v\d+\.\d+)\.x', self.name)
+		return m.group(1) if m else None
+
+	def feature_branch(self, name: str) -> str:
+		"""Physical branch name for the logical feature branch `name` in this repo.
+
+		The manager is its own repo, so it carries `name` verbatim. Every executor
+		submodule, however, shares ONE remote (`genvm-executor`): a bare `name`
+		would collide between two active lines that branch off it at once. So an
+		executor feature branch is namespaced under `pr/<line>/` (e.g.
+		`pr/v0.3/<name>`) — the `<line>` segment is what keeps the two lines
+		distinct, matching how the release branches (`v0.3-dev`, `v0.3.x`) are
+		already line-scoped and thus never clash. Release-model branches and an
+		already-prefixed `name` pass through unchanged (idempotent).
+		"""
+		line = self.line
+		if line is None or name.startswith(f'pr/{line}/') or _MODEL_BRANCH.fullmatch(name):
+			return name
+		return f'pr/{line}/{name}'
 
 
 def discover_repos(root: Path, which: str = 'all') -> list[Repo]:
