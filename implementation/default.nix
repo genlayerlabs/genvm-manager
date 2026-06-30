@@ -32,6 +32,8 @@ let
         src = get-root-subtree [
           "implementation"
           "crates/modules-interfaces"
+          "crates/calldata"
+          "crates/calldata-derive"
           # executor crates come from the v0.3.x submodule mount
           "executors/v0.3.x/executor/crates"
         ];

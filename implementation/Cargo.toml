@@ -16,55 +16,76 @@ default = []
 vendored-lua = ["mlua/vendored"]
 
 [dependencies]
-genvm-modules-interfaces = { path = "../crates/modules-interfaces" }
-genvm-common = { path = "../executors/v0.3.x/executor/crates/common" }
 genlayer_calldata = { path = "../executors/v0.3.x/executor/crates/calldata" }
+genvm-common = { path = "../executors/v0.3.x/executor/crates/common" }
+genvm-modules-interfaces = { path = "../crates/modules-interfaces" }
 
 anyhow = { version = "1.0.98", features = [] }
-serde = { version = "1.0.219", features = ["rc"]}
-serde_derive = "1.0.219"
-serde_json = { version = "1.0.140", features = ["preserve_order"] }
-tokio = { version = "1.44.1", features = ["rt", "rt-multi-thread", "net", "time", "macros", "sync", "process"], default-features = false}
-reqwest = { version = "0.12.15", features = ["cookies", "gzip", "rustls-tls", "charset", "http2", "json"], default-features = false}
-serde_yaml = "0.9.34"
-clap = { version = "4.5.35", features = ["derive"] }
-signal-hook = "0.3.17"
 async-trait = "0.1.88"
-regex = "1.11.1"
-crossbeam = "0.8.4"
-tokio-tungstenite = "0.26.2"
-futures-util = "0.3.31"
 base64 = "0.22.1"
-serde_bytes = "0.11.17"
-serde_with = { version = "3.12.0", features = ["base64", "macros"] }
-rand = { version = "0.9.1", features = ["std_rng"] }
-chrono = { version = "0.4.41", default-features = false, features = ["clock", "std", "serde"] }
-ring = { version = "0.17.14", features = ["std"] }
-url = { version = "2.5.4", features = ["serde"] }
+bytes = "1.10.1"
+clap = { version = "4.5.35", features = ["derive"] }
+crossbeam = "0.8.4"
+futures-util = "0.3.31"
 hex = "0.4.3"
+hyper = { version = "0.14", features = ["server", "http1", "tcp"] }
+image = { version = "0.25.8", features = ["png", "jpeg", "webp"] }
+libc = "0.2"
 num-bigint = { version = "0.4.6", features = ["serde"] }
+num-integer = { version = "0.1.46" }
 num-rational = { version = "0.4.2" }
 num-traits = { version = "0.2.19" }
-num-integer = { version = "0.1.46" }
+papaya = "0.2.3"
 primitive-types = { version = "0.13", features = ["impl-serde"] }
+rand = { version = "0.9.1", features = ["std_rng"] }
+regex = "1.11.1"
+
+ring = { version = "0.17.14", features = ["std"] }
+serde = { version = "1.0.219", features = ["rc"] }
+serde_bytes = "0.11.17"
+serde_derive = "1.0.219"
+serde_json = { version = "1.0.140", features = ["preserve_order"] }
+serde_with = { version = "3.12.0", features = ["base64", "macros"] }
+serde_yaml = "0.9.34"
+sha3 = "0.10"
+signal-hook = "0.3.17"
+
+tokio-tungstenite = "0.26.2"
 unicode-normalization = "0.1.20"
 unicode-width = "0.2.1"
-image = { version = "0.25.8", features = ["png", "jpeg", "webp"]}
+url = { version = "2.5.4", features = ["serde"] }
 warp = "0.3.7"
-hyper = { version = "0.14", features = ["server", "http1", "tcp"] }
-bytes = "1.10.1"
-libc = "0.2"
-sha3 = "0.10"
-papaya = "0.2.3"
 # kept in sync with the version reqwest depends on, to avoid a duplicate hickory
 # in the tree
 hickory-resolver = { version = "0.25", features = ["tokio"] }
 
+[dependencies.chrono]
+default-features = false
+features = ["clock", "std", "serde"]
+version = "0.4.41"
+
+[dependencies.reqwest]
+default-features = false
+features = ["cookies", "gzip", "rustls-tls", "charset", "http2", "json"]
+version = "0.12.15"
+
+[dependencies.tokio]
+default-features = false
+features = ["rt", "rt-multi-thread", "net", "time", "macros", "sync", "process"]
+version = "1.44.1"
+
 # we do not use anyhow feature because it does not work with boxed downcast_ref
 [dependencies.mlua]
-version = "0.10.3"
 default-features = false
-features = ["lua53", "async", "serialize", "send", "error-send", "userdata-wrappers"]
+features = [
+    "lua53",
+    "async",
+    "serialize",
+    "send",
+    "error-send",
+    "userdata-wrappers",
+]
+version = "0.10.3"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
@@ -76,7 +97,7 @@ cc = "1"
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
 
 [profile.release-with-debug]
-inherits = "release"
 debug = true
+inherits = "release"
 split-debuginfo = "packed"
 strip = "none"

@@ -1,22 +1,16 @@
 indent-width = 2
 
-exclude = [
-    "executors/**"
-]
+exclude = ["executors/**"]
 
 [format]
 indent-style = "tab"
-quote-style = "single"
 line-ending = "lf"
+quote-style = "single"
 
-skip-magic-trailing-comma = false
 docstring-code-format = true
+skip-magic-trailing-comma = false
 
 [lint]
-ignore = [
-    "E741"
-]
+ignore = ["E741"]
 
-extend-select = [
-    "I"
-]
+extend-select = ["I"]

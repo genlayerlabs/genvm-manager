@@ -19,6 +19,7 @@ python.pkgs.buildPythonApplication {
     ruamel-yaml
     cloudpickle
     python-dotenv
+    questionary
   ];
 
   nativeBuildInputs = [ pkgs.installShellFiles ];

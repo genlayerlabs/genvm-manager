@@ -73,6 +73,15 @@ def hooks(ctx):
 			'types_or': ['toml'],
 		},
 		{
+			'id': 'toml-format',
+			'nix': 'taplo',
+			'entry': 'taplo',
+			'args': ['format', '--check'],
+			'fix_args': ['format'],
+			'types_or': ['toml'],
+			'pass_filenames': True,
+		},
+		{
 			'id': 'check-merge-conflict',
 			'nix': 'pre-commit-hooks',
 			'entry': 'check-merge-conflict',
@@ -98,7 +107,6 @@ def hooks(ctx):
 			'fix_args': ['format'],
 			'types_or': ['python'],
 		},
-		# --- python / lua / ts (manager-owned languages) -------------------
 		{
 			'id': 'ruff-check',
 			'nix': 'ruff',

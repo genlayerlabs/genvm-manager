@@ -54,13 +54,12 @@ def _is_ignore_hash_enabled() -> bool:
 	return '--ignore-hash' in sys.argv
 
 
-# Integration cases live in the executor checkout (per-version, per-branch).
-# The active executor version line is mounted as a submodule at executors/v0.3.x.
-# TODO(multi-version): iterate over executors/* once several minors coexist.
-# The test harness (templates, runner) is version-independent and lives in the
-# manager root.
-EXEC_SUBDIR = 'executors/v0.3.x'
-CASES_DIR = local_ctx.shared.root_dir.joinpath(EXEC_SUBDIR, 'tests', 'integration')
+# Integration cases live per-version in each executor checkout
+# (executors/<line>.x/tests/integration). `integration_test` iterates the active
+# version lines from .genvm-monorepo-root and runs each line's suite against that
+# line's own executor (see `integration_test_single_executor`, which resolves the
+# line's cases dir and reroute target). The harness itself (templates, runner) is
+# version-independent and lives in the manager root.
 TEMPLATES_DIR = local_ctx.shared.root_dir.joinpath('tests', 'templates')
 
 # Default environment for tests
@@ -180,6 +179,8 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 
 	description: genvm_tool.tests.test.Description
 	jsonnet_path: Path
+	cases_dir: Path
+	reroute_to: str
 	manager_service: genvm_tool.tests.stage.collection.Service
 	tree_path: str
 	parent_tree_path: str | None
@@ -515,7 +516,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		)
 
 		# Set up paths
-		rel_path = jsonnet_path.relative_to(CASES_DIR)
+		rel_path = jsonnet_path.relative_to(self._test_case.cases_dir)
 		mock_sock_path = Path('/tmp', 'genvm-test', rel_path.with_suffix(f'.sock{suff}'))
 		mock_sock_path.parent.mkdir(exist_ok=True, parents=True)
 
@@ -547,6 +548,17 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						encoded_nondet.append(
 							bytes([public_abi.ResultCode.VM_ERROR]) + res['value'].encode('utf-8')
 						)
+					elif res['kind'] == 'rollback':
+						# v0.2.x: a rollback is a user error carrying a plain UTF-8
+						# string (v0.2 user errors are string-only).
+						encoded_nondet.append(
+							bytes([public_abi.ResultCode.USER_ERROR]) + res['value'].encode('utf-8')
+						)
+					elif res['kind'] == 'contract_error':
+						# v0.2.x: a vm error carrying a plain UTF-8 string.
+						encoded_nondet.append(
+							bytes([public_abi.ResultCode.VM_ERROR]) + res['value'].encode('utf-8')
+						)
 					elif res['kind'] == 'raw':
 						encoded_nondet.append(bytes(res['value']))
 					else:
@@ -569,7 +581,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		# Get manager URI from the service
 		manager_svc = self._test_case.manager_service
 		port = manager_svc.meta['port']
-		reroute_to = manager_svc.meta.get('reroute_to', '')
+		reroute_to = self._test_case.reroute_to
 		manager_uri = f'http://localhost:{port}'
 
 		# Run the test
@@ -814,6 +826,27 @@ def integration_test(
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
 ) -> None:
+	active_versions: list[str] = json.loads(
+		local_ctx.shared.root_dir.joinpath('.genvm-monorepo-root').read_text()
+	)['active-versions']
+	for ver in active_versions:
+		integration_test_single_executor(
+			ctx,
+			executor_version=ver,
+			manager_service=manager_service,
+			modules_service=modules_service,
+			webdriver_service=webdriver_service,
+		)
+
+
+def integration_test_single_executor(
+	ctx: genvm_tool.tests.stage.collection.Context,
+	*,
+	executor_version: str,
+	manager_service: genvm_tool.tests.stage.collection.Service,
+	modules_service: genvm_tool.tests.stage.collection.Service,
+	webdriver_service: genvm_tool.tests.stage.collection.Service,
+) -> None:
 	"""
 	Collect integration tests from tests/integration/ directory.
 
@@ -823,6 +856,15 @@ def integration_test(
 
 	Steps depend on /prepare, and child steps depend on their parent step.
 	"""
+
+	EXEC_SUBDIR = os.environ.get(
+		'GENVM_TEST_EXEC_SUBDIR', f'executors/{executor_version}.x'
+	)
+	CASES_DIR = local_ctx.shared.root_dir.joinpath(EXEC_SUBDIR, 'tests', 'integration')
+
+	# Run this line's cases against this line's own executor. The version key
+	# (e.g. "v0.2") maps to the concrete built version (e.g. "v0.2.16").
+	reroute_to = build_info['executor_versions'].get(executor_version, executor_version)
 
 	jsonnet_files = list(CASES_DIR.glob('**/*.jsonnet'))
 	jsonnet_files.sort()
@@ -837,6 +879,8 @@ def integration_test(
 				_single_integration_test,
 				ctx,
 				jsonnet_file,
+				cases_dir=CASES_DIR,
+				reroute_to=reroute_to,
 				manager_service=manager_service,
 				modules_service=modules_service,
 				webdriver_service=webdriver_service,
@@ -851,13 +895,15 @@ def _single_integration_test(
 	ctx: genvm_tool.tests.stage.collection.Context,
 	jsonnet_file: Path,
 	*,
+	cases_dir: Path,
+	reroute_to: str,
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
 ) -> None:
 	import _jsonnet
 
-	rel_path = jsonnet_file.relative_to(CASES_DIR)
+	rel_path = jsonnet_file.relative_to(cases_dir)
 
 	# Determine stability tag from path
 	tags: set[str] = {'integration'}
@@ -977,6 +1023,8 @@ def _single_integration_test(
 			IntegrationSingleCase(
 				description=step_desc,
 				jsonnet_path=jsonnet_file,
+				cases_dir=cases_dir,
+				reroute_to=reroute_to,
 				manager_service=manager_service,
 				tree_path=tree_path,
 				parent_tree_path=single_conf.get('parent_tree_path'),

@@ -292,14 +292,14 @@
             let
               execs = builtins.map (line: executor-packages."executor-${line.clamped}${suffix}") executor-lines;
               manager = manager-packages."manager${suffix}";
-              srcs = execs ++ [
-                manager
-                runners-all
-              ];
+              # executors + manager land at the top level; runners-all is
+              # nested under `runners/` (matching the CI build/out layout).
+              srcs = execs ++ [ manager ];
             in
             pkgs.stdenvNoCC.mkDerivation {
               name = "genvm${suffix}";
               inherit srcs;
+              runnersAll = runners-all;
               dontUnpack = true;
               dontConfigure = true;
               dontBuild = true;
@@ -310,6 +310,9 @@
                 cp --no-preserve=ownership -r $src/. $out/.
                 chmod -R u+w $out
                 done
+                mkdir -p $out/runners
+                cp --no-preserve=ownership -r $runnersAll/. $out/runners/.
+                chmod -R u+w $out/runners
               '';
             };
           genvm-packages = builtins.listToAttrs (

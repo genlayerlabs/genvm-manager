@@ -1,13 +1,20 @@
 [build-system]
-requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
+requires = ["setuptools>=61"]
 
 [project]
-name = "genvm-tool"
-version = "0.1.0"
+dependencies = [
+    "aiohttp",
+    "jsonnet",
+    "shtab",
+    "ruamel.yaml",
+    "cloudpickle",
+    "questionary",
+]
 description = "GenVM monorepo git helper (build, tests, hooks, ls)"
+name = "genvm-tool"
 requires-python = ">=3.12"
-dependencies = ["aiohttp", "jsonnet", "shtab", "ruamel.yaml", "cloudpickle"]
+version = "0.1.0"
 
 [project.scripts]
 genvm-tool = "genvm_tool.__main__:main"

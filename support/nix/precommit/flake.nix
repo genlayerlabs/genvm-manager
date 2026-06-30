@@ -28,6 +28,7 @@
             rustfmt
             nixfmt
             cargo
+            taplo
             ;
           pre-commit-hooks = pkgs.python3Packages.pre-commit-hooks;
         };

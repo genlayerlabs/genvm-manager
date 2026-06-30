@@ -16,9 +16,18 @@ from pathlib import Path
 
 import shtab
 
-from . import cmd_build_manifest, cmd_configure, cmd_test, common, formatter, git, hook
+from . import (
+	cmd_build_manifest,
+	cmd_codegen,
+	cmd_configure,
+	cmd_test,
+	common,
+	formatter,
+	git,
+	hook,
+)
 
-TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest]
+TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest, cmd_codegen]
 GROUPS = [git, hook]
 
 

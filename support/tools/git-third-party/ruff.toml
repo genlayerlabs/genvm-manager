@@ -2,8 +2,8 @@ indent-width = 2
 
 [format]
 indent-style = "tab"
-quote-style = "single"
 line-ending = "lf"
+quote-style = "single"
 
-skip-magic-trailing-comma = false
 docstring-code-format = true
+skip-magic-trailing-comma = false
