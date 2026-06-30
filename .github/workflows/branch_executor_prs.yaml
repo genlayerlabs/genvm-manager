@@ -1,9 +1,11 @@
 name: branch / open linked executor PRs
 
-# When a manager PR is opened against a dev branch (v<X>-dev), open the matching
-# executor PR in the genvm-executor repo (`pr/<line>/<feature>` -> v<X>-dev) and
-# list it on the manager PR as an `executor: <url>` line. The executor work lives
-# on a line-namespaced mirror branch the developer pushed via
+# When a manager PR is opened against a dev branch, open the matching executor
+# PR(s) in the genvm-executor repo. The manager release line is independent of the
+# executor lines it ships, so one manager PR fans out over EVERY active executor
+# line (.genvm-monorepo-root): for each, `pr/<line>/<feature>` -> <line>-dev. Each
+# is listed on the manager PR as an `executor: <url>` line. The executor work lives
+# on line-namespaced mirror branches the developer pushed via
 # `genvm-tool git create-branches`. See support/ci/open-executor-prs.py.
 #
 # pull_request_target gives a manager-scoped write token for the comment; the
@@ -36,5 +38,4 @@ jobs:
           MANAGER_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: python3 support/ci/open-executor-prs.py

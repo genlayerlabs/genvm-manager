@@ -18,18 +18,21 @@ Strategy: 1 commit -> fast-forward the original commit (SHA preserved);
 more -> squash into one commit on top of base, then fast-forward. The PR
 is closed afterwards.
 
-Executor submodule mirror: the manager commit that lands on `v<X>-dev`
-carries a gitlink into the executor repo. We mirror it by fast-forwarding
-the executor's SAME-NAMED branch (`v<X>-dev`) to that gitlink commit. True
-cross-repo atomicity is impossible, so we (1) fast-forward-check BOTH sides
-up front, then (2) push the executor first — it is the dependency the
-manager commit points at — and (3) push the manager. If the manager push
-then loses a race the executor is left one fast-forward ahead, which is
-harmless (monotonic) and reconciled when Merge is re-ticked.
+Executor mirror: the manager release line (e.g. v0.6) is independent of the
+executor lines it ships (v0.2, v0.3), so a single manager commit carries a
+gitlink into EACH active line's submodule. We mirror every active line by
+fast-forwarding its own `<line>-dev` branch (`v0.2-dev`, `v0.3-dev`, ...) to
+that line's gitlink commit. True cross-repo atomicity is impossible, so we
+(1) fast-forward-check all sides up front, then (2) push the executors first —
+they are the dependencies the manager commit points at — and (3) push the
+manager. If the manager push then loses a race the executors are left one
+fast-forward ahead, which is harmless (monotonic) and reconciled when Merge is
+re-ticked. Lines whose gitlink is unchanged are skipped.
 
-After a successful merge the executor mirror branch (`pr/<line>/<feature>`,
-opened by branch_executor_prs.yaml) is deleted — its tip now lives in the
-executor's `v<X>-dev`, so the branch and its PR are redundant.
+After a successful merge each line's executor mirror branch
+(`pr/<line>/<feature>`, opened by branch_executor_prs.yaml) is deleted — its
+tip now lives in the executor's `<line>-dev`, so the branch and its PR are
+redundant.
 
 (The dev -> version release-gate merge is a separate, not-yet-automated
 flow; on that one the executor's version branch is fast-forwarded and its
@@ -38,12 +41,12 @@ dev/version branches are kept at the same point.)
 Talks to GitHub through the `gh` CLI and moves refs through `git`; it
 never executes PR code. The dev branches are protected, so the workflow
 checks out with the GENVM_CI_PRIVATE_KEY deploy key and pushes non-force
-(a base that advanced is safely rejected). The executor submodule must be
-checked out with a remote `origin` that can push the executor repo (the
-workflow wires its own deploy key); EXECUTOR_SUBMODULE points at it.
+(a base that advanced is safely rejected). The active executor submodules
+must be checked out with a remote `origin` that can push the executor repo
+(the workflow wires its own deploy key); the active lines come from
+.genvm-monorepo-root via branch-versions.py.
 
-Env: GITHUB_REPOSITORY, PR_NUMBER, GH_TOKEN, E2E_CHECK_PATTERN,
-EXECUTOR_SUBMODULE.
+Env: GITHUB_REPOSITORY, PR_NUMBER, GH_TOKEN, E2E_CHECK_PATTERN.
 """
 
 import json
@@ -51,13 +54,12 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path
 
 REPO = os.environ['GITHUB_REPOSITORY']
 PR = os.environ['PR_NUMBER']
 E2E_PATTERN = os.environ.get('E2E_CHECK_PATTERN', 'e2e')
-# Path to the executor submodule checkout whose origin can push the executor
-# repo. Override only if the submodule moves.
-EXEC_SUBMODULE = os.environ.get('EXECUTOR_SUBMODULE', 'executors/v0.3.x')
+HERE = Path(__file__).resolve().parent
 
 
 def run(*args, check=True):
@@ -72,9 +74,16 @@ def git(*args, check=True):
 	return run('git', *args, check=check)
 
 
-def egit(*args, check=True):
-	"""git inside the executor submodule checkout."""
-	return run('git', '-C', EXEC_SUBMODULE, *args, check=check)
+def egit(submodule, *args, check=True):
+	"""git inside an executor submodule checkout."""
+	return run('git', '-C', submodule, *args, check=check)
+
+
+def active_lines():
+	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3']). The manager
+	release line is independent of these; a manager PR ships every active line."""
+	out = run(sys.executable, str(HERE / 'branch-versions.py'), 'list').stdout
+	return [f'v{v}' for v in out.split()]
 
 
 def block(msg):
@@ -148,74 +157,113 @@ def check_gates(pr):
 	return base, head_sha
 
 
-def delete_executor_mirror_branch(base, head_ref):
+def delete_executor_mirror_branch(submodule, line, head_ref):
 	"""Delete the executor mirror branch `pr/<line>/<head_ref>` after a merge.
 
-	The manager PR's executor work lived on that namespaced branch; its tip is now
-	contained in the executor's `<base>` (we just fast-forwarded it there), so the
-	branch — and the auto-opened executor PR it backed (branch_executor_prs.yaml) —
-	are redundant. Deleting the branch also closes that PR. Best-effort: a failure
-	here never unwinds an otherwise-complete merge. The branch is unprotected, so
-	the executor deploy key can delete it; the shared remote means EXEC_SUBMODULE's
-	origin reaches it regardless of which line `base` is.
+	The manager PR's work for this line lived on that namespaced branch; its tip is
+	now contained in the executor's `<line>-dev` (we just fast-forwarded it there),
+	so the branch — and the auto-opened executor PR it backed (branch_executor_prs.yaml)
+	— are redundant. Deleting the branch also closes that PR. Best-effort: a failure
+	here never unwinds an otherwise-complete merge. The branch is unprotected, so the
+	executor deploy key can delete it.
 	"""
-	m = re.fullmatch(r'(v\d+\.\d+)-dev', base)
-	if not m:
-		return
-	branch = f'pr/{m.group(1)}/{head_ref}'
-	r = egit('push', 'origin', '--delete', branch, check=False)
+	branch = f'pr/{line}/{head_ref}'
+	r = egit(submodule, 'push', 'origin', '--delete', branch, check=False)
 	if r.returncode == 0:
 		print(f'deleted executor mirror branch {branch}')
 	else:
 		print(f'note: could not delete executor mirror branch {branch}: {r.stderr.strip()}')
 
 
-def executor_gitlink(commit):
+def executor_gitlink(commit, submodule):
 	"""Executor submodule commit (gitlink) recorded at `commit`'s tree."""
-	out = git('ls-tree', commit, EXEC_SUBMODULE).stdout
+	out = git('ls-tree', commit, submodule).stdout
 	# "160000 commit <sha>\t<path>"
 	m = re.match(r'\S+\s+commit\s+([0-9a-f]+)\t', out)
 	if not m:
 		block(
-			f'could not resolve the executor submodule pointer ({EXEC_SUBMODULE}) '
-			f'at `{commit}`.'
+			f'could not resolve the executor submodule pointer ({submodule}) at `{commit}`.'
 		)
 	return m.group(1)
 
 
-def executor_mirror_action(base, exec_sha):
-	"""Decide how to mirror `exec_sha` onto the executor's same-named branch.
+def executor_mirror_action(submodule, exec_base, exec_sha):
+	"""Decide how to mirror `exec_sha` onto the executor's `<exec_base>` branch.
 
 	Returns 'push' (fast-forward, including a fresh create) or 'skip' (the
 	branch already contains exec_sha because the executor advanced past what
 	this PR pins). Blocks if exec_sha is unknown to the executor repo or the
 	branch has diverged from it."""
 	# Bring every executor head (and thus exec_sha, if pushed) local.
-	egit('fetch', '--no-tags', 'origin', '+refs/heads/*:refs/remotes/origin/*')
+	egit(submodule, 'fetch', '--no-tags', 'origin', '+refs/heads/*:refs/remotes/origin/*')
 
-	if egit('cat-file', '-e', f'{exec_sha}^{{commit}}', check=False).returncode != 0:
+	if (
+		egit(submodule, 'cat-file', '-e', f'{exec_sha}^{{commit}}', check=False).returncode
+		!= 0
+	):
 		block(
-			f'executor commit `{exec_sha}` is not in the executor repo; push the '
-			f'executor side of this change first, then re-tick Merge.'
+			f'executor commit `{exec_sha}` ({submodule}) is not in the executor repo; '
+			f'push the executor side of this change first, then re-tick Merge.'
 		)
 
-	ref = f'refs/remotes/origin/{base}'
-	if egit('rev-parse', '--verify', '--quiet', ref, check=False).returncode != 0:
+	ref = f'refs/remotes/origin/{exec_base}'
+	if (
+		egit(submodule, 'rev-parse', '--verify', '--quiet', ref, check=False).returncode
+		!= 0
+	):
 		return 'push'  # branch absent -> push creates it
 
-	tip = egit('rev-parse', ref).stdout.strip()
+	tip = egit(submodule, 'rev-parse', ref).stdout.strip()
 	if tip == exec_sha:
 		return 'skip'  # already there
-	if egit('merge-base', '--is-ancestor', exec_sha, tip, check=False).returncode == 0:
+	if (
+		egit(
+			submodule, 'merge-base', '--is-ancestor', exec_sha, tip, check=False
+		).returncode
+		== 0
+	):
 		# Executor moved ahead of what this PR pins; the pinned commit is
 		# already contained, so there is nothing to push.
 		return 'skip'
-	if egit('merge-base', '--is-ancestor', tip, exec_sha, check=False).returncode == 0:
+	if (
+		egit(
+			submodule, 'merge-base', '--is-ancestor', tip, exec_sha, check=False
+		).returncode
+		== 0
+	):
 		return 'push'  # clean fast-forward
 	block(
-		f'executor `{base}` (`{tip[:12]}`) has diverged from the PR executor '
+		f'executor `{exec_base}` (`{tip[:12]}`) has diverged from the PR executor '
 		f'commit `{exec_sha[:12]}`; mirror is not a fast-forward.'
 	)
+
+
+def mirror_executor_lines(push_sha):
+	"""Fast-forward each active executor line's `<line>-dev` to the gitlink this
+	merge pins, BEFORE the manager push (the manager commit references them). Lines
+	whose gitlink is unchanged are skipped. Returns the lines that were pinned so
+	their mirror branches can be cleaned up after the manager push lands."""
+	pinned = []
+	for line in active_lines():
+		submodule = f'executors/{line}.x'
+		exec_base = f'{line}-dev'
+		exec_sha = executor_gitlink(push_sha, submodule)
+		if executor_mirror_action(submodule, exec_base, exec_sha) == 'push':
+			print(f'Mirroring executor {exec_base} -> {exec_sha}')
+			if (
+				egit(
+					submodule, 'push', 'origin', f'{exec_sha}:refs/heads/{exec_base}', check=False
+				).returncode
+				!= 0
+			):
+				block(
+					f'fast-forward push of executor `{exec_base}` was rejected (it advanced); '
+					f're-tick Merge.'
+				)
+		else:
+			print(f'Executor {exec_base} already contains {exec_sha}; nothing to mirror')
+		pinned.append((submodule, line))
+	return pinned
 
 
 def merge(pr, base, head_sha):
@@ -261,34 +309,24 @@ def merge(pr, base, head_sha):
 		git('commit', '--author', author, '-m', message)
 		push_sha = git('rev-parse', 'HEAD').stdout.strip()
 
-	# Mirror the executor submodule onto its same-named branch. Fast-forward-
-	# check BOTH sides before touching either (the manager side was checked
-	# above), then push the executor first: the manager commit gitlinks into
-	# it, so the dependency must land before the referrer.
-	exec_sha = executor_gitlink(push_sha)
-	if executor_mirror_action(base, exec_sha) == 'push':
-		print(f'Mirroring executor {base} -> {exec_sha}')
-		if (
-			egit('push', 'origin', f'{exec_sha}:refs/heads/{base}', check=False).returncode
-			!= 0
-		):
-			block(
-				f'fast-forward push of executor `{base}` was rejected (it advanced); '
-				f're-tick Merge.'
-			)
-	else:
-		print(f'Executor {base} already contains {exec_sha}; nothing to mirror')
+	# Mirror every active executor line onto its own `<line>-dev` branch. The
+	# manager line (e.g. v0.6) is independent of the executor lines (v0.2, v0.3)
+	# it ships, so one merge fast-forwards each changed line. Fast-forward-check
+	# all of them BEFORE the manager push (the manager side was checked above),
+	# pushing the executors first: the manager commit gitlinks into them, so the
+	# dependencies must land before the referrer.
+	pinned = mirror_executor_lines(push_sha)
 
 	# Non-force FF push; rejected if base advanced since the checks. The
-	# executor is already advanced at this point; a rejection here leaves it
+	# executors are already advanced at this point; a rejection here leaves them
 	# one fast-forward ahead (harmless, monotonic) and re-ticking reconciles.
 	if (
 		git('push', 'origin', f'{push_sha}:refs/heads/{base}', check=False).returncode != 0
 	):
 		block(
-			f'fast-forward push to manager `{base}` was rejected (base advanced) — '
-			f'executor `{base}` was already fast-forwarded to `{exec_sha[:12]}`; '
-			f're-tick Merge to land the manager side.'
+			f'fast-forward push to manager `{base}` was rejected (base advanced) — the '
+			f'executor lines were already fast-forwarded; re-tick Merge to land the '
+			f'manager side.'
 		)
 
 	run(
@@ -304,8 +342,9 @@ def merge(pr, base, head_sha):
 	)
 	run('gh', 'pr', 'close', PR, '--repo', REPO, check=False)
 
-	# Clean up the now-redundant executor mirror branch (and the PR it backed).
-	delete_executor_mirror_branch(base, pr['headRefName'])
+	# Clean up the now-redundant executor mirror branches (and the PRs they backed).
+	for submodule, line in pinned:
+		delete_executor_mirror_branch(submodule, line, pr['headRefName'])
 
 
 def main():

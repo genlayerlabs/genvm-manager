@@ -1,40 +1,40 @@
 #!/usr/bin/env python3
-"""Open (or reuse) the linked executor PR for a manager PR and list it on the PR.
+"""Open (or reuse) the linked executor PRs for a manager PR and list them on it.
 
 Invoked by .github/workflows/branch_executor_prs.yaml when a manager PR is opened
-against a v<X>-dev branch. The manager's executor-submodule work lives on a mirror
-branch in the shared genvm-executor repo, namespaced `pr/<line>/<feature>` so the
-two active lines never collide (see genvm_tool.common.Repo.feature_branch). This:
+against a dev branch. The manager release line (e.g. v0.6) is independent of the
+executor lines it ships (v0.2, v0.3): one manager PR bundles the work of EVERY
+active executor line, each on its own line-namespaced mirror branch in the shared
+genvm-executor repo (`pr/<line>/<feature>`, see genvm_tool.common.Repo.feature_branch).
 
-	1. derives the line from the manager PR base (`v0.3-dev` -> `v0.3`) and the
-		mirror branch `pr/<line>/<head>`;
-	2. if that branch exists on genvm-executor, opens a PR `pr/<line>/<head>` ->
-		`v<X>-dev` there (reusing an already-open one — idempotent on re-runs);
-	3. upserts a marked comment on the manager PR listing it as an `executor: <url>`
-		line.
+So we fan out over the active executor lines (.genvm-monorepo-root via
+branch-versions.py) rather than deriving a single line from the manager base. For
+each active line whose mirror branch `pr/<line>/<head>` exists on genvm-executor we
+open (or reuse) a PR `pr/<line>/<head>` -> `<line>-dev` there, then upsert a marked
+comment on the manager PR listing each as an `executor: <url>` line.
 
-Two tokens: the executor PR is created with EXECUTOR_TOKEN (a PAT with
-genvm-executor access — the default GITHUB_TOKEN is manager-scoped and cannot
-touch another repo); the manager comment uses MANAGER_TOKEN (the default
-GITHUB_TOKEN). Never executes PR code — only `gh` API/PR calls.
+Two tokens: the executor PRs are created with EXECUTOR_TOKEN (a PAT with
+genvm-executor access — the default GITHUB_TOKEN is manager-scoped and cannot touch
+another repo); the manager comment uses MANAGER_TOKEN (the default GITHUB_TOKEN).
+Never executes PR code — only `gh` API/PR calls.
 
-Env: MANAGER_REPO, EXECUTOR_REPO, PR_NUMBER, HEAD_REF, BASE_REF, MANAGER_TOKEN,
-EXECUTOR_TOKEN.
+Env: MANAGER_REPO, EXECUTOR_REPO, PR_NUMBER, HEAD_REF, MANAGER_TOKEN, EXECUTOR_TOKEN.
 """
 
 import json
 import os
-import re
 import subprocess
+import sys
+from pathlib import Path
 
 MANAGER_REPO = os.environ['MANAGER_REPO']
 EXECUTOR_REPO = os.environ.get('EXECUTOR_REPO', 'genlayerlabs/genvm-executor')
 PR = os.environ['PR_NUMBER']
 HEAD_REF = os.environ['HEAD_REF']
-BASE_REF = os.environ['BASE_REF']
 MANAGER_TOKEN = os.environ['MANAGER_TOKEN']
 EXECUTOR_TOKEN = os.environ['EXECUTOR_TOKEN']
 
+HERE = Path(__file__).resolve().parent
 # Marker so re-runs update the same comment instead of stacking new ones.
 COMMENT_MARKER = '<!-- genvm-executor-prs -->'
 
@@ -50,10 +50,15 @@ def gh(*args, token, check=True):
 	)
 
 
-def line_of(base: str) -> str | None:
-	"""Version line for a dev base branch: `v0.3-dev` -> `v0.3`, else None."""
-	m = re.fullmatch(r'(v\d+\.\d+)-dev', base)
-	return m.group(1) if m else None
+def active_lines() -> list[str]:
+	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3'])."""
+	out = subprocess.run(
+		[sys.executable, str(HERE / 'branch-versions.py'), 'list'],
+		check=True,
+		text=True,
+		capture_output=True,
+	).stdout
+	return [f'v{v}' for v in out.split()]
 
 
 def executor_branch_exists(branch: str) -> bool:
@@ -104,7 +109,7 @@ def open_pr(head: str, base: str) -> str:
 	body = (
 		f'Auto-opened executor mirror of {MANAGER_REPO}#{PR}.\n\n'
 		f'Carries the executor-side work for that manager PR. Closed and its branch '
-		f'`{head}` deleted automatically when the manager PR merges into `{base}`.'
+		f'`{head}` deleted automatically when the manager PR merges.'
 	)
 	r = gh(
 		'pr',
@@ -127,7 +132,9 @@ def open_pr(head: str, base: str) -> str:
 		url = existing_pr(head, base)
 		if url:
 			return url
-		raise SystemExit(f'failed to create executor PR: {r.stderr.strip()}')
+		raise SystemExit(
+			f'failed to create executor PR `{head}` -> `{base}`: {r.stderr.strip()}'
+		)
 	return r.stdout.strip().splitlines()[-1].strip()
 
 
@@ -163,21 +170,20 @@ def upsert_comment(lines: list[str]) -> None:
 
 
 def main() -> None:
-	line = line_of(BASE_REF)
-	if not line:
-		print(f'base `{BASE_REF}` is not a v<X>-dev branch; nothing to do')
-		return
-	head = f'pr/{line}/{HEAD_REF}'
-	base = BASE_REF  # the executor's dev branch carries the same name
-	if not executor_branch_exists(head):
-		print(
-			f'executor branch `{head}` is not on {EXECUTOR_REPO} yet; nothing to open '
-			f'(push the executor submodule branch first, then reopen the PR)'
-		)
-		return
-	url = existing_pr(head, base) or open_pr(head, base)
-	print(f'executor PR: {url}')
-	upsert_comment([f'executor: {url}'])
+	lines = []
+	for line in active_lines():
+		head = f'pr/{line}/{HEAD_REF}'
+		base = f'{line}-dev'
+		if not executor_branch_exists(head):
+			print(f'no executor branch `{head}`; skipping {line} (nothing pushed for it)')
+			continue
+		url = existing_pr(head, base) or open_pr(head, base)
+		print(f'{line}: executor PR {url}')
+		lines.append(f'executor: {url}')
+	if lines:
+		upsert_comment(lines)
+	else:
+		print('no executor mirror branches found for any active line; nothing to link')
 
 
 if __name__ == '__main__':
