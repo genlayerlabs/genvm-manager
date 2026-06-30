@@ -27,6 +27,10 @@ manager commit points at — and (3) push the manager. If the manager push
 then loses a race the executor is left one fast-forward ahead, which is
 harmless (monotonic) and reconciled when Merge is re-ticked.
 
+After a successful merge the executor mirror branch (`pr/<line>/<feature>`,
+opened by branch_executor_prs.yaml) is deleted — its tip now lives in the
+executor's `v<X>-dev`, so the branch and its PR are redundant.
+
 (The dev -> version release-gate merge is a separate, not-yet-automated
 flow; on that one the executor's version branch is fast-forwarded and its
 dev/version branches are kept at the same point.)
@@ -142,6 +146,28 @@ def check_gates(pr):
 		block(f'E2E is not green on `{head_sha}` (conclusions: {conclusions}).')
 
 	return base, head_sha
+
+
+def delete_executor_mirror_branch(base, head_ref):
+	"""Delete the executor mirror branch `pr/<line>/<head_ref>` after a merge.
+
+	The manager PR's executor work lived on that namespaced branch; its tip is now
+	contained in the executor's `<base>` (we just fast-forwarded it there), so the
+	branch — and the auto-opened executor PR it backed (branch_executor_prs.yaml) —
+	are redundant. Deleting the branch also closes that PR. Best-effort: a failure
+	here never unwinds an otherwise-complete merge. The branch is unprotected, so
+	the executor deploy key can delete it; the shared remote means EXEC_SUBMODULE's
+	origin reaches it regardless of which line `base` is.
+	"""
+	m = re.fullmatch(r'(v\d+\.\d+)-dev', base)
+	if not m:
+		return
+	branch = f'pr/{m.group(1)}/{head_ref}'
+	r = egit('push', 'origin', '--delete', branch, check=False)
+	if r.returncode == 0:
+		print(f'deleted executor mirror branch {branch}')
+	else:
+		print(f'note: could not delete executor mirror branch {branch}: {r.stderr.strip()}')
 
 
 def executor_gitlink(commit):
@@ -277,6 +303,9 @@ def merge(pr, base, head_sha):
 		check=False,
 	)
 	run('gh', 'pr', 'close', PR, '--repo', REPO, check=False)
+
+	# Clean up the now-redundant executor mirror branch (and the PR it backed).
+	delete_executor_mirror_branch(base, pr['headRefName'])
 
 
 def main():

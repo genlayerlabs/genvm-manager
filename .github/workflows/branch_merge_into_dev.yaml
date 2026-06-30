@@ -72,6 +72,23 @@ jobs:
           fetch-depth: 0
           submodules: false
 
+      # The executor submodule to mirror is the one for the PR's target line: a
+      # PR into v<X>-dev concerns executors/v<X>.x. Derive it from the PR base,
+      # validated against the active trains in .genvm-monorepo-root (via
+      # branch-versions.py), rather than hardcoding a single line.
+      - name: Resolve executor submodule from PR base
+        id: exec
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          base="$(gh pr view "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json baseRefName --jq .baseRefName)"
+          line="${base%-dev}"                                    # v0.3-dev -> v0.3
+          if ! python3 support/ci/branch-versions.py list | grep -qx "${line#v}"; then
+            echo "::error::PR base '$base' is not an active version train"; exit 1
+          fi
+          echo "submodule=executors/${line}.x" >> "$GITHUB_OUTPUT"
+
       - name: Set up executor submodule push access
         env:
           # Deploy key with write access to the executor repo, on its
@@ -79,6 +96,7 @@ jobs:
           # origin must be an SSH URL (git@github.com:...) for this key to
           # apply.
           EXECUTOR_DEPLOY_KEY: ${{ secrets.GENVM_EXECUTOR_CI_PRIVATE_KEY }}
+          SUBMODULE: ${{ steps.exec.outputs.submodule }}
         run: |
           install -m700 -d ~/.ssh
           key=~/.ssh/executor_ci
@@ -88,12 +106,12 @@ jobs:
           # Fetch the submodule with the executor key, then bind that key to
           # the submodule only (per-repo core.sshCommand) so the later mirror
           # push uses it while the manager push keeps the checkout credentials.
-          git -c core.sshCommand="$ssh" submodule update --init executors/v0.3.x
-          git -C executors/v0.3.x config core.sshCommand "$ssh"
+          git -c core.sshCommand="$ssh" submodule update --init "$SUBMODULE"
+          git -C "$SUBMODULE" config core.sshCommand "$ssh"
 
       - name: Validate gates, mirror executor, fast-forward / squash, close
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
-          EXECUTOR_SUBMODULE: executors/v0.3.x
+          EXECUTOR_SUBMODULE: ${{ steps.exec.outputs.submodule }}
         run: python3 support/ci/genvm-merge-into-dev.py
