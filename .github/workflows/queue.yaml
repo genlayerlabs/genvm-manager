@@ -56,7 +56,7 @@ jobs:
       - name: Get source
         uses: ./.github/actions/get-src
         with:
-          load_submodules: "false"
+          load_submodules: "true"
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
       - run: ./support/ci/pipelines/test-python.sh

@@ -25,14 +25,14 @@ python3 ./support/runner-script.py \
     download \
     --nix-preload --allow-partial --dest build/out/runners --registry build/out/executor/vTEST/data/all.json
 
-nix build -v -L -o build/out-runners .#runners-all
+nix build -v -L -o build/out-runners '.?submodules=1#runners-all'
 mkdir -p ./build/out/runners
 cp -r ./build/out-runners/. ./build/out/runners/.
 chmod -R +w ./build/out/runners/.
 
-nix develop .#rust-test --command python3 \
+nix develop '.?submodules=1#rust-test' --command python3 \
     ./support/runner-script.py \
     upload \
     --root build/out/runners --registry build/out/executor/vTEST/data/all.json || true
 
-nix develop .#rust-test --command bash ./support/ci/pipelines/src/test-rust.sh
+nix develop '.?submodules=1#rust-test' --command bash ./support/ci/pipelines/src/test-rust.sh

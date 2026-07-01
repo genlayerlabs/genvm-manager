@@ -6,4 +6,4 @@ set -ex
 
 support/tools/genvm-tool/genvm-tool configure
 
-nix develop .#mock-tests --command genvm-tool test run --filter-tag "$(cat tests/presets/rust-fuzz.txt)"
+nix develop '.?submodules=1#mock-tests' --command genvm-tool test run --filter-tag "$(cat tests/presets/rust-fuzz.txt)"
