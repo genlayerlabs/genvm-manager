@@ -15,7 +15,9 @@ name: branch / post PR action panel
 on:
   pull_request_target:
     branches: ['v*-dev']
-    types: [opened]
+    # `edited` fires when the PR base branch is changed, so a PR retargeted
+    # onto a dev branch also gets the panel.
+    types: [opened, edited]
 
 permissions:
   pull-requests: write
@@ -33,14 +35,15 @@ jobs:
       PR: ${{ github.event.pull_request.number }}
       AUTHOR: ${{ github.event.pull_request.user.login }}
     steps:
-      - name: Ensure action labels exist
-        run: |
-          gh label create rtm -R "$GITHUB_REPOSITORY" --color 0e8a16 --description "ready to merge" 2>/dev/null || true
-          gh label create run-full-tests -R "$GITHUB_REPOSITORY" --color fbca04 --description "run full GenVM CI on every push" 2>/dev/null || true
-          gh label create ci-safe -R "$GITHUB_REPOSITORY" --color 5319e7 --description "PR cleared to run CI / panel actions" 2>/dev/null || true
-
       - name: Post action panel
         run: |
+          # Only post once: skip if a panel (identified by the HTML marker)
+          # already exists on the PR. `edited` can fire repeatedly.
+          if gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json comments \
+              --jq '.comments[].body' | grep -qF '<!-- genvm-actions -->'; then
+            echo "action panel already present; skipping"
+            exit 0
+          fi
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$(cat <<'EOF'
           <!-- genvm-actions -->
           ### GenVM PR actions
