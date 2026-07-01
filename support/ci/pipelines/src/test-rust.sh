@@ -4,7 +4,7 @@ export PATH="$NIX:$PATH"
 
 set -ex
 
-support/tools/genvm-tool/genvm-tool configure
+genvm-tool configure
 
 ninja -v -C build all/bin
 
