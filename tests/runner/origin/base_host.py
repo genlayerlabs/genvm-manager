@@ -23,6 +23,15 @@ from .logger import Logger
 ACCOUNT_ADDR_SIZE = 20
 SLOT_ID_SIZE = 32
 
+# Mirrors the executor's `DebugMode` enum (crates/common/src/debug_mode.rs).
+DebugMode = typing.Literal[
+	'disabled',
+	'safe',
+	'safe-unbounded',
+	'unsafe',
+	'unsafe-tracing',
+]
+
 # Default host-provided `node` fee constants (see fees.expr_prelude in
 # install/config/genvm.yaml). Values are strings (gas_data is Map<str, str>)
 # and are kept minimal/deterministic for tests. `validatorsPerRound` is
@@ -434,7 +443,7 @@ async def run_genvm(
 	manager_uri: str = 'http://127.0.0.1:3999',
 	ctx: Context,
 	is_sync: bool,
-	debug_mode: str = 'disabled',
+	debug_mode: DebugMode = 'disabled',
 	message: Message,
 	host_data: str = '',
 	gas_data: dict[str, str] | None = None,
