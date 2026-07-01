@@ -457,6 +457,33 @@ impl Request {
     pub fn needs_modules(&self) -> bool {
         !self.no_modules && !self.is_sync && self.permissions.contains('n')
     }
+
+    /// The legacy v0.2 ABI stored the contract method name under the calldata
+    /// key `"method"`; the current ABI uses the empty key `""`. A client sending
+    /// old-format calldata would otherwise reach the executor with a `"method"`
+    /// key its runner no longer understands. Detect that here, log an error so
+    /// the stale caller is visible, and rewrite the key in place. No-op for
+    /// well-formed (new-format) calldata or non-map calldata.
+    pub fn patch_legacy_method_key(&mut self) {
+        const LEGACY_METHOD_KEY: &str = "method";
+        const NEW_METHOD_KEY: &str = "";
+
+        let mut value = match calldata::decode(&self.calldata) {
+            Ok(v @ calldata::Value::Map(_)) => v,
+            _ => return,
+        };
+        let calldata::Value::Map(map) = &mut value else {
+            return;
+        };
+
+        if let Some(method) = map.remove(LEGACY_METHOD_KEY) {
+            log_error!(
+                "received legacy 'method' key in run calldata; patching it to the new empty key"
+            );
+            map.insert(NEW_METHOD_KEY.to_owned(), method);
+            self.calldata = bytes::Bytes::from(calldata::encode(&value));
+        }
+    }
 }
 
 fn default_max_execution_minutes() -> u64 {

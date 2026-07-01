@@ -76,7 +76,8 @@ pub async fn handle_genvm_run(
     ctx: sync::DArc<AppContext>,
     data: &[u8],
 ) -> Result<impl warp::Reply> {
-    let res: super::run::Request = calldata::decode_obj(data)?;
+    let mut res: super::run::Request = calldata::decode_obj(data)?;
+    res.patch_legacy_method_key();
 
     let modules_lock = if res.needs_modules() {
         let lock = Ctx::get_module_locks(ctx.gep(|x| &x.mod_ctx)).await;
