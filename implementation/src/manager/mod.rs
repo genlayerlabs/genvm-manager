@@ -6,6 +6,7 @@ use warp::Filter;
 
 use crate::common;
 
+mod check_install;
 pub mod execution_context;
 mod handlers;
 pub mod modules;
@@ -72,8 +73,17 @@ pub struct AppContext {
     pub ver_ctx: versioning::Ctx,
 }
 
+#[derive(clap::Subcommand, Debug)]
+pub enum SubCommand {
+    /// Verify installed executors' runners (and optionally precompile them).
+    CheckInstall(check_install::Args),
+}
+
 #[derive(clap::Args, Debug)]
 pub struct CliArgs {
+    #[command(subcommand)]
+    pub command: Option<SubCommand>,
+
     #[arg(long, default_value_t = 3999)]
     pub port: u16,
     #[arg(long, default_value = "127.0.0.1")]
@@ -416,6 +426,10 @@ async fn main_loop(
 }
 
 pub fn entrypoint(args: CliArgs) -> Result<()> {
+    if let Some(SubCommand::CheckInstall(ci)) = &args.command {
+        return check_install::run(&args, ci);
+    }
+
     let config = genvm_common::load_config(HashMap::new(), &args.config)
         .with_context(|| "loading config")?;
     let mut config: Config = serde_yaml::from_value(config)?;

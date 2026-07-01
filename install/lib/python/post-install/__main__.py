@@ -319,7 +319,13 @@ def _download_template(descr: str, templates: list[str], vars: dict[str, str]) -
 	raise RuntimeError(f'failed to download {descr}{vars} from all sources')
 
 
-def download_runners_from_json(file: str | Path):
+def download_runners_from_json(
+	file: str | Path, runners_dir: Path, verify_hash: bool = True
+):
+	# `verify_hash` is disabled for the v0.2.x legacy line, whose registry hashes
+	# use Nix base32 rather than the Crockford scheme `runner_check_bytes`
+	# understands. Those runners are validated by the executor's own `check`
+	# command (invoked via `manager check-install`) instead.
 	file = Path(file)
 	if not file.exists():
 		if args.error_on_missing_executor:
@@ -330,13 +336,15 @@ def download_runners_from_json(file: str | Path):
 			return
 	logger.info(f'checking that all runners are present for {file}')
 	all_runners = _load_registry(file)
-	runners_dir = genvm_root_dir.joinpath('runners')
 
 	for name, hashes in all_runners.items():
 		for hash in hashes:
 			cur_dst = runners_dir.joinpath(name, hash[:2], hash[2:] + '.tar')
 
 			if cur_dst.exists():
+				if not verify_hash:
+					logger.debug(f'already exists {name}:{hash}, skipping')
+					continue
 				data = cur_dst.read_bytes()
 				if runner_check_bytes(data, hash):
 					logger.debug(f'already exists {name}:{hash}, skipping')
@@ -355,7 +363,7 @@ def download_runners_from_json(file: str | Path):
 					'hash_2_': hash[2:],
 				},
 			)
-			if not runner_check_bytes(data, hash):
+			if verify_hash and not runner_check_bytes(data, hash):
 				raise ValueError(f'hash mismatch for {name}:{hash}')
 
 			cur_dst.parent.mkdir(parents=True, exist_ok=True)
@@ -405,16 +413,34 @@ def process_executor_version(executor_version: str):
 		run_check_command([executor_executable, '--version'])
 
 	if args.runners_download:
-		download_runners_from_json(executor_root_dir.joinpath('data', 'all.json'))
-
-	if args.precompile:
-		logger.info(f'Precompiling executor {executor_version}')
-		run_check_command([executor_executable, 'precompile'])
+		# The v0.2.x legacy line keeps its runners private under the executor
+		# root (executor/<version>/legacy-runners, see its genvm.yaml); every
+		# other line shares the manager-root runners/ dir. v0.2.x also uses a
+		# Nix-base32 registry hash this installer can't reproduce, so hash
+		# verification is left to that executor's `check` command.
+		is_legacy = (major, minor) == (0, 2)
+		if is_legacy:
+			runners_dir = executor_root_dir.joinpath('legacy-runners')
+		else:
+			runners_dir = genvm_root_dir.joinpath('runners')
+		download_runners_from_json(
+			executor_root_dir.joinpath('data', 'all.json'),
+			runners_dir,
+			verify_hash=not is_legacy,
+		)
 
 
 # The manifest is authoritative: only versions it lists are processed.
 for executor_version in all_executor_versions:
 	process_executor_version(executor_version)
+
+# Verify installed runners (present, correct hashes, latest ⊆ all) and, when
+# requested, precompile them. This is delegated to the manager's `check-install`
+# subcommand, which fans out to each active executor's own `check` command
+# instead of the executor being precompiled inline above.
+if args.precompile:
+	logger.info('Checking install and precompiling runners via manager')
+	run_check_command([modules_executable, 'manager', 'check-install', '--precompile'])
 
 # Warn about any executor directory present on disk that the manifest does not
 # list (e.g. a stray or locally-built version); it is left untouched.
