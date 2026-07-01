@@ -419,6 +419,28 @@ def main(ctx: common.Context, args) -> int:
 			'-R',
 			'+w',
 			'./out/runners/.',
+			# Legacy lines (v0.2.x) keep their runners under their own executor
+			# root (out/executor/<version>/legacy-runners); the nix output is
+			# already laid out at that relative path, so overlay it onto ./out.
+			ninja.AND,
+			'nix',
+			'build',
+			'--keep-going',
+			'-v',
+			'-L',
+			'-o',
+			ninja.BUILD_DIR_REL / 'legacy-runners-nix',
+			f'git+file:{source_dir}?submodules=1#legacy-runners-all',
+			ninja.AND,
+			'cp',
+			'-r',
+			'./legacy-runners-nix/.',
+			'./out/.',
+			ninja.AND,
+			'chmod',
+			'-R',
+			'+w',
+			'./out/executor',
 		],
 	)
 	runners_build.add_dependency(source_dir / 'flake.nix')

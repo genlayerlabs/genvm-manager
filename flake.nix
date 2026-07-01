@@ -260,22 +260,66 @@
 
           runners-list = runners.list;
 
-          runners-universal-set = runners.universal;
+          # Legacy lines (v0.2.x) keep their runners private under the executor
+          # root (executor/<version>/legacy-runners) rather than the shared
+          # top-level runners/ dir: their registry hashes use Nix base32, a
+          # different scheme from the forward-rolling lines, so the two runner
+          # trees must not be pooled together.
+          is-legacy-runner = r: pkgs.lib.hasPrefix "v0.2." r.version;
+          shared-runners-list = builtins.filter (r: !is-legacy-runner r) runners-list;
+          legacy-runners-list = builtins.filter is-legacy-runner runners-list;
 
-          runners-all = pkgs.stdenvNoCC.mkDerivation {
-            name = "genvm-runners-all";
-            srcs = builtins.attrValues runners-universal-set;
+          universal-of = import ./runners/views/universal.nix runners-args;
+
+          # Merge a { uid -> `<id>/<aa>/<rest>.tar` tree } set into one tree.
+          merge-runner-trees =
+            name: uni:
+            pkgs.stdenvNoCC.mkDerivation {
+              inherit name;
+              srcs = builtins.attrValues uni;
+              dontUnpack = true;
+              dontConfigure = true;
+              dontBuild = true;
+              dontFixup = true;
+              installPhase = ''
+                mkdir -p $out
+                for src in $srcs; do
+                cp --no-preserve=ownership -r $src/. $out/.
+                chmod -R u+w $out
+                done
+              '';
+            };
+
+          runners-all = merge-runner-trees "genvm-runners-all" (universal-of shared-runners-list);
+
+          # The legacy runners, laid out at their final relative destination
+          # `executor/<version>/legacy-runners/<id>/<aa>/<rest>.tar` so consumers
+          # only have to overlay this tree onto their output root.
+          legacy-runners-all = pkgs.stdenvNoCC.mkDerivation {
+            name = "genvm-legacy-runners-all";
             dontUnpack = true;
             dontConfigure = true;
             dontBuild = true;
             dontFixup = true;
             installPhase = ''
               mkdir -p $out
-              for src in $srcs; do
-              cp --no-preserve=ownership -r $src/. $out/.
-              chmod -R u+w $out
-              done
-            '';
+            ''
+            + pkgs.lib.concatMapStrings (
+              r:
+              let
+                uidMatch = builtins.match "([^:]+):(.+)" r.uid;
+                hash32 =
+                  if uidMatch == null then
+                    throw "invalid runner uid `${r.uid}`; expected `<prefix>:<hash32>`"
+                  else
+                    builtins.elemAt uidMatch 1;
+                dst = "executor/${r.version}/legacy-runners/${r.id}/${builtins.substring 0 2 hash32}/${builtins.substring 2 50 hash32}.tar";
+              in
+              ''
+                mkdir -p "$out/$(dirname -- "${dst}")"
+                cp "${r.derivation}" "$out/${dst}"
+              ''
+            ) legacy-runners-list;
           };
 
           # ---- Combined genvm distribution -------------------------
@@ -300,6 +344,7 @@
               name = "genvm${suffix}";
               inherit srcs;
               runnersAll = runners-all;
+              legacyRunnersAll = legacy-runners-all;
               dontUnpack = true;
               dontConfigure = true;
               dontBuild = true;
@@ -313,6 +358,10 @@
                 mkdir -p $out/runners
                 cp --no-preserve=ownership -r $runnersAll/. $out/runners/.
                 chmod -R u+w $out/runners
+                # Legacy lines carry their runners under their own executor root
+                # (executor/<version>/legacy-runners); overlay that tree here.
+                cp --no-preserve=ownership -r $legacyRunnersAll/. $out/.
+                chmod -R u+w $out
               '';
             };
           genvm-packages = builtins.listToAttrs (
@@ -331,7 +380,7 @@
             # Manager: manager[-<platform>].
             // manager-packages
             // {
-              inherit runners-all;
+              inherit runners-all legacy-runners-all;
             }
             # Utility packages (grouped separately).
             // {
