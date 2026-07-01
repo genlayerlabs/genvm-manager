@@ -72,6 +72,11 @@ async def _one_repo(ctx, repo, stage, all_files, msg_file, fix):
 
 
 async def main(ctx: common.Context, args) -> int:
+	# When invoked as a git hook, git exports GIT_DIR / GIT_INDEX_FILE / ... for
+	# the *parent* repo. We fan out to every repo (and its submodules) by explicit
+	# path, so leaving those set would pin our `git -C <submodule>` calls to the
+	# parent's index/objects and crash them (exit 128). Strip them up front.
+	common.strip_inherited_git_env()
 	repos = common.discover_repos(ctx.root, args.repo)
 	msg_file = (
 		args.hook_args[0] if (args.hook_stage == 'commit-msg' and args.hook_args) else None

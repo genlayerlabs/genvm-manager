@@ -179,6 +179,32 @@ def executor_rels(root: Path) -> set[str]:
 
 # --- git -------------------------------------------------------------------
 
+# git scopes itself to one repo through these variables. A pre-commit / commit-msg
+# hook runs with them set to the *parent* repo (GIT_INDEX_FILE points at the
+# in-progress commit's index, GIT_DIR at the parent .git, ...). Because we operate
+# on each repo — and its submodules — by explicit path (`git -C <path>`), those
+# inherited values must be dropped: otherwise a submodule `git` reads the parent's
+# index/objects and dies (e.g. `git diff --cached` -> exit 128, "unable to read
+# <sha>"). See `strip_inherited_git_env`.
+_INHERITED_GIT_ENV_VARS = (
+	'GIT_DIR',
+	'GIT_WORK_TREE',
+	'GIT_INDEX_FILE',
+	'GIT_PREFIX',
+	'GIT_COMMON_DIR',
+	'GIT_OBJECT_DIRECTORY',
+	'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+	'GIT_NAMESPACE',
+)
+
+
+def strip_inherited_git_env() -> None:
+	"""Drop the repo-scoping GIT_* variables inherited from a parent git hook, so
+	our per-repo `git -C <path>` calls discover each repo from its own path
+	instead of being pinned to the invoking repo."""
+	for var in _INHERITED_GIT_ENV_VARS:
+		os.environ.pop(var, None)
+
 
 def _git_z(repo: Repo, *args: str) -> list[str]:
 	out = subprocess.run(
