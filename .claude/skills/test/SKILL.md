@@ -7,21 +7,28 @@ description: Runs tests for the GenVM project. Use after making code changes to 
 
 GenVM uses `genvm-tool test` for all tests. Before running tests, ensure the project is built (see `/build` skill).
 
+> **Commands assume you're inside the project dev shell** — `nix develop
+> '.?submodules=1#full'`, usually auto-loaded by direnv. `.#full` is a superset
+> of the test shells, so these commands run bare inside it. (If a **Rust** test
+> fails to load a shared lib, use the dedicated shell instead:
+> `nix develop '.?submodules=1#rust-test' --command genvm-tool test run --filter-tag rust`.)
+> `?submodules=1` is required on any flake ref — see `/submodules`.
+
 ## Quick Start
 
 Run all tests:
 ```bash
-nix develop .#mock-tests --command genvm-tool test run
+genvm-tool test run
 ```
 
 Run release tests (stable integration):
 ```bash
-nix develop .#mock-tests --command genvm-tool test run --filter-tag "$(cat tests/presets/release.txt)"
+genvm-tool test run --filter-tag "$(cat tests/presets/release.txt)"
 ```
 
 Run a specific test:
 ```bash
-nix develop .#mock-tests --command genvm-tool test run --filter-name 'test_name'
+genvm-tool test run --filter-name 'test_name'
 ```
 
 ## genvm-tool test Commands
@@ -84,24 +91,24 @@ genvm-tool test --filter-tag "$(cat tests/presets/release.txt)" run
 End-to-end tests using jsonnet configuration. Services (manager, modules, webdriver) are started automatically.
 
 ```bash
-nix develop .#mock-tests --command genvm-tool test run --filter-tag integration
+genvm-tool test run --filter-tag integration
 ```
 
 ### Rust Tests
 Cargo tests for Rust crates:
 ```bash
-nix develop .#rust-test --command genvm-tool test run --filter-tag rust
+genvm-tool test run --filter-tag rust
 ```
 
 With coverage:
 ```bash
-nix develop .#rust-test --command genvm-tool test run --filter-tag rust --coverage
+genvm-tool test run --filter-tag rust --coverage
 ```
 
 ### Python Tests
 Tests for the Python standard library (`genlayer-py-std`):
 ```bash
-nix develop .#mock-tests --command genvm-tool test run --filter-tag python
+genvm-tool test run --filter-tag python
 ```
 
 Or directly with pytest from the standalone py-test flake (no nix develop needed):
@@ -141,10 +148,16 @@ genvm-tool test run --filter-continue 20260123-143052-abc123
 
 | What to test | Command |
 |--------------|---------|
-| All tests | `nix develop .#mock-tests --command genvm-tool test run` |
-| Release tests | `nix develop .#mock-tests --command genvm-tool test run --filter-tag "$(cat tests/presets/release.txt)"` |
-| Rust tests | `nix develop .#rust-test --command genvm-tool test run --filter-tag rust` |
+| All tests | `genvm-tool test run` |
+| Release tests | `genvm-tool test run --filter-tag "$(cat tests/presets/release.txt)"` |
+| Rust tests | `genvm-tool test run --filter-tag rust` |
 | Python (direct) | `cd runners/genlayer-py-std && PYTHONPATH="$PWD/src:$PWD/src-emb" "$(nix build --no-link --print-out-paths path:../../support/nix/py-test)/bin/pytest" tests/` |
 | Re-run failed | `genvm-tool test run --filter-continue <file>` |
-| With debug logs | `nix develop .#mock-tests --command genvm-tool test run --log-level debug` |
-| Show test list | `nix develop .#mock-tests --command genvm-tool test show test` |
+| With debug logs | `genvm-tool test run --log-level debug` |
+| Show test list | `genvm-tool test show test` |
+
+## See also
+
+- `/build` — build before testing.
+- `/rust-test-style` — conventions for writing Rust tests (`--filter-tag rust`).
+- `/submodules` — the dev shell / `?submodules=1` and the multi-repo layout.

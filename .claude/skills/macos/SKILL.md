@@ -29,7 +29,7 @@ A native macOS build:
 You can verify the reference set on Linux with:
 
 ```sh
-find $(nix build .#runners-all --no-link --print-out-paths) -name '*.tar' \
+find $(nix build '.?submodules=1#runners-all' --no-link --print-out-paths) -name '*.tar' \
   | sort | xargs sha256sum | sed -e 's+/nix/store/[^/]*++'
 ```
 
@@ -91,9 +91,11 @@ You usually do not need to build runners at all. Download them instead (works on
 any platform):
 
 ```bash
-nix develop .#full --command python3 build/out/bin/post-install.py \
+nix develop '.?submodules=1#full' --command python3 build/out/bin/post-install.py \
   --create-venv false --default-step false \
   --runners-download true --error-on-missing-executor false
 ```
 
-See the `build` skill for the normal Rust build flow.
+(`?submodules=1` is required on every flake ref — see `/submodules`.)
+
+See `/build` for the normal Rust build flow and `/submodules` for the multi-repo layout.

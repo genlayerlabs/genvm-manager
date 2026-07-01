@@ -21,21 +21,20 @@ Feature work uses matching branches across repos:
 
 ## Building (nix + submodules — the critical flag)
 
-The flake reads submodule content, so **every nix invocation must pass `?submodules=1`**:
+The flake reads submodule content, so **every nix flake ref must pass `?submodules=1`** — entering the shell, building packages, everything:
 
 ```bash
-nix develop '.?submodules=1#full' --command bash .claude/skills/build/scripts/run-ninja.sh -C build all/bin
-nix build '.?submodules=1#genvm' --out-link /tmp/genvm-built
+nix develop '.?submodules=1#full'     # the dev shell (usually auto-loaded by direnv)
+nix build '.?submodules=1#genvm'      # a package (combined distribution)
 ```
 
-Without `?submodules=1` you get: `Path 'executors/v0.3.x' ... is not tracked by Git` while evaluating `packages`.
+Without it: `Path 'executors/v0.3.x' ... is not tracked by Git` while evaluating `packages`.
 
-- After **adding/removing/renaming** a source file, regenerate the ninja file list first: `nix develop '.?submodules=1#full' --command genvm-tool configure` (then rebuild). Symptom if you forget: `missing and no known rule to make it`.
-- Output: `build/out/bin/genvm-modules`, `build/out/executor/<version>/bin/genvm`.
+Inside that shell everything else is a bare command (see `/build`): `genvm-tool configure` to (re)generate `build/build.ninja`, then `ninja -C build all/bin`. After **adding/removing/renaming** a source file, run `genvm-tool configure` first — symptom if you forget: `missing and no known rule to make it`. Outputs land in `build/out/bin/genvm-modules` and `build/out/executor/<version>/bin/genvm`.
 
 ### Nix can't see uncommitted submodule content
 
-`nix build`/`nix develop` of the **flake packages** only sees **committed** submodule files. Untracked or dirty files in a submodule make the flake fail to evaluate. So: **commit inside the submodule first**, then build the flake packages. (Plain `cargo` inside a submodule can't be used standalone — it needs the dev-shell env, e.g. lua/pkg-config; use the ninja build.)
+`nix build`/`nix develop` of the **flake packages** only sees **committed** submodule files. Untracked or dirty files in a submodule make the flake fail to evaluate. So: **commit inside the submodule first**, then build the flake packages. (Plain `cargo` inside a submodule can't be used standalone — it needs the dev-shell env, e.g. lua/pkg-config; use the ninja build from `/build`.)
 
 ## Committing across repos
 
@@ -81,3 +80,11 @@ git push origin feat/<name>
 
 - Forward-rolling lines (v0.3.x) share the top-level `runners/<id>/<aa>/<rest>.tar` tree; hashes are Crockford base32 of `sha256(tar)`.
 - The **frozen v0.2.x** line keeps its runners privately under `executor/<version>/legacy-runners/`; its registry hashes are **Nix base32** of `sha256(tar)` — a different scheme, which is exactly why the trees are kept separate. The packaging (`flake.nix`) splits the accumulated runner list by line and lays each set into the right place; `post-install` downloads into the matching dir. The executor's `genvm check` verifies each line with its own scheme.
+
+## See also
+
+- `/initial-setup` — first-time clone: submodule init + entering the dev shell.
+- `/build` — build commands (run bare inside the dev shell).
+- `/test` — running tests.
+- `/commit-style` — message conventions for the commits you make across repos.
+- `/macos` — runners are Linux-only; don't build them natively on macOS.
