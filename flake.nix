@@ -146,6 +146,7 @@
             export LLVM_PROFILE_FILE=/dev/null
             export LSQLITE3_SRC="${deps."lsqlite3-0.9.6"}"
             export LUA_INCLUDE="${manager-release-args.lua-src}"
+            export CARGO_TARGET_DIR="$(pwd)/build/ya-build/rust-target"
           '';
 
           # ---- Active executor lines -------------------------------

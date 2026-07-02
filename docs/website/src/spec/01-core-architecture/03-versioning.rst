@@ -52,6 +52,24 @@ Required Executor Set
 - Executing new transactions requires, for every released ``major``, the
   executor with the greatest ``minor.patch``: ``all(major).max(minor).max(patch)``.
 
+.. _gvm-def-vm-error-compat:
+
+VM Error Code Compatibility
+---------------------------
+
+A :ref:`VM error code <gvm-def-vm-error-code>` splits at `` # `` into a public
+code and an optional detail.
+
+- **Patch**: the entire string, including the detail, is unchanged (follows
+  from the :ref:`gvm-def-execution-hash` promise).
+- **Minor**: the set of public codes is add-only — new codes may be added and
+  an existing code may be extended with new trailing components; codes are
+  never renamed, removed, or reordered. The detail may change arbitrarily.
+- **Major**: no promise.
+
+The detail is exempt from the registry of predefined codes; its internal
+structure is an implementation detail and MUST NOT be relied upon.
+
 Implementation Note
 -------------------
 

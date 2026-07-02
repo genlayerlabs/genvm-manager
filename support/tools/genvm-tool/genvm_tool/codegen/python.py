@@ -91,9 +91,10 @@ def render(defs: list[Definition], **_opts) -> str:
 	buf.append('# This file is auto-generated. Do not edit!\n')
 	buf.append('\n')
 	buf.append('# fmt: off\n')
+	buf.append('# ruff: noqa\n')
 	buf.append('\n')
-	buf.append('from enum import IntEnum, StrEnum\n')
 	buf.append('import typing\n')
+	buf.append('from enum import IntEnum, StrEnum\n')
 	for d in defs:
 		if isinstance(d, Enum):
 			base = 'StrEnum' if d.repr == 'str' else 'IntEnum'

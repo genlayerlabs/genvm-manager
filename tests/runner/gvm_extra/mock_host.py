@@ -114,7 +114,7 @@ class MockHost(IHost):
 		return 2**32
 
 	async def eth_call(self, account: bytes, calldata: bytes, /) -> bytes:
-		raise HostException(host_fns.Errors.FORBIDDEN)
+		raise HostException(host_fns.Errors.EVM_REVERTED)
 
 	async def consume_gas(self, gas: int):
 		pass
