@@ -369,6 +369,55 @@
               suffix: pkgs.lib.nameValuePair "genvm${suffix}" (combine-genvm suffix)
             ) platform-suffixes
           );
+
+          # ---- Release distribution bundles -------------------------
+          # `executor[-<platform>]` (no version) merges every active line's
+          # executor tree (executor/<version>/...) — the release asset
+          # genvm-<os>-<arch>-executor.tar.xz. Runners are NOT included;
+          # they ship platform-independently via runners-all-dist.
+          combine-executors =
+            suffix:
+            pkgs.stdenvNoCC.mkDerivation {
+              name = "genvm-executor${suffix}";
+              srcs = builtins.map (line: executor-packages."executor-${line.clamped}${suffix}") executor-lines;
+              dontUnpack = true;
+              dontConfigure = true;
+              dontBuild = true;
+              dontFixup = true;
+              installPhase = ''
+                mkdir -p $out
+                for src in $srcs; do
+                cp --no-preserve=ownership -r $src/. $out/.
+                chmod -R u+w $out
+                done
+              '';
+            };
+          executor-dist-packages = builtins.listToAttrs (
+            builtins.map (
+              suffix: pkgs.lib.nameValuePair "executor${suffix}" (combine-executors suffix)
+            ) platform-suffixes
+          );
+
+          # The release asset genvm-runners-all.tar.xz: consumers extract it at
+          # the install root, so the shared runners sit under runners/ and the
+          # legacy lines' runners at their executor/<version>/legacy-runners
+          # destination (the same overlay combine-genvm applies).
+          runners-all-dist = pkgs.stdenvNoCC.mkDerivation {
+            name = "genvm-runners-all-dist";
+            runnersAll = runners-all;
+            legacyRunnersAll = legacy-runners-all;
+            dontUnpack = true;
+            dontConfigure = true;
+            dontBuild = true;
+            dontFixup = true;
+            installPhase = ''
+              mkdir -p $out/runners
+              cp --no-preserve=ownership -r $runnersAll/. $out/runners/.
+              chmod -R u+w $out/runners
+              cp --no-preserve=ownership -r $legacyRunnersAll/. $out/.
+              chmod -R u+w $out
+            '';
+          };
         in
         {
           runners = runners-list;
@@ -377,10 +426,12 @@
             genvm-packages
             # Per-line executors: executor-<version>[-<platform>].
             // executor-packages
+            # All active lines merged: executor[-<platform>] (release bundles).
+            // executor-dist-packages
             # Manager: manager[-<platform>].
             // manager-packages
             // {
-              inherit runners-all legacy-runners-all;
+              inherit runners-all legacy-runners-all runners-all-dist;
             }
             # Utility packages (grouped separately).
             // {

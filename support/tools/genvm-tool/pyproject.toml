@@ -9,6 +9,7 @@ dependencies = [
     "shtab",
     "ruamel.yaml",
     "cloudpickle",
+    "python-dotenv",
     "questionary",
 ]
 description = "GenVM monorepo git helper (build, tests, hooks, ls)"

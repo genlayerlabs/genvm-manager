@@ -44,10 +44,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - uses: insightsengineering/disk-space-reclaimer@v1
+        with:
+          tools-cache: false
+          swap-storage: false
+          docker-images: false
+
       - name: Get source
         uses: ./.github/actions/get-src
         with:
-          load_submodules: "false"
+          # The executor lines are submodules; nix builds run on
+          # `.?submodules=1` and need them checked out.
+          load_submodules: "true"
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
