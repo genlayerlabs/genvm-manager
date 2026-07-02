@@ -6,6 +6,9 @@ Permissions
 Each :term:`sub-VM` instance has a set of boolean permissions that control what operations it can perform.
 Permissions are inherited from the parent VM when spawning child :term:`sub-VM` instances, with certain restrictions applied depending on the context.
 
+Most permissions are granted by the node when it starts the top-level VM.
+The exception is :ref:`gvm-perm-use-balance-for-message-fees`, which is owned by the contract itself: it is stored in the contract's root slot and read by the executor before execution begins.
+
 .. _gvm-perm-deterministic:
 
 ``deterministic``
@@ -61,6 +64,17 @@ Allows spawning :ref:`gvm-def-non-det-mode` :term:`sub-VM` instances via ``RunNo
 Allows registering runner archives at runtime via ``RegisterRunner``, making
 them available under ``custom:<hash>`` runner ids. Requires :ref:`gvm-perm-deterministic` as well.
 
+.. _gvm-perm-use-balance-for-message-fees:
+
+``can_use_balance_for_message_fees``
+------------------------------------
+
+Governs whether the contract may draw on its own balance to pay the fees of its outgoing internal messages (``PostMessage``, ``DeployContract``), rather than paying them solely from the fee budget the node allocated for the transaction. Consensus ignores ``useBalance`` on external (``EthSend``) messages, so the flag has no effect there.
+
+Unlike the permissions above, this one is not granted by the node.
+It is stored as a bit in the root slot's inline ``permissions`` bitfield and read by the executor before execution begins.
+The bit offset is the value of the corresponding member of the :ref:`permissions ABI enum <gvm-def-enum-permissions>`.
+
 Permission Changes on Sub-VM Creation
 --------------------------------------
 
@@ -73,6 +87,7 @@ A ``CallContract`` child runs as a read-only (static) call. It inherits all pare
 
 - :ref:`gvm-perm-write-storage` is **disabled**
 - :ref:`gvm-perm-send-messages` is **disabled**
+- :ref:`gvm-perm-use-balance-for-message-fees` is **disabled**
 
 A static call must not produce externally visible effects, so storage writes, message sends, and event emissions all fail: emitting an event additionally requires :ref:`gvm-perm-write-storage` (disabled here). Allowing any such emission would charge fees for effects that are discarded together with the child VM.
 
@@ -88,6 +103,7 @@ The non-deterministic :term:`sub-VM` has:
 - :ref:`gvm-perm-call-others` is **disabled**
 - :ref:`gvm-perm-send-messages` is **disabled**
 - :ref:`gvm-perm-register-runners` is **disabled**
+- :ref:`gvm-perm-use-balance-for-message-fees` is **disabled**
 
 ``Sandbox``
 ~~~~~~~~~~~
@@ -101,3 +117,4 @@ The sandboxed :term:`sub-VM` has:
 - :ref:`gvm-perm-call-others` is **disabled**
 - :ref:`gvm-perm-send-messages` is **inherited** *iff* ``allow_send_messages`` is set, otherwise **disabled**
 - :ref:`gvm-perm-register-runners` is **inherited** *iff* ``allow_register_runners`` is set, otherwise **disabled**
+- :ref:`gvm-perm-use-balance-for-message-fees` is **inherited**

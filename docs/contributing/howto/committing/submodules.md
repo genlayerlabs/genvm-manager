@@ -66,6 +66,9 @@ After rebasing the manager onto its base (e.g. `origin/v0.6-dev`), it diverges:
 use `git push --force-with-lease origin feat/<name>`. Executor feature branches
 are normally ahead-only (plain fast-forward push).
 
+For runner hash hygiene before committing (dev-mode, `hash-updater.py`), see
+[runners.md](runners.md).
+
 ## Runner trees (why there are two)
 
 Forward-rolling lines (v0.3.x) share the top-level `runners/<id>/<aa>/<rest>.tar`

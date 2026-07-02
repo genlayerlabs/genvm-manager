@@ -12,12 +12,26 @@ RAM Consumption
 
 Every resource allocation subtracts from the RAM budget of the current :ref:`gvm-def-vm-mode`.
 When an allocation would cause the remaining budget to become negative,
-the :term:`sub-VM` exits with :ref:`gvm-def-vm-error` with :ref:`gvm-def-str-trie-value-vm-error-OOM-RAM` message.
+the :term:`sub-VM` exits with :ref:`gvm-def-vm-error` carrying the
+:ref:`gvm-def-str-trie-value-vm-error-out-of-memory` message, or one of its
+:ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-memory` /
+:ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-table` variants for the
+corresponding WASM allocations. ``memory.grow`` and ``table.grow`` are the
+exception: at runtime they are recoverable rather than fatal (see the two
+bullets below).
 
 The following operations consume RAM:
 
-- **WASM memory growth**: each page (65536 octets) costs its size in bytes
-- **WASM table growth**: each table entry costs :ref:`gvm-def-consts-value-memory-limiter-consts-table-entry` octets
+- **WASM memory growth**: each page (65536 octets) costs its size in bytes.
+  A runtime ``memory.grow`` that would exceed the budget is **not** fatal:
+  following the WASM specification it leaves memory unchanged and evaluates to
+  :math:`-1`, so the guest can react. Only the memory's initial,
+  instantiation-time reservation being unmet makes the :term:`sub-VM` exit with
+  :ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-memory`.
+- **WASM table growth**: each table entry costs :ref:`gvm-def-consts-value-memory-limiter-consts-table-entry` octets.
+  As with memory, a runtime ``table.grow`` beyond the budget evaluates to
+  :math:`-1`; only the instantiation-time reservation being unmet exits with
+  :ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-table`.
 - **File mapping**: :ref:`gvm-def-consts-value-memory-limiter-consts-file-mapping` octets base cost plus the length of the filename in bytes
 - **File descriptor allocation**: :ref:`gvm-def-consts-value-memory-limiter-consts-fd-allocation` octets per descriptor
 

@@ -92,6 +92,20 @@ consensus_stage
 
 Value: ``2``
 
+.. _gvm-def-enum-permissions:
+
+permissions
+-----------
+
+Type: u32
+
+.. _gvm-def-enum-value-permissions-can-use-balance-for-message-fees:
+
+can_use_balance_for_message_fees
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``1``
+
 .. _gvm-def-consts-memory-limiter-consts:
 
 memory_limiter_consts
@@ -168,6 +182,13 @@ code_slot
 ~~~~~~~~~
 
 Value: ``5``
+
+.. _gvm-def-consts-value-root-offsets-permissions:
+
+permissions
+~~~~~~~~~~~
+
+Value: ``37``
 
 .. _gvm-def-consts-top-limits:
 
@@ -385,10 +406,15 @@ Param: i32
 ``out_of receipt event``
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-out-of-message-fee:
+.. _gvm-def-str-trie-value-vm-error-out-of-message-fee-total:
 
-``out_of message_fee``
-~~~~~~~~~~~~~~~~~~~~~~
+``out_of message_fee total``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-message-fee-node:
+
+``out_of message_fee node``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-out-of-vm-recursion:
 
@@ -420,10 +446,15 @@ Param: i32
 ``fee no_matching_node``
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-fee-below-minimal:
+.. _gvm-def-str-trie-value-vm-error-fee-below-minimum:
 
-``fee below_minimal``
+``fee below_minimum``
 ~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-fee-too-many-rounds:
+
+``fee too_many_rounds``
+~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-host-forbidden:
 

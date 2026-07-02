@@ -32,4 +32,4 @@ RAM Consumption
 
 Each WASM table element imposes :ref:`gvm-def-consts-value-memory-limiter-consts-table-entry` :ref:`gvm-def-ram-consumption`\.
 
-Each WASM Memory costs length of bytes it has. WASM ``memory.grow`` instruction which would exceed limit returns :math:`-1`
+Each WASM Memory costs length of bytes it has. A runtime WASM ``memory.grow`` instruction which would exceed the limit returns :math:`-1` and leaves memory unchanged. An instantiation-time reservation that cannot be met is fatal instead; see :ref:`gvm-def-ram-consumption` for the exact error.

@@ -19,10 +19,15 @@
 3. `source env.sh` — adds `support/tools/git-third-party` to PATH and sources
    `.env` if present. Only needed outside the dev shell.
 
-4. Materialize the vendored third-party trees (wasmtime, wasm-tools):
+4. Materialize the vendored third-party trees (wasmtime, wasm-tools). These are
+   registered per executor submodule, and `git third-party` reads its config
+   from the current git toplevel — so run it *inside each executor*, not at the
+   manager root (which has no config and would materialize nothing):
 
    ```bash
-   git third-party update --all
+   for cfg in executors/*/.git-third-party/config.json; do
+     ( cd "$(dirname "$(dirname "$cfg")")" && git third-party update --all )
+   done
    ```
 
    See [git-third-party.md](committing/git-third-party.md) for how vendoring works.

@@ -103,7 +103,9 @@ Payload
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
        "value": U256,           // Wei to transfer
-       "on": String             // "finalized" or "accepted"
+       "on": String,            // "finalized" or "accepted"
+       "use_balance": Bool,     // optional (default false), see below
+       "fee_params": FeeParams  // optional (default absent), required iff use_balance
      }
    }
 
@@ -113,6 +115,71 @@ Requirements
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
+#. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
+
+.. _gvm-gl-call-balance-fees:
+
+Balance-funded fees
+~~~~~~~~~~~~~~~~~~~~
+
+By default an outgoing internal message's fee is drawn from the sender's
+prefunded message-fee pool and matched against the transaction's allocation
+tree. Setting ``use_balance`` (the chain's ``useBalance``) instead funds the fee
+from the **emitting contract's own balance**. ``fee_params`` carries the child
+transaction's fee configuration and mirrors the chain's
+``InternalMessageFeeParams``:
+
+.. code-block::
+
+   FeeParams {
+     "leader_timeunits_allocation": U256,     // per-round leader time units
+     "validator_timeunits_allocation": U256,  // per-round validator time units
+     "execution_budget_per_round": U256,      // unified budget per leader round
+     "rotations": [U256],                     // per-round rotations; non-empty.
+                                              // rotations[0] is the initial round,
+                                              // the rest are appeal rounds
+                                              // (appealRounds = len - 1)
+     "max_price_gen_per_time_unit": U256,     // GEN price cap; funding multiplier
+     "storage_fee_max_gas_price": U256,       // storage price cap (revert guard)
+     "receipt_fee_max_gas_price": U256        // receipt price cap (revert guard)
+   }
+
+Semantics:
+
+- The fee is metered from ``fee_params`` and that metered amount becomes the child
+  transaction's ``declaredBudget`` — the contract balance is the only bound. The
+  consensus term is charged at the guest's ``max_price_gen_per_time_unit`` cap
+  (matching the chain's ``minMessagePrimaryFees``), not the node's live
+  ``genPerTimeUnit``, so the fee scales with the cap.
+- The message is excluded from allocation matching, so no matching node is
+  required (and none is consulted).
+- The contract must be able to cover ``value + metered_fee`` from its balance;
+  otherwise the call fails with ``Inbalance``.
+- The emitted allocation subtree is **empty**: nesting is fail-closed, so a child
+  message must itself set ``use_balance`` or it fails to fund.
+
+``fee_params`` is validated before metering. The following are rejected with
+``Inval``:
+
+- ``use_balance`` without ``fee_params``, or ``fee_params`` without ``use_balance``.
+- Empty ``rotations`` (``appealRounds`` would underflow).
+- A zero ``max_price_gen_per_time_unit``, ``storage_fee_max_gas_price`` or
+  ``receipt_fee_max_gas_price`` (the chain reverts ``FeeValueMustBeNonZero`` at
+  reveal).
+- Out-of-bounds magnitudes: prices and budgets
+  (``max_price_gen_per_time_unit``, ``storage_fee_max_gas_price``,
+  ``receipt_fee_max_gas_price``, ``execution_budget_per_round``) must be below
+  2\ :sup:`96`; counts (``leader_timeunits_allocation``,
+  ``validator_timeunits_allocation``, each ``rotations`` entry) below
+  2\ :sup:`32`. These bounds keep the metered floor within ``U256``.
+
+Metering additionally enforces node-configured floors, surfaced as ``VMError``\ s:
+
+- ``fee below_minimum`` — a per-phase time-unit allocation below
+  ``node.minTimeUnitsPerPhase``, or a non-zero ``execution_budget_per_round`` below
+  ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``).
+- ``fee too_many_rounds`` — ``rotations`` implies more consensus rounds than the
+  node's validator table supports (on-chain ``MAX_ROUNDS``).
 
 ``DeployContract`` Message
 --------------------------
@@ -130,7 +197,9 @@ Payload
        "code": Bytes,           // Contract bytecode
        "value": U256,           // Wei to transfer
        "on": String,            // "finalized" or "accepted"
-       "salt_nonce": U256       // Salt for CREATE2-style deterministic addressing
+       "salt_nonce": U256,      // Salt for CREATE2-style deterministic addressing
+       "use_balance": Bool,     // optional (default false)
+       "fee_params": FeeParams  // optional (default absent), required iff use_balance
      }
    }
 
@@ -140,8 +209,10 @@ Requirements
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
+#. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
 
 Supports CREATE2-style deployment with salt nonce for deterministic addressing.
+``use_balance`` / ``fee_params`` behave as for :ref:`PostMessage <gvm-gl-call-balance-fees>`.
 
 ``RunNondet`` Message
 ---------------------

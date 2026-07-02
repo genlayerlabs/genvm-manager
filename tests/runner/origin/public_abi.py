@@ -26,6 +26,10 @@ class EntryKind(IntEnum):
 	CONSENSUS_STAGE = 2
 
 
+class Permissions(IntEnum):
+	CAN_USE_BALANCE_FOR_MESSAGE_FEES = 1
+
+
 class _MemoryLimiterConsts(typing.NamedTuple):
 	TABLE_ENTRY: int = 64
 	FILE_MAPPING: int = 256
@@ -41,6 +45,7 @@ class _RootOffsets(typing.NamedTuple):
 	LOCKED_SLOTS: int = 3
 	UPGRADERS: int = 4
 	CODE_SLOT: int = 5
+	PERMISSIONS: int = 37
 
 root_offsets: typing.Final = _RootOffsets()
 
@@ -133,13 +138,18 @@ class _VmErrorOutOfReceipt:
 	def event() -> 'VmError':
 		return VmError('out_of receipt event')
 
+class _VmErrorOutOfMessageFee:
+	@staticmethod
+	def total() -> 'VmError':
+		return VmError('out_of message_fee total')
+	@staticmethod
+	def node() -> 'VmError':
+		return VmError('out_of message_fee node')
+
 class _VmErrorOutOf:
 	@staticmethod
 	def storage() -> 'VmError':
 		return VmError('out_of storage')
-	@staticmethod
-	def message_fee() -> 'VmError':
-		return VmError('out_of message_fee')
 	@staticmethod
 	def vm_recursion() -> 'VmError':
 		return VmError('out_of vm_recursion')
@@ -161,14 +171,20 @@ class _VmErrorOutOf:
 	@staticmethod
 	def receipt() -> '_VmErrorOutOfReceipt':
 		return _VmErrorOutOfReceipt()
+	@staticmethod
+	def message_fee() -> '_VmErrorOutOfMessageFee':
+		return _VmErrorOutOfMessageFee()
 
 class _VmErrorFee:
 	@staticmethod
 	def no_matching_node() -> 'VmError':
 		return VmError('fee no_matching_node')
 	@staticmethod
-	def below_minimal() -> 'VmError':
-		return VmError('fee below_minimal')
+	def below_minimum() -> 'VmError':
+		return VmError('fee below_minimum')
+	@staticmethod
+	def too_many_rounds() -> 'VmError':
+		return VmError('fee too_many_rounds')
 
 class _VmErrorEvm:
 	@staticmethod

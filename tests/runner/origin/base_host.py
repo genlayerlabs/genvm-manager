@@ -45,6 +45,10 @@ DEFAULT_GAS_DATA: dict[str, str] = {
 	'fixedProposeReceiptGas': '0',
 	'fixedMessageRevealGas': '0',
 	'genPerTimeUnit': '0',
+	# 0 = no per-phase timeunit floor, so default-allocation tests are unaffected.
+	'minTimeUnitsPerPhase': '0',
+	# 0 = no per-round execution-budget floor for balance-funded messages.
+	'messageBudgetFloor': '0',
 }
 
 
@@ -140,6 +144,8 @@ class PostMessageInner(typing.TypedDict):
 	fee_params: fees.InternalMessageParams
 	# ABI-encoded allocation subtree carried in the receipt under commitment modes.
 	subtree: bytes
+	# Chain `useBalance`: fee funded from the emitting contract's balance.
+	use_balance: bool
 
 
 class DeployContractInner(typing.TypedDict):
@@ -154,6 +160,8 @@ class DeployContractInner(typing.TypedDict):
 	fee_params: fees.InternalMessageParams
 	# ABI-encoded allocation subtree carried in the receipt under commitment modes.
 	subtree: bytes
+	# Chain `useBalance`: fee funded from the emitting contract's balance.
+	use_balance: bool
 
 
 class EmitEventInner(typing.TypedDict):

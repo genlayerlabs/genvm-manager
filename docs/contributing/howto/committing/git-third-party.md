@@ -43,8 +43,10 @@ conflicts by fixing up the nested repo's commits and running `save`).
 
 ## Build integration
 
-- Local/CI checkouts run `git third-party update --all`
-  (CI: `.github/actions/get-src/action.yaml`).
+- Local/CI checkouts run `git third-party update --all` **inside each executor
+  submodule** — the config is resolved from the current git toplevel, so running
+  it once at the manager root materializes nothing (CI:
+  `.github/actions/get-src/action.yaml`; local: [setup.md](../setup.md)).
 - Nix does **not** call the tool: `support/nix/git-third-party.nix` re-reads
   `config.json` and uses `builtins.fetchGit` + `pkgs.applyPatches`, mounted into
   the source layout by `support/default.nix`. So nix builds see exactly the
