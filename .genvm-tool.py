@@ -21,8 +21,10 @@ General runner config (``artifacts_dir`` / ``extra_python_paths``) lives in
 its own ``hooks``.
 """
 
+import genvm_tool
 
-def hooks(ctx):
+
+def hooks(ctx: 'genvm_tool.common.Context'):
 	"""Manager commit-hook definitions (was support/nix/precommit/hooks.toml).
 
 	Tools resolve from the sibling flake's buildEnv (``nix = "<flake output>"``);
@@ -169,8 +171,12 @@ def hooks(ctx):
 			# independently (its own repo/hooks own that); we never touch it.
 			'id': 'check-cargo-versions',
 			'local': True,
-			'entry': 'support/ci/check-versions.py',
-			'args': ['sync'],
+			'entry': ctx.python_command[0],
+			'args': [
+				*ctx.python_command[1:],
+				str(ctx.root / 'support/ci/check-versions.py'),
+				'sync',
+			],
 			'pass_filenames': False,
 			'files': r'^(implementation/Cargo\.toml|\.genvm-monorepo-root)$',
 		},
@@ -178,6 +184,19 @@ def hooks(ctx):
 			'id': 'markdown-local-links',
 			'builtin': 'md-local-links',
 			'types_or': ['markdown'],
+		},
+		# --- commit-msg ----------------------------------------------------
+		{
+			'id': 'check-commit-message',
+			'local': True,
+			'entry': ctx.python_command[0],
+			'args': [
+				*ctx.python_command[1:],
+				str(ctx.root / 'support/scripts/check-commit-message.py'),
+				'--message-file',
+			],
+			'stages': ['commit-msg'],
+			'pass_filenames': False,
 		},
 	]
 

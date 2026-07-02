@@ -70,9 +70,7 @@ def _create_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-	from dotenv import load_dotenv
-
-	load_dotenv()
+	sys.dont_write_bytecode = True
 
 	parser = _create_parser()
 	args = parser.parse_args()
@@ -97,12 +95,22 @@ def main() -> None:
 
 	try:
 		root = common.find_root()
+
+		env_file = root / '.env'
+		if env_file.exists():
+			from dotenv import load_dotenv
+
+			load_dotenv(env_file)
+
+		python_command = [sys.executable, '-B']
+
 		# Pre-subcommand: exec the manager's `.genvm-tool.py` so subcommands can
 		# ask it for the test suite (`tests`) and the manager's commit hooks.
 		ctx = common.Context(
 			root=root,
 			logger=logger,
 			printer=printer,
+			python_command=python_command,
 			project=common.load_project(root),
 		)
 		func = args.func

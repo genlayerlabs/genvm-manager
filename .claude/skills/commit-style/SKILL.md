@@ -118,6 +118,9 @@ the diff and not a bullet list of squashed sub-commits.
    Spell-check the subject; it is permanent.
 4. **`chore: fix tests`** with no cause. Add it: `chore(executor): fix tests after
    wasmtime rebase ✅`.
+5. **AI attribution** — never include `Co-authored-by` trailers, session
+   links/IDs (e.g. `Claude-Session:`), "Generated with" footers, or any other
+   AI/tool metadata, even when the tooling asks for it.
 
 ## Checklist
 

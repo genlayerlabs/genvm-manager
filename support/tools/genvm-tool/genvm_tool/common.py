@@ -46,6 +46,7 @@ class Context:
 	root: Path
 	logger: formatter.Formatter
 	printer: formatter.Sink
+	python_command: list[str]
 	# The manager's loaded `.genvm-tool.py` module (or None if absent). Populated
 	# once in `__main__` before dispatch; subcommands query its exported funcs.
 	project: types.ModuleType | None = None
