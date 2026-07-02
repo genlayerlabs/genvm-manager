@@ -188,6 +188,7 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 	total_steps: int
 	tmp_dir: Path
 	max_attempts: int
+	ignore_hash: bool = False
 	is_benchmark: bool = False
 
 	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
@@ -385,6 +386,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		self._total_steps = case.total_steps
 		self._tmp_dir = case.tmp_dir
 		self._max_attempts = case.max_attempts
+		self._ignore_hash = case.ignore_hash
 
 	def to_str(self) -> str:
 		return f'<step {self._tree_path}: {self._test_case.jsonnet_path.name}>'
@@ -782,7 +784,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			res.result_kind == public_abi.ResultCode.VM_ERROR and res.result_data == 'timeout'
 		):
 			check_expected_hash = False  # Don't check hash for timeouts, as they can be flaky
-		if _is_ignore_hash_enabled():
+		if _is_ignore_hash_enabled() or self._ignore_hash:
 			check_expected_hash = False
 
 		if check_expected_hash:
@@ -857,14 +859,24 @@ def integration_test_single_executor(
 	Steps depend on /prepare, and child steps depend on their parent step.
 	"""
 
+	import genvm_tool.common
+
 	EXEC_SUBDIR = os.environ.get(
 		'GENVM_TEST_EXEC_SUBDIR', f'executors/{executor_version}.x'
 	)
-	CASES_DIR = local_ctx.shared.root_dir.joinpath(EXEC_SUBDIR, 'tests', 'integration')
+	executor_root = local_ctx.shared.root_dir / EXEC_SUBDIR
+	CASES_DIR = executor_root / 'tests' / 'integration'
 
 	# Run this line's cases against this line's own executor. The version key
 	# (e.g. "v0.2") maps to the concrete built version (e.g. "v0.2.16").
 	reroute_to = build_info['executor_versions'].get(executor_version, executor_version)
+
+	executor_project = genvm_tool.common.load_project(executor_root)
+	executor_integration_fn = getattr(executor_project, 'integration', None)
+	executor_integration_conf: dict = (
+		executor_integration_fn() if executor_integration_fn else {}
+	)
+	ignore_hash = executor_integration_conf.get('ignore-hash', False)
 
 	jsonnet_files = list(CASES_DIR.glob('**/*.jsonnet'))
 	jsonnet_files.sort()
@@ -881,6 +893,7 @@ def integration_test_single_executor(
 				jsonnet_file,
 				cases_dir=CASES_DIR,
 				reroute_to=reroute_to,
+				ignore_hash=ignore_hash,
 				manager_service=manager_service,
 				modules_service=modules_service,
 				webdriver_service=webdriver_service,
@@ -897,6 +910,7 @@ def _single_integration_test(
 	*,
 	cases_dir: Path,
 	reroute_to: str,
+	ignore_hash: bool,
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
@@ -1032,6 +1046,7 @@ def _single_integration_test(
 				total_steps=total_steps,
 				tmp_dir=tmp_dir,
 				max_attempts=max_attempts,
+				ignore_hash=ignore_hash,
 				is_benchmark=is_benchmark,
 			)
 		)
