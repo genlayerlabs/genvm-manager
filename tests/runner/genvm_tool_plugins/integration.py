@@ -603,9 +603,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				if case_permissions is not None:
 					request_extra['permissions'] = case_permissions
 				dflt_bucket = 2**200
-				bucket_totals: list[int] = single_conf.get(
-					'bucket_totals', [dflt_bucket, dflt_bucket]
-				)
+				bucket_totals: list[int] = single_conf.get('bucket_totals', [dflt_bucket] * 10)
 
 				default_message_fee_allocation = [
 					fees.DEFAULT_EXTERNAL_MESSAGE_ALLOC,

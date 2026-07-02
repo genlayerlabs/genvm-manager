@@ -1035,6 +1035,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "symbol_table",
+ "thiserror 2.0.18",
  "tokio",
 ]
 
