@@ -228,10 +228,27 @@ Payload
 
    {
      "RunNondet": {
-       "data_leader": Bytes,      // Code/data for leader execution
-       "data_validator": Bytes    // Code/data for validator execution
+       "data_leader": Bytes,       // Code/data for leader execution
+       "data_validator": Bytes,    // Code/data for validator execution
+       "runner": String,           // optional (default "contract"): runner to execute
+       "custom_runners": [String]  // optional (default absent): custom runners to grant
      }
    }
+
+``runner`` selects what the non-deterministic :term:`sub-VM` executes; it is
+resolved in the calling scope and becomes the child's ``contract`` id. When
+absent, the caller's own runner is executed (previous behavior).
+
+``custom_runners`` grants custom runners from the parent's loaded custom
+runners to the child (see :ref:`gvm-def-custom-runner-visibility`): when absent,
+the child inherits every ``custom:`` runner in the caller's loaded set; when
+present, exactly the listed runners. Every element must be a ``custom:<hash>``
+id, without duplicates, and present in the caller's loaded set — otherwise the
+call fails with a :ref:`gvm-def-vm-error`. If ``runner`` is a ``custom:`` id it
+must be loaded in the caller and is granted implicitly. Each grant is a load
+action in the child, charged to the child's RAM budget; because inherited loads
+run before the main-runner load, a ``custom:`` entry point is not charged
+twice.
 
 Requirements
 ~~~~~~~~~~~~
@@ -250,22 +267,39 @@ Payload
 
    {
      "Sandbox": {
-       "data": Bytes,                  // Code/data for sandbox execution
-       "allow_write_storage": Bool,    // Whether to allow storage writes
-       "allow_send_messages": Bool,    // Whether to allow sending messages
-       "allow_register_runners": Bool  // Whether to allow registering runners
+       "data": Bytes,                   // Code/data for sandbox execution
+       "runner": String,                // runner to execute; becomes the child's "contract"
+       "allow_write_storage": Bool,     // Whether to allow storage writes
+       "allow_send_messages": Bool,     // Whether to allow sending messages
+       "allow_register_runners": Bool,  // Whether to allow registering runners
+       "custom_runners": [String]       // optional (default absent): custom runners to grant
      }
    }
 
 Creates isolated VM instance. See :ref:`gvm-permissions` for permission inheritance details.
+
+``custom_runners`` behaves exactly as for ``RunNondet``: absent grants every
+``custom:`` runner in the caller's loaded set, a list grants exactly that
+(validated) subset, and a ``custom:`` ``runner`` is granted implicitly
+(see :ref:`gvm-def-custom-runner-visibility`). Each grant is a load action in
+the sandbox, charged to its RAM budget (a ``custom:`` entry point is not
+charged twice). Runners registered inside the sandbox do **not** flow back into
+the caller's loaded set after it returns.
 
 ``RegisterRunner`` Message
 --------------------------
 
 Registers a runner archive at runtime, making it available under the
 ``custom:<hash>`` runner id. The ``<hash>`` is the SHA3-256 of the supplied
-``code`` encoded with :doc:`../../04-contract-interface/06-gvm32`, and the parsed
-archive is charged against the memory limit. Returns the resulting runner id
+``code`` encoded with :doc:`../../04-contract-interface/06-gvm32`.
+
+Registration performs a load action for ``custom:<hash>`` in the calling
+:term:`sub-VM`. The hash is computed first. If ``custom:<hash>`` is already in
+the caller's loaded set, registration is a free no-op that returns the same
+runner id. Otherwise the flat load constant plus ``code`` length is charged
+against the caller's RAM budget **before** the archive is parsed; on success
+the runner enters the caller's loaded set (see
+:ref:`gvm-def-custom-runner-visibility`). Returns the resulting runner id
 (calldata-encoded string).
 
 Payload
@@ -284,6 +318,26 @@ Requirements
 
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-register-runners`
+
+Error guarantees
+~~~~~~~~~~~~~~~~
+
+The outcomes, in the order they are checked:
+
+#. **Missing** :ref:`gvm-def-det-mode` **or** :ref:`gvm-perm-register-runners`:
+   the call fails with a ``Forbidden`` error. Nothing is charged and no state
+   changes.
+#. **Insufficient memory** for the charge: the :term:`sub-VM` exits with an
+   out-of-memory :ref:`gvm-def-vm-error`. Nothing is charged and the runner is
+   not registered.
+#. **Malformed archive** (parse failure): the call fails with a deterministic
+   invalid-contract :ref:`gvm-def-vm-error`. The charge is retained (released
+   only when the :term:`sub-VM` finishes, like any charge); the runner is
+   **not** in the loaded set and is **not** resolvable. Parse errors depend only
+   on the ``code`` bytes, never on schedule or cache state.
+#. **Success**: the runner id is returned and the runner is in the caller's
+   loaded set. Registering identical ``code`` again in the same :term:`sub-VM`
+   is free and returns the same id.
 
 ``MapFile`` Message
 -------------------
@@ -307,6 +361,10 @@ Payload
 
 Mapping into ``/vm/`` is forbidden. Resolving a ``chain:`` runner reads another
 contract's storage, so this requires :ref:`gvm-perm-read-storage`.
+
+Resolving the ``runner`` performs a load action for it (see
+:ref:`gvm-def-custom-runner-visibility`), charged on its first load in this
+:term:`sub-VM` and free if it is already loaded.
 
 Requirements
 ~~~~~~~~~~~~

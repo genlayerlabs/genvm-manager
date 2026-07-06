@@ -24,6 +24,7 @@ import genvm_tool.tests
 import origin.base_host as base_host
 import origin.calldata as gvm_calldata
 import origin.fees as fees
+import origin.log_asserts as log_asserts
 import origin.logger as origin_logger
 import origin.public_abi as public_abi
 from genvm_tool.tests.exec.command import Command, RunMode
@@ -772,6 +773,32 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			else:
 				# Create expected output file
 				exp_semantics_path.write_text(semantics)
+
+		# ADR-012 load-action log-grep assertions. A case may declare
+		# `runner_load_asserts` on a step to assert on the executor's stable
+		# `runner load` log records (charge counts, per-runner sizes, cached vs
+		# charged); see origin.log_asserts for the schema. Gated on the main mode
+		# (semantics_components is non-empty only there) so a nondet leader's
+		# extra loads do not make validator/sandbox re-runs flaky.
+		runner_load_asserts = single_conf.get('runner_load_asserts')
+		if runner_load_asserts and semantics_components:
+			load_errors = log_asserts.check(
+				res.genvm_log,
+				runner_load_asserts,
+				code_len=(len(code) if code is not None else None),
+			)
+			if load_errors:
+				return {
+					'passed': False,
+					'context': {
+						'reason': 'runner load assertion failed',
+						'tree_path': tree_path,
+						'errors': load_errors,
+						'runner_loads': log_asserts.summarize(res.genvm_log),
+						'stderr': res.stderr,
+						'genvm_log': res.genvm_log,
+					},
+				}
 
 		my_tmp_dir.joinpath('hash').write_bytes(base64.b64encode(hash_data))
 

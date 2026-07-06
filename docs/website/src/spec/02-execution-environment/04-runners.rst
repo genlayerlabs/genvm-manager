@@ -300,6 +300,64 @@ Startup
 Runner actions are executed left-recursively, until :ref:`gvm-def-start-wasm` is reached.
 If it was not reached, it will result in a :ref:`gvm-def-vm-error` with ``error_inval`` code.
 
-Loading a :term:`runner` implies :ref:`gvm-def-ram-consumption` of its size in octets.
-Each loading in a single contract, but different :term:`sub-VM` instances, leads to additional RAM consumption.
-:ref:`gvm-def-det-mode` and :ref:`gvm-def-non-det-mode` have separate RAM limits.
+Loading a :term:`runner` goes through a single **load action**, defined per
+:term:`sub-VM`. Each :term:`sub-VM` owns a **loaded-runner set**: the runner
+ids it has already loaded. The load action for an id is:
+
+- if the id is already in the :term:`sub-VM`'s loaded set, nothing is charged;
+- otherwise a flat load constant plus the runner's size in octets is charged as
+  :ref:`gvm-def-ram-consumption` against the :term:`sub-VM`'s RAM budget, and
+  the id is then added to the loaded set.
+
+Whether the executor has the archive cached internally is not observable: the
+charge depends only on the :term:`sub-VM`'s own load history, never on cache
+state. The same runner loaded by different :term:`sub-VM` instances is charged
+once per :term:`sub-VM`. :ref:`gvm-def-det-mode` and
+:ref:`gvm-def-non-det-mode` have separate RAM budgets and separate loaded sets.
+
+A load action occurs when:
+
+- spawning the :term:`sub-VM`'s main (entry-point) runner;
+- resolving a ``Depends`` or ``With`` action in a ``runner.json``;
+- executing the ``MapFile`` ``gl_call``;
+- registering a runner via the ``RegisterRunner`` ``gl_call``;
+- inheriting a custom runner at :term:`sub-VM` creation (see below). Inherited
+  loads happen **before** the main-runner load, so a custom entry point that is
+  also inherited is not charged twice.
+
+For a ``chain:`` runner the size is the length of the code blob read from
+storage. A ``chain:`` load costs the same as any other load of that size —
+there is no doubled charge and no separate fee component.
+
+.. _gvm-def-custom-runner-visibility:
+
+Custom :term:`Runner` Loading and Grants
+----------------------------------------
+
+A ``custom:<hash>`` id resolves *iff* ``<hash>`` is in the resolving
+:term:`sub-VM`'s own loaded set; otherwise loading it fails with a
+:ref:`gvm-def-vm-error`. There is no separate registry lookup at resolution — a
+:term:`sub-VM` can use exactly the custom runners it has loaded, whether by
+registering them itself or by inheriting them.
+
+A :term:`sub-VM` obtains custom runners in its loaded set by:
+
+- registering them itself via the ``RegisterRunner`` ``gl_call``, and
+- inheriting them from its parent at creation time (one load action per grant):
+
+  - ``Sandbox`` and ``RunNondet`` children receive the runners named by the
+    ``custom_runners`` payload field — every ``custom:`` entry in the parent's
+    loaded set when the field is absent, or exactly the listed subset. Only
+    ``custom:`` runners are inheritable: a grant list containing any other kind
+    of id (including ``name:hash`` and ``chain:``) is a
+    :ref:`gvm-def-vm-error`. If the runner to execute is itself a ``custom:``
+    id, it is granted implicitly.
+  - ``CallContract`` children inherit the caller's entire custom set.
+
+Grants never flow back: when a child :term:`sub-VM` finishes, the parent's
+loaded set is unchanged, even if the child registered runners.
+
+Registered content lives while at least one :term:`sub-VM` has it loaded; once
+no loaded set holds it, it is freed. Registering the same ``code`` again while
+it is still loaded somewhere is deduplicated by hash; re-registering it after it
+has been freed re-parses and charges again.

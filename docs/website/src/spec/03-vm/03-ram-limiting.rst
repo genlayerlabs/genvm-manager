@@ -34,12 +34,27 @@ The following operations consume RAM:
   :ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-table`.
 - **File mapping**: :ref:`gvm-def-consts-value-memory-limiter-consts-file-mapping` octets base cost plus the length of the filename in bytes
 - **File descriptor allocation**: :ref:`gvm-def-consts-value-memory-limiter-consts-fd-allocation` octets per descriptor
+- **Runner loading**: the first load of a :term:`runner` in a :term:`sub-VM`
+  costs a flat load constant plus the runner's size in octets. A runner already
+  in that :term:`sub-VM`'s loaded set costs nothing, and the charge is released
+  when the :term:`sub-VM` finishes, like any other charge. Loading covers
+  spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``
+  and ``RegisterRunner`` ``gl_call``\ s, and inheriting a custom runner at
+  sub-VM creation (see :doc:`../02-execution-environment/04-runners`)
+
+The load constant is a fixed per-load overhead. Its value currently lives in
+the executor implementation, pending migration to the public ABI; once
+migrated it will be published in :doc:`../appendix/constants` alongside the
+other memory-limiter constants. Its value is **pending**.
 
 RAM Release
 -----------
 
 File content memory is released when the corresponding file descriptor is closed via ``fd_close``.
 When a :term:`sub-VM` finishes execution, all remaining RAM consumed by it is released back to the shared budget.
+This applies to runner charges as well: memory consumed by loading or
+registering a runner is released when the registering :term:`sub-VM` finishes,
+like any other charge. There are no permanent charges.
 
 Other Limits
 ------------

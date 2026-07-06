@@ -96,6 +96,18 @@ cc = "1"
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
 
+[profile.dev]
+incremental = false
+
+[profile.dev.build-override]
+debug = false
+incremental = false
+opt-level = 0
+strip = true
+
+[profile.release]
+incremental = false
+
 [profile.release-with-debug]
 debug = true
 inherits = "release"

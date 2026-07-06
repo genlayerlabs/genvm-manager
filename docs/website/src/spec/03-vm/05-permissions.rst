@@ -105,6 +105,10 @@ The non-deterministic :term:`sub-VM` has:
 - :ref:`gvm-perm-register-runners` is **disabled**
 - :ref:`gvm-perm-use-balance-for-message-fees` is **disabled**
 
+Loading a custom runner is not a permission: custom runners are granted per
+child from the parent's loaded set via the ``custom_runners`` payload field
+(see :ref:`gvm-def-custom-runner-visibility`).
+
 ``Sandbox``
 ~~~~~~~~~~~
 
@@ -118,3 +122,8 @@ The sandboxed :term:`sub-VM` has:
 - :ref:`gvm-perm-send-messages` is **inherited** *iff* ``allow_send_messages`` is set, otherwise **disabled**
 - :ref:`gvm-perm-register-runners` is **inherited** *iff* ``allow_register_runners`` is set, otherwise **disabled**
 - :ref:`gvm-perm-use-balance-for-message-fees` is **inherited**
+
+Custom runners are likewise granted from the parent's loaded set via the
+``custom_runners`` payload field; runners registered inside the sandbox do not
+flow back into the parent's loaded set (see
+:ref:`gvm-def-custom-runner-visibility`).
