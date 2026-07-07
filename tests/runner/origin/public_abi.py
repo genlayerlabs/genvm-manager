@@ -34,6 +34,8 @@ class _MemoryLimiterConsts(typing.NamedTuple):
 	TABLE_ENTRY: int = 64
 	FILE_MAPPING: int = 256
 	FD_ALLOCATION: int = 96
+	RUNNER_LOAD_COST: int = 4096
+	VM_SPAWN_COST: int = 134217728
 
 memory_limiter_consts: typing.Final = _MemoryLimiterConsts()
 
@@ -58,6 +60,8 @@ class _TopLimits(typing.NamedTuple):
 	WEB_REQUEST_MIN_SPACE: int = 65536
 	WEB_RENDER_MIN_SPACE: int = 134217728
 	MAX_FDS: int = 1024
+	WASM_CALL_DEPTH: int = 1024
+	WASM_STACK_VALUE_SLOTS: int = 65535
 
 top_limits: typing.Final = _TopLimits()
 

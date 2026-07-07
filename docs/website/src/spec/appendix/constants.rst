@@ -134,6 +134,20 @@ fd_allocation
 
 Value: ``96``
 
+.. _gvm-def-consts-value-memory-limiter-consts-runner-load-cost:
+
+runner_load_cost
+~~~~~~~~~~~~~~~~
+
+Value: ``4096``
+
+.. _gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost:
+
+vm_spawn_cost
+~~~~~~~~~~~~~
+
+Value: ``134217728``
+
 .. _gvm-def-consts-root-offsets:
 
 root_offsets
@@ -245,6 +259,20 @@ max_fds
 ~~~~~~~
 
 Value: ``1024``
+
+.. _gvm-def-consts-value-top-limits-wasm-call-depth:
+
+wasm_call_depth
+~~~~~~~~~~~~~~~
+
+Value: ``1024``
+
+.. _gvm-def-consts-value-top-limits-wasm-stack-value-slots:
+
+wasm_stack_value_slots
+~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``65535``
 
 .. _gvm-def-enum-special-method:
 

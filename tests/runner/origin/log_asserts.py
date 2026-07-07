@@ -10,7 +10,8 @@ The ADR-012 load action emits one stable ``"runner load"`` record per load,
 carrying:
 
 - ``runner``      — the canonical runner id (``chain:``/``custom:``/``name:hash``);
-- ``runner_load_cost``  — the flat per-load constant (``host_fns::RUNNER_LOAD_COST``);
+- ``runner_load_cost``  — the flat per-load constant
+	(``public_abi::memory_limiter_consts::RUNNER_LOAD_COST``);
 - ``size``        — the charged content size (archive ``total_size``);
 - ``status``      — ``"charged"`` (first load in this VM) or ``"cached"``
 					(already in the VM's loaded set — free).
