@@ -2,6 +2,7 @@ use std::{collections::BTreeMap, sync::Arc};
 
 use crate::common::ModuleError;
 
+use genlayer_calldata as calldata;
 use genvm_common::*;
 
 pub mod dflt;

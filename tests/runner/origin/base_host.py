@@ -107,6 +107,7 @@ class Message(typing.TypedDict):
 	contract_address: Address
 	sender_address: Address
 	origin_address: Address
+	signer_address: Address
 	chain_id: int
 	value: typing.NotRequired[int]
 	is_init: bool

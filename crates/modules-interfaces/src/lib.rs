@@ -15,6 +15,11 @@ pub trait Web {
     ) -> tokio::task::JoinHandle<anyhow::Result<Box<[u8]>>>;
 }
 
+pub mod abi_stub;
+pub mod domain;
+pub use abi_stub::*;
+pub use domain::*;
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]
 pub enum GenericValue {

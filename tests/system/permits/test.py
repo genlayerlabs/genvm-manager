@@ -26,6 +26,7 @@ FAKE_MESSAGE: base_host.Message = {
 	'contract_address': Address('0x' + '00' * 20),
 	'sender_address': Address('0x' + '01' * 20),
 	'origin_address': Address('0x' + '01' * 20),
+	'signer_address': Address('0x' + '01' * 20),
 	'chain_id': 0,
 	'is_init': True,
 }
