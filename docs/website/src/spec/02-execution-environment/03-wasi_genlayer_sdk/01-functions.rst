@@ -10,7 +10,6 @@ Requirements
 ~~~~~~~~~~~~
 
 #. :term:`Sub-VM` must be in deterministic mode
-#. :term:`Sub-VM` must have read storage permission
 #. index + buf_len must not overflow
 
 ``storage_write``

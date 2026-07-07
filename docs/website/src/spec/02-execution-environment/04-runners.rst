@@ -20,7 +20,7 @@ forms (see the ``runner-id`` definition in the runner.json schema):
 - ``chain:<address>[:<a|f>[:<slot>]]`` — a runner code blob read from a storage
   slot of an arbitrary contract (``a`` = accepted, ``f`` = finalized). ``<address>``
   is a ``0x`` 20 byte hex address and ``<slot>`` is a :term:`SlotID` encoded with
-  :doc:`../../04-contract-interface/06-gvm32`. Both ``<a|f>`` and ``<slot>`` are
+  :doc:`../04-contract-interface/06-gvm32`. Both ``<a|f>`` and ``<slot>`` are
   optional: ``<a|f>`` defaults to ``a`` and ``<slot>`` to the target contract's
   root code slot.
 - ``custom:<hash>`` — a runner registered at runtime via the ``RegisterRunner``
@@ -33,7 +33,7 @@ Hash Format
 ~~~~~~~~~~~
 
 ``hash`` is the SHA3 256-bit hash of the runner's contents, encoded with
-:doc:`../../04-contract-interface/06-gvm32` (GVM32, a lowercase Crockford
+:doc:`../04-contract-interface/06-gvm32` (GVM32, a lowercase Crockford
 Base32). This keeps it free of filesystem-illegal characters and
 case-insensitive.
 
@@ -321,9 +321,8 @@ A load action occurs when:
 - resolving a ``Depends`` or ``With`` action in a ``runner.json``;
 - executing the ``MapFile`` ``gl_call``;
 - registering a runner via the ``RegisterRunner`` ``gl_call``;
-- inheriting a custom runner at :term:`sub-VM` creation (see below). Inherited
-  loads happen **before** the main-runner load, so a custom entry point that is
-  also inherited is not charged twice.
+- receiving a custom-runner grant at :term:`sub-VM` creation
+  (see :ref:`gvm-meta-property-custom-runners`).
 
 For a ``chain:`` runner the size is the length of the code blob read from
 storage. A ``chain:`` load costs the same as any other load of that size —
@@ -331,31 +330,16 @@ there is no doubled charge and no separate fee component.
 
 .. _gvm-def-custom-runner-visibility:
 
-Custom :term:`Runner` Loading and Grants
-----------------------------------------
+Custom :term:`Runner` Loading
+-----------------------------
 
 A ``custom:<hash>`` id resolves *iff* ``<hash>`` is in the resolving
 :term:`sub-VM`'s own loaded set; otherwise loading it fails with a
 :ref:`gvm-def-vm-error`. There is no separate registry lookup at resolution — a
 :term:`sub-VM` can use exactly the custom runners it has loaded, whether by
-registering them itself or by inheriting them.
-
-A :term:`sub-VM` obtains custom runners in its loaded set by:
-
-- registering them itself via the ``RegisterRunner`` ``gl_call``, and
-- inheriting them from its parent at creation time (one load action per grant):
-
-  - ``Sandbox`` and ``RunNondet`` children receive the runners named by the
-    ``custom_runners`` payload field — every ``custom:`` entry in the parent's
-    loaded set when the field is absent, or exactly the listed subset. Only
-    ``custom:`` runners are inheritable: a grant list containing any other kind
-    of id (including ``name:hash`` and ``chain:``) is a
-    :ref:`gvm-def-vm-error`. If the runner to execute is itself a ``custom:``
-    id, it is granted implicitly.
-  - ``CallContract`` children inherit the caller's entire custom set.
-
-Grants never flow back: when a child :term:`sub-VM` finishes, the parent's
-loaded set is unchanged, even if the child registered runners.
+registering them itself via the ``RegisterRunner`` ``gl_call`` or by receiving
+grants from its parent at creation time
+(:ref:`gvm-meta-property-custom-runners`).
 
 Registered content lives while at least one :term:`sub-VM` has it loaded; once
 no loaded set holds it, it is freed. Registering the same ``code`` again while

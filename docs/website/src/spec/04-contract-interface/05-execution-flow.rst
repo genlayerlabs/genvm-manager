@@ -4,7 +4,7 @@ Contract Execution Flow
 =======================
 
 This page describes the contract-facing execution model. VM startup and runner
-loading are specified in :doc:`../03-vm/06-startup`.
+loading are specified in :doc:`../03-vm/01-startup`.
 
 Deployment and Calls
 --------------------
@@ -17,7 +17,7 @@ Deployment and Calls
    :ref:`Calldata Encoded <gvm-def-calldata-encoding>` method-call data as
    described by :ref:`gvm-def-contract-call-conv`.
 #. The contract runtime dispatches the call and returns a value, a user error,
-   or a VM error as specified by :doc:`../03-vm/01-result`.
+   or a VM error as specified by :doc:`../03-vm/05-result`.
 
 Entry Kinds
 -----------
@@ -52,4 +52,4 @@ A ``CallContract`` child reads committed on-chain storage. It does not observe
 the calling transaction's uncommitted writes, including through a self-call.
 Direct reads in the same VM observe the current in-transaction state.
 
-Permission changes for ``CallContract`` are specified in :doc:`../03-vm/05-permissions`.
+Meta-property changes for ``CallContract`` are specified in :ref:`gvm-meta-property-derivation`.

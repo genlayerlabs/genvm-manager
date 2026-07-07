@@ -39,8 +39,9 @@ The following operations consume RAM:
   in that :term:`sub-VM`'s loaded set costs nothing, and the charge is released
   when the :term:`sub-VM` finishes, like any other charge. Loading covers
   spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``
-  and ``RegisterRunner`` ``gl_call``\ s, and inheriting a custom runner at
-  sub-VM creation (see :doc:`../02-execution-environment/04-runners`)
+  and ``RegisterRunner`` ``gl_call``\ s, and receiving a custom-runner grant at
+  sub-VM creation (see :doc:`../02-execution-environment/04-runners` and
+  :ref:`gvm-meta-property-custom-runners`)
 
 The runner load cost (:ref:`gvm-def-const-runner-load-cost`) is a fixed per-load
 overhead

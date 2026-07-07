@@ -117,10 +117,10 @@ Both fields are serialized using :ref:`gvm-def-calldata-encoding` to be determin
 #. Memories are ordered by their index in WASM module
 #. Memories are hashed using BLAKE3 hash function, which is cryptographically secure and provides acceptable performance
 
+.. _gvm-def-execution-hash:
+
 Execution Hash
 --------------
-
-.. _gvm-def-execution-hash:
 
 Every run produces an *execution hash*: a SHA3-256 digest over a
 :ref:`gvm-def-calldata-encoding` encoding of the consensus-visible result, as a map
@@ -137,10 +137,10 @@ with the following keys (in this order):
 Two runs that agree on the deterministic result produce the same execution hash, so
 consensus can compare a single 32-byte value instead of the full result.
 
+.. _gvm-def-subvm-hash:
+
 Sub-VM Result Hash
 ------------------
-
-.. _gvm-def-subvm-hash:
 
 A deterministic run accumulates the result of each deterministic :term:`sub-VM` call
 into a rolling SHA3-256 accumulator. The finalized accumulator is the

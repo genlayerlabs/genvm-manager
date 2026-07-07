@@ -9,7 +9,9 @@ based on operation type.
 Sub-VM Result Encoding
 ----------------------
 
-Operations that spawn sub-VMs (``CallContract``, ``RunNondet``, ``Sandbox``) return
+Operations that spawn sub-VMs (:ref:`gvm-def-gl-call-call-contract`,
+:ref:`gvm-def-gl-call-run-nondet`,
+:ref:`gvm-def-gl-call-sandbox`) return
 results through a file descriptor with the following binary format:
 
 .. code-block::

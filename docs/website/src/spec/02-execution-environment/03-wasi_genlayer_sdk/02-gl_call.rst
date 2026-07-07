@@ -49,6 +49,8 @@ Requirements
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-call-others`
 
+.. _gvm-def-gl-call-call-contract:
+
 ``CallContract`` Message
 ------------------------
 
@@ -67,19 +69,13 @@ Payload
      }
    }
 
-When ``state`` is ``0`` (``default``) :term:`GenVM` resolves it to ``latest_non_final``.
-The motivation is that the caller has already observed (and possibly modified)
-non-final state in the current transaction, so reading anything older than
-``latest_non_final`` for an in-transaction call would expose stale data and
-break causality between the caller and callee.
-
 Requirements
 ~~~~~~~~~~~~
 
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-call-others`
 
-Creates new :term:`sub-VM` instance for contract execution. See :ref:`gvm-permissions` for permission inheritance details.
+Creates a :term:`sub-VM`. See :ref:`gvm-meta-property-derivation`.
 
 .. _gvm-def-post-message:
 
@@ -88,9 +84,9 @@ Creates new :term:`sub-VM` instance for contract execution. See :ref:`gvm-permis
 
 Posts message to GenLayer contract for later execution.
 
-When GenVM forwards this message it derives a :ref:`call_key <gvm-def-call-key>`
-from the ``method`` field of ``calldata`` and attaches it to the emitted
-message. The :ref:`call_key <gvm-def-call-key>` is the function-selector
+When GenVM forwards this message it derives :ref:`gvm-def-call-key` from the
+``method`` field of ``calldata`` and attaches it to the emitted message.
+:ref:`gvm-def-call-key` is the function-selector
 analog used to identify the target method.
 
 Payload
@@ -212,14 +208,16 @@ Requirements
 #. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
 
 Supports CREATE2-style deployment with salt nonce for deterministic addressing.
-``use_balance`` / ``fee_params`` behave as for :ref:`PostMessage <gvm-gl-call-balance-fees>`.
+``use_balance`` / ``fee_params`` behave as for :ref:`gvm-gl-call-balance-fees`.
+
+.. _gvm-def-gl-call-run-nondet:
 
 ``RunNondet`` Message
 ---------------------
 
-Executes non-deterministic code with leader/validator consensus.
-Creates :ref:`gvm-def-non-det-mode` VM instance with restricted permissions.
-See :doc:`../../03-vm/04-determinism-mode-switching` and :ref:`gvm-permissions` for more details.
+Executes non-deterministic code with leader/validator consensus. See
+:doc:`../../03-vm/04-determinism-mode-switching` and
+:ref:`gvm-meta-property-derivation`.
 
 Payload
 ~~~~~~~
@@ -235,30 +233,25 @@ Payload
      }
    }
 
-``runner`` selects what the non-deterministic :term:`sub-VM` executes; it is
-resolved in the calling scope and becomes the child's ``contract`` id. When
-absent, the caller's own runner is executed (previous behavior).
-
-``custom_runners`` grants custom runners from the parent's loaded custom
-runners to the child (see :ref:`gvm-def-custom-runner-visibility`): when absent,
-the child inherits every ``custom:`` runner in the caller's loaded set; when
-present, exactly the listed runners. Every element must be a ``custom:<hash>``
-id, without duplicates, and present in the caller's loaded set — otherwise the
-call fails with a :ref:`gvm-def-vm-error`. If ``runner`` is a ``custom:`` id it
-must be loaded in the caller and is granted implicitly. Each grant is a load
-action in the child, charged to the child's RAM budget; because inherited loads
-run before the main-runner load, a ``custom:`` entry point is not charged
-twice.
-
 Requirements
 ~~~~~~~~~~~~
 
 #. :ref:`gvm-perm-spawn-nondet`
 
+Semantics
+~~~~~~~~~
+
+Creates a non-deterministic :term:`sub-VM`. Derivation of its meta-properties,
+including the *param* ``runner`` and *param* ``custom_runners`` semantics, is
+specified in :ref:`gvm-meta-property-derivation`.
+
+.. _gvm-def-gl-call-sandbox:
+
 ``Sandbox`` Message
 -------------------
 
-Executes code in sandboxed environment with restricted permissions.
+Executes code in a sandboxed environment. See
+:ref:`gvm-meta-property-derivation`.
 
 Payload
 ~~~~~~~
@@ -276,15 +269,19 @@ Payload
      }
    }
 
-Creates isolated VM instance. See :ref:`gvm-permissions` for permission inheritance details.
+Semantics
+~~~~~~~~~
 
-``custom_runners`` behaves exactly as for ``RunNondet``: absent grants every
-``custom:`` runner in the caller's loaded set, a list grants exactly that
-(validated) subset, and a ``custom:`` ``runner`` is granted implicitly
-(see :ref:`gvm-def-custom-runner-visibility`). Each grant is a load action in
-the sandbox, charged to its RAM budget (a ``custom:`` entry point is not
-charged twice). Runners registered inside the sandbox do **not** flow back into
-the caller's loaded set after it returns.
+Creates a :term:`sub-VM` at the caller's determinism level. Derivation of its
+meta-properties, including the *param* ``runner`` and *param*
+``custom_runners`` semantics, is specified in
+:ref:`gvm-meta-property-derivation`.
+
+The caller receives the sandbox result (:ref:`gvm-def-subvm-result-encoding`)
+and may handle both :ref:`gvm-def-vm-error` and :ref:`gvm-def-user-error`;
+storage writes performed by the sandbox are not reverted on error.
+
+.. _gvm-def-gl-call-register-runner:
 
 ``RegisterRunner`` Message
 --------------------------
@@ -292,15 +289,7 @@ the caller's loaded set after it returns.
 Registers a runner archive at runtime, making it available under the
 ``custom:<hash>`` runner id. The ``<hash>`` is the SHA3-256 of the supplied
 ``code`` encoded with :doc:`../../04-contract-interface/06-gvm32`.
-
-Registration performs a load action for ``custom:<hash>`` in the calling
-:term:`sub-VM`. The hash is computed first. If ``custom:<hash>`` is already in
-the caller's loaded set, registration is a free no-op that returns the same
-runner id. Otherwise :ref:`gvm-def-const-runner-load-cost` plus ``code`` length is charged
-against the caller's RAM budget **before** the archive is parsed; on success
-the runner enters the caller's loaded set (see
-:ref:`gvm-def-custom-runner-visibility`). Returns the resulting runner id
-(calldata-encoded string).
+See :ref:`gvm-def-custom-runner-visibility`.
 
 Payload
 ~~~~~~~
@@ -319,31 +308,36 @@ Requirements
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-register-runners`
 
-Error guarantees
-~~~~~~~~~~~~~~~~
+Semantics
+~~~~~~~~~
 
-The outcomes, in the order they are checked:
+``RegisterRunner`` performs a load action for ``custom:<hash>`` in the calling
+:term:`sub-VM`. If the runner is already loaded, registration is a free no-op
+that returns the same runner id. Otherwise
+:ref:`gvm-def-const-runner-load-cost` plus ``code`` length is charged against
+the caller's RAM budget before the archive is parsed; on success, the runner
+enters the caller's loaded set.
 
-#. **Missing** :ref:`gvm-def-det-mode` **or** :ref:`gvm-perm-register-runners`:
-   the call fails with a ``Forbidden`` error. Nothing is charged and no state
-   changes.
-#. **Insufficient memory** for the charge: the :term:`sub-VM` exits with an
+The outcomes, in check order, are:
+
+#. Missing :ref:`gvm-def-det-mode` or :ref:`gvm-perm-register-runners`: the call
+   fails with ``Forbidden``. Nothing is charged and no state changes.
+#. Insufficient memory for the charge: the :term:`sub-VM` exits with an
    out-of-memory :ref:`gvm-def-vm-error`. Nothing is charged and the runner is
    not registered.
-#. **Malformed archive** (parse failure): the call fails with a deterministic
-   invalid-contract :ref:`gvm-def-vm-error`. The charge is retained (released
-   only when the :term:`sub-VM` finishes, like any charge); the runner is
-   **not** in the loaded set and is **not** resolvable. Parse errors depend only
-   on the ``code`` bytes, never on schedule or cache state.
-#. **Success**: the runner id is returned and the runner is in the caller's
-   loaded set. Registering identical ``code`` again in the same :term:`sub-VM`
-   is free and returns the same id.
+#. Malformed archive: the call fails with a deterministic invalid-contract
+   :ref:`gvm-def-vm-error`. The charge is retained until the :term:`sub-VM`
+   finishes, and the runner is not in the loaded set.
+#. Success: the runner id is returned and the runner is in the caller's loaded
+   set.
+
+.. _gvm-def-gl-call-map-file:
 
 ``MapFile`` Message
 -------------------
 
 Maps a file from a runner into the VM filesystem at runtime, behaving the same as
-the ``MapFile`` runner action (see :doc:`../../../python-sdk` runners). If
+the ``MapFile`` runner action (see :doc:`../../../python-sdk/index` runners). If
 ``path_in_runner`` ends with ``/`` the whole directory subtree is mapped.
 
 Payload
@@ -359,17 +353,12 @@ Payload
      }
    }
 
-Mapping into ``/vm/`` is forbidden. Resolving a ``chain:`` runner reads another
-contract's storage, so this requires :ref:`gvm-perm-read-storage`.
+Mapping into ``/vm/`` is forbidden. See
+:ref:`gvm-def-custom-runner-visibility` for ``custom:`` runner resolution.
 
-Resolving the ``runner`` performs a load action for it (see
-:ref:`gvm-def-custom-runner-visibility`), charged on its first load in this
-:term:`sub-VM` and free if it is already loaded.
-
-Requirements
-~~~~~~~~~~~~
-
-#. :ref:`gvm-perm-read-storage`
+Resolving *param* ``runner`` performs a load action for that runner. The load is
+charged on first load in this :term:`sub-VM` and is free if the runner is
+already loaded.
 
 ``WebRender`` Message
 ---------------------
@@ -564,7 +553,8 @@ Payload
      "Return": Calldata           // Return value in calldata format
    }
 
-Causes VM to exit with ``ContractReturn``. Encodes return value using :ref:`Calldata Encoded <gvm-def-calldata-encoding>` format.
+Causes VM to exit with ``ContractReturn``. Encodes return value using
+:ref:`gvm-def-calldata-encoding` format.
 
 ``Trace.Message`` Message
 -------------------------
@@ -666,7 +656,7 @@ Payload
      "GetTimestamp": null
    }
 
-Returns the timestamp encoded as a :ref:`Calldata Encoded <gvm-def-calldata-encoding>` number.
+Returns the timestamp encoded as a :ref:`gvm-def-calldata-encoding` number.
 
 Requirements
 ~~~~~~~~~~~~
