@@ -9,3 +9,4 @@ VM Specification
     03-ram-limiting
     04-determinism-mode-switching
     05-permissions
+    06-startup
