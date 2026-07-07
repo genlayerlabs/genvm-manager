@@ -85,6 +85,11 @@ execution-wide ``call_no``, starting at zero. If ``call_no`` is greater than or
 equal to :ref:`gvm-def-consts-value-top-limits-nondet-blocks`, the call fails
 with :ref:`gvm-def-str-trie-value-vm-error-out-of-nondet-blocks`.
 
+Creating the :term:`sub-VM` charges
+:ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets of
+:ref:`gvm-def-ram-consumption` to the new :term:`sub-VM`; the charge is
+released when it finishes.
+
 After these checks, startup applies the `Custom-Runner Grants`_ for the new
 :term:`sub-VM`, then performs the runner load action for the entry runner and
 continues with `Runner Startup`_.

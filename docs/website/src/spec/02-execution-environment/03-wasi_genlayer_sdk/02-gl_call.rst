@@ -314,7 +314,7 @@ Semantics
 ``RegisterRunner`` performs a load action for ``custom:<hash>`` in the calling
 :term:`sub-VM`. If the runner is already loaded, registration is a free no-op
 that returns the same runner id. Otherwise
-:ref:`gvm-def-const-runner-load-cost` plus ``code`` length is charged against
+:ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus ``code`` length is charged against
 the caller's RAM budget before the archive is parsed; on success, the runner
 enters the caller's loaded set.
 

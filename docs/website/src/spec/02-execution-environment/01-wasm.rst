@@ -35,9 +35,9 @@ WASM recursion depth is bounded by two counters, each private to a
 :term:`sub-VM`, so the depth at which execution traps depends only on the WASM
 code and its dynamic call pattern — never on how the code was compiled:
 
-- **call stack**: starts at :ref:`gvm-def-consts-value-wasm-stack-limits-call-depth`;
+- **call stack**: starts at :ref:`gvm-def-consts-value-top-limits-wasm-call-depth`;
   every active frame costs :math:`1`.
-- **value stack**: starts at :ref:`gvm-def-consts-value-wasm-stack-limits-value-slots`;
+- **value stack**: starts at :ref:`gvm-def-consts-value-top-limits-wasm-stack-value-slots`;
   every active frame costs its function's *value size* — the number of declared
   locals plus the maximum operand-stack depth of the function body. The value
   size is derived statically from the function's code; every value counts as
@@ -71,7 +71,7 @@ An implementation may keep a native-stack safety backstop, but it must be
 sized so that it can never trip before these counters do.
 
 A function whose value size alone exceeds
-:ref:`gvm-def-consts-value-wasm-stack-limits-value-slots` is rejected when the
+:ref:`gvm-def-consts-value-top-limits-wasm-stack-value-slots` is rejected when the
 module is compiled, with
 :ref:`gvm-def-str-trie-value-vm-error-invalid-contract-wasm-validating`.
 

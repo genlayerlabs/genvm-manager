@@ -46,24 +46,24 @@ the following data:
 
 - ``major``: (offset :ref:`gvm-def-consts-value-root-offsets-major`) Single octet (``u8``)
   identifying the major version of the public ABI
-    that the contract was built against. It is written at deploy time (the value is detected
-    from the contract package — see :doc:`04-upgradability` and the impl-spec for the detection flow)
-    and read on every load so :term:`GenVM` can refuse to execute a contract whose public ABI
-    major does not match the host's ``CURRENT_MAJOR``.
+  that the contract was built against. It is written at deploy time (the value is detected
+  from the contract package — see :doc:`04-upgradability` and the impl-spec for the detection flow)
+  and read on every load so :term:`GenVM` can refuse to execute a contract whose public ABI
+  major does not match the host's ``CURRENT_MAJOR``.
 - ``contract_instance``: (offset 1) Reference to the contract instance data.
 - ``code``: (offset 2) The contract's code. Slot contains 4 bytes little-endian length followed by data
 - ``locked_slots``: (offset 3) A list of storage :term:`SlotID`\s that cannot be modified by non-upgraders.
-    Slot contains 4 bytes little-endian length followed length arrays of 32 byte :term:`SlotID`\s
+  Slot contains 4 bytes little-endian length followed length arrays of 32 byte :term:`SlotID`\s
 - ``upgraders``: (offset 4) A list of addresses that are authorized to modify the contract code and locked slots.
-    Slot contains 4 bytes little-endian length followed length arrays of 20 byte addresses
+  Slot contains 4 bytes little-endian length followed length arrays of 20 byte addresses
 - ``code_slot``: (offset 5) A raw 32-byte :term:`SlotID`. If it is all-zero (the default),
-    the contract code is read from the ``code`` slot (offset 2); otherwise the code is read from
-    the slot it points to (same 4-byte-length-prefixed layout). This lets a contract serve its
-    code from an arbitrary slot, including one shared via a ``chain:<address>:<a|f>:<slot>`` runner id.
+  the contract code is read from the ``code`` slot (offset 2); otherwise the code is read from
+  the slot it points to (same 4-byte-length-prefixed layout). This lets a contract serve its
+  code from an arbitrary slot, including one shared via a ``chain:<address>:<a|f>:<slot>`` runner id.
 - ``permissions``: (offset 37) A 32-byte (``u256``) little-endian permission bitfield read by
-    the executor at the start of every load. Bit ``n`` corresponds to the permission whose value
-    is ``n`` (currently only bit ``0``, ``can_use_balance_for_message_fees``). It is not reserved:
-    contracts may set it (see ``Root.get_permission`` / ``Root.set_permission`` in the Python SDK).
+  the executor at the start of every load. Bit ``n`` corresponds to the permission whose value
+  is ``n`` (currently only bit ``0``, ``can_use_balance_for_message_fees``). It is not reserved:
+  contracts may set it (see ``Root.get_permission`` / ``Root.set_permission`` in the Python SDK).
 
 Offsets are byte offsets into the root slot, so ``code_slot`` (32 bytes) occupies offsets ``5``
 through ``36`` and ``permissions`` (32 bytes) occupies offsets ``37`` through ``68``; the next

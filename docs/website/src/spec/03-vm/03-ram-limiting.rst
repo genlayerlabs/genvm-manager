@@ -35,15 +35,19 @@ The following operations consume RAM:
 - **File mapping**: :ref:`gvm-def-consts-value-memory-limiter-consts-file-mapping` octets base cost plus the length of the filename in bytes
 - **File descriptor allocation**: :ref:`gvm-def-consts-value-memory-limiter-consts-fd-allocation` octets per descriptor
 - **Runner loading**: the first load of a :term:`runner` in a :term:`sub-VM`
-  costs :ref:`gvm-def-const-runner-load-cost` plus the runner's size in octets. A runner already
+  costs :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus the runner's size in octets. A runner already
   in that :term:`sub-VM`'s loaded set costs nothing, and the charge is released
   when the :term:`sub-VM` finishes, like any other charge. Loading covers
   spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``
   and ``RegisterRunner`` ``gl_call``\ s, and receiving a custom-runner grant at
   sub-VM creation (see :doc:`../02-execution-environment/04-runners` and
   :ref:`gvm-meta-property-custom-runners`)
+- **Sub-VM creation**: each new :term:`sub-VM` costs
+  :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets,
+  charged to the new :term:`sub-VM` at creation (see :doc:`01-startup`) and
+  released when it finishes
 
-The runner load cost (:ref:`gvm-def-const-runner-load-cost`) is a fixed per-load
+The runner load cost (:ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost`) is a fixed per-load
 overhead
 
 RAM Release
