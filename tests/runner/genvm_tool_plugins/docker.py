@@ -122,8 +122,9 @@ def _stop_cleanup(container_id: str) -> functools.partial:
 
 
 class ContainerHandle(genvm_tool.tests.exec.service.Handle):
-	def __init__(self, container_id: str):
+	def __init__(self, container_id: str, *, ci: bool):
 		self._container_id = container_id
+		self._ci = ci
 		self._watchdog_token = local_ctx.shared.watchdog.register(
 			_stop_cleanup(container_id)
 		)
@@ -147,6 +148,7 @@ class ContainerHandle(genvm_tool.tests.exec.service.Handle):
 		cwd: Path,
 		env: dict[str, str] | None = None,
 		log_context: dict | None = None,
+		ci: bool = False,
 	) -> 'ContainerHandle':
 		if env is None:
 			env = copy.deepcopy(DEFAULT_ENV)
@@ -183,7 +185,7 @@ class ContainerHandle(genvm_tool.tests.exec.service.Handle):
 			)
 			raise DockerRunError(f'Docker run failed with exit code {res.exit_code}')
 		container_id = res.stdout.strip()
-		return ContainerHandle(container_id=container_id)
+		return ContainerHandle(container_id=container_id, ci=ci)
 
 	async def healthy(self) -> bool:
 		try:
@@ -202,23 +204,25 @@ class ContainerHandle(genvm_tool.tests.exec.service.Handle):
 				ctx=local_ctx.shared, mode=genvm_tool.tests.exec.command.RunMode.SILENT
 			)
 			if res.exit_code != 0:
-				logs = await self.get_logs()
-				local_ctx.shared.logger.warning(
-					'Docker health check failed',
-					container_id=self._container_id,
-					returncode=res.exit_code,
-					logs=logs,
-				)
+				if self._ci:
+					logs = await self.get_logs()
+					local_ctx.shared.logger.warning(
+						'Docker health check failed',
+						container_id=self._container_id,
+						returncode=res.exit_code,
+						logs=logs,
+					)
 				return False
 			status = res.stdout.strip()
 			if status != 'healthy':
-				logs = await self.get_logs()
-				local_ctx.shared.logger.warning(
-					'Container not healthy',
-					container_id=self._container_id,
-					status=status,
-					logs=logs,
-				)
+				if self._ci:
+					logs = await self.get_logs()
+					local_ctx.shared.logger.warning(
+						'Container not healthy',
+						container_id=self._container_id,
+						status=status,
+						logs=logs,
+					)
 			return status == 'healthy'
 		except Exception as e:
 			local_ctx.shared.logger.error(

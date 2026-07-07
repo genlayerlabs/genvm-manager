@@ -178,7 +178,7 @@ jobs:
           nix develop '.?submodules=1#mock-tests' --command bash -c '
             set -euo pipefail
             genvm-tool configure
-            genvm-tool test run --filter-tag "$(cat tests/presets/release.txt)"
+            genvm-tool test run --ci --filter-tag "$(cat tests/presets/release.txt)"
           '
 
   test-macos-arm64:
@@ -229,7 +229,7 @@ jobs:
           source .venv/bin/activate
           pip install ./support/tools/genvm-tool
           genvm-tool configure
-          genvm-tool test run --filter-tag "$(cat tests/presets/release.txt)"
+          genvm-tool test run --ci --filter-tag "$(cat tests/presets/release.txt)"
 
   release-publish:
     needs:

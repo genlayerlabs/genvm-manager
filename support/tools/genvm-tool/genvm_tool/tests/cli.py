@@ -55,6 +55,13 @@ def create_parser() -> _ParserResult:
 		help='Stop execution after the first test failure',
 	)
 
+	run_parser.add_argument(
+		'--ci',
+		action='store_true',
+		default=False,
+		help='Emit full failure and service log context for CI diagnostics',
+	)
+
 	default_cpu_count = os.cpu_count() or 1
 
 	run_parser.add_argument(

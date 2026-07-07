@@ -96,6 +96,73 @@ class _SavedLog(typing.TypedDict):
 	kwargs: dict
 
 
+_SHORT_TEXT_LIMIT = 2000
+_SHORT_LIST_LIMIT = 12
+_NOISY_CONTEXT_KEYS = frozenset(
+	{
+		'exp',
+		'got',
+		'genvm_log',
+		'log',
+		'logs',
+		'semantics',
+		'stderr',
+		'stdout',
+	}
+)
+
+
+def _shorten_text(value: str, limit: int = _SHORT_TEXT_LIMIT) -> str:
+	if len(value) <= limit:
+		return value
+	omitted = len(value) - limit
+	return f'<truncated {omitted} chars>\n{value[-limit:]}'
+
+
+def _shorten_value(value: typing.Any) -> typing.Any:
+	if isinstance(value, str):
+		return _shorten_text(value)
+	if isinstance(value, bytes):
+		if len(value) <= _SHORT_TEXT_LIMIT:
+			return value
+		return value[:_SHORT_TEXT_LIMIT] + b'<truncated>'
+	if isinstance(value, BaseException):
+		return {
+			'type': value.__class__.__name__,
+			'message': str(value),
+		}
+	if isinstance(value, list):
+		if len(value) <= _SHORT_LIST_LIMIT:
+			return value
+		return [
+			*value[:_SHORT_LIST_LIMIT],
+			f'<truncated {len(value) - _SHORT_LIST_LIMIT} items>',
+		]
+	return value
+
+
+def _short_failure_context(
+	context: dict[str, typing.Any], artifacts_dir: Path | None = None, *, ci: bool
+) -> dict[str, typing.Any]:
+	if ci:
+		return context
+
+	short = {
+		k: _shorten_value(v) for k, v in context.items() if k not in _NOISY_CONTEXT_KEYS
+	}
+	for key in ('stderr', 'stdout'):
+		if key in context and context[key]:
+			short[f'{key}_tail'] = _shorten_value(context[key])
+	if 'logs' in context:
+		short['log_count'] = len(context['logs'])
+	if 'genvm_log' in context:
+		short['genvm_log_count'] = len(context['genvm_log'])
+	if artifacts_dir is not None:
+		short['artifacts_dir'] = str(artifacts_dir)
+	short['hint'] = 'run with --ci for full inline failure context'
+	return short
+
+
 def _make_log_adapter(formatter: genvm_tool.tests.Formatter) -> 'origin_logger.Logger':
 	class _FormatterLoggerAdapter(origin_logger.Logger):
 		"""Adapts genvm_tool.formatter.Formatter to base_host.Logger interface."""
@@ -167,6 +234,7 @@ class IntegrationPrepareCase(genvm_tool.tests.test.Case):
 	jsonnet_path: Path
 	top_level_conf: dict
 	tmp_dir: Path
+	ci: bool
 
 	hidden: bool = True
 
@@ -191,6 +259,7 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 	max_attempts: int
 	ignore_hash: bool = False
 	is_benchmark: bool = False
+	ci: bool = False
 
 	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
 		step = IntegrationSingleStep(self)
@@ -285,16 +354,21 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 			)
 			result = await cmd.run(local_ctx.shared, mode=RunMode.SILENT)
 			if result.exit_code != 0:
+				context = _short_failure_context(
+					{
+						'reason': 'prepare script failed',
+						'exit_code': result.exit_code,
+						'stdout': result.stdout,
+						'stderr': result.stderr,
+						'log': result.stderr,
+					},
+					tmp_dir,
+					ci=self._case.ci,
+				)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
-						context={
-							'reason': 'prepare script failed',
-							'exit_code': result.exit_code,
-							'stdout': result.stdout,
-							'stderr': result.stderr,
-							'log': result.stderr,
-						},
+						context=context,
 						elapsed_seconds=0,
 					)
 				)
@@ -388,6 +462,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		self._tmp_dir = case.tmp_dir
 		self._max_attempts = case.max_attempts
 		self._ignore_hash = case.ignore_hash
+		self._ci = case.ci
 
 	def to_str(self) -> str:
 		return f'<step {self._tree_path}: {self._test_case.jsonnet_path.name}>'
@@ -411,6 +486,11 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				# Raise FinishedEarlyException to stop subsequent steps
 				context = result.get('context', {})
 				context['logs'] = sub_logger.saved_logs
+				context = _short_failure_context(
+					context,
+					self._tmp_dir.joinpath(self._tree_path),
+					ci=self._ci,
+				)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
@@ -425,7 +505,11 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				max_attempts=self._max_attempts,
 				test_name=str(self._test_case.description.name),
 				tree_path=self._tree_path,
-				context=result.get('context', {}),
+				context=_short_failure_context(
+					result.get('context', {}),
+					self._tmp_dir.joinpath(self._tree_path),
+					ci=self._ci,
+				),
 			)
 
 		# Should not reach here
@@ -512,6 +596,9 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		)
 		single_conf['message']['origin_address'] = Address(
 			single_conf['message']['origin_address']
+		)
+		single_conf['message']['signer_address'] = Address(
+			single_conf['message']['signer_address']
 		)
 
 		path_to_which_leader_puts_result = my_tmp_dir.parent.joinpath(
@@ -852,6 +939,7 @@ def integration_test(
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
 ) -> None:
 	active_versions: list[str] = json.loads(
 		local_ctx.shared.root_dir.joinpath('.genvm-monorepo-root').read_text()
@@ -863,6 +951,7 @@ def integration_test(
 			manager_service=manager_service,
 			modules_service=modules_service,
 			webdriver_service=webdriver_service,
+			ci=ci,
 		)
 
 
@@ -873,6 +962,7 @@ def integration_test_single_executor(
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
 ) -> None:
 	"""
 	Collect integration tests from tests/integration/ directory.
@@ -922,6 +1012,7 @@ def integration_test_single_executor(
 				manager_service=manager_service,
 				modules_service=modules_service,
 				webdriver_service=webdriver_service,
+				ci=ci,
 			): jsonnet_file
 			for jsonnet_file in jsonnet_files
 		}
@@ -939,6 +1030,7 @@ def _single_integration_test(
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
 ) -> None:
 	import _jsonnet
 
@@ -1030,6 +1122,7 @@ def _single_integration_test(
 			jsonnet_path=jsonnet_file,
 			top_level_conf=top_level_conf,
 			tmp_dir=tmp_dir,
+			ci=ci,
 		)
 	)
 
@@ -1073,5 +1166,6 @@ def _single_integration_test(
 				max_attempts=max_attempts,
 				ignore_hash=ignore_hash,
 				is_benchmark=is_benchmark,
+				ci=ci,
 			)
 		)

@@ -436,6 +436,10 @@ pub struct Request {
     pub message_fee_allocation: Vec<genvm_common::domain::fees::MessageAllocationNode>,
     /// Initial time-unit budget for this execution.
     pub initial_time_units_allocation: u32,
+    /// Auditable supervisor action kinds to return in the execution result.
+    #[serde(default)]
+    #[calldata(default = default_record_actions)]
+    pub record_actions: Vec<String>,
 }
 
 fn default_gas_data() -> std::collections::BTreeMap<String, String> {
@@ -446,8 +450,12 @@ fn default_message_fee_allocation() -> Vec<genvm_common::domain::fees::MessageAl
     Vec::new()
 }
 
+fn default_record_actions() -> Vec<String> {
+    Vec::new()
+}
+
 fn default_permissions() -> String {
-    "rwscn".to_owned()
+    "wscn".to_owned()
 }
 
 impl Request {
@@ -1057,6 +1065,7 @@ pub async fn start_genvm(
         gas_data: req.gas_data.clone(),
         message_fee_allocation: req.message_fee_allocation.clone(),
         initial_time_units_allocation: req.initial_time_units_allocation,
+        record_actions: req.record_actions.clone(),
     };
     let execution_data_bytes = genvm_common::calldata::encode_obj(&execution_data);
 

@@ -271,27 +271,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "genlayer_sdk"
-version = "0.0.2"
-dependencies = [
- "bytes",
- "chrono",
- "genlayer_calldata",
- "hex",
- "num-bigint",
- "primitive-types",
- "serde",
- "serde_bytes",
- "sha3",
-]
-
-[[package]]
 name = "genvm-modules-interfaces"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytes",
  "genlayer_calldata",
- "genlayer_sdk",
  "num-bigint",
  "num-traits",
  "primitive-types",

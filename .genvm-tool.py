@@ -353,6 +353,7 @@ def tests(ctx):
 		)
 		no_manager = getattr(ctx.configuration.args, 'no_manager', False)
 		no_webdriver = getattr(ctx.configuration.args, 'no_webdriver', False)
+		ci = getattr(ctx.configuration.args, 'ci', False)
 
 		manager_port = genvm.get_manager_port(ctx.configuration)
 
@@ -365,13 +366,14 @@ def tests(ctx):
 				bin_path=build_dir.joinpath('out', 'bin', 'genvm-modules'),
 				log_path=tests_output_root.joinpath('manager.log'),
 				env=ctx.configuration,
+				ci=ci,
 			)
 			# Create webdriver service
 			if no_webdriver:
 				webdriver_impl = genvm.NoOpService()
 			else:
 				webdriver_impl = genvm_tool.tests.exec.service.FunctionService(
-					lambda: genvm.start_webdriver_service(ctx.configuration)
+					lambda: genvm.start_webdriver_service(ctx.configuration, ci=ci)
 				)
 			# This starts Llm and Web modules on the manager
 			modules_impl = genvm.ModulesService(
@@ -401,6 +403,7 @@ def tests(ctx):
 			manager_service=manager_service,
 			modules_service=modules_service,
 			webdriver_service=webdriver_service,
+			ci=ci,
 		)
 
 		ctx.collect_dir('tests/system/permits', manager_service=manager_service)

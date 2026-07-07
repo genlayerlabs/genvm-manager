@@ -12,4 +12,4 @@ python3 ./build/out/bin/post-install.py \
     --error-on-missing-executor=false \
     --default-download=false
 
-nix develop '.?submodules=1#mock-tests' --command genvm-tool test run --filter-tag "$(cat tests/presets/rust.txt)"
+nix develop '.?submodules=1#mock-tests' --command genvm-tool test run --ci --filter-tag "$(cat tests/presets/rust.txt)"
