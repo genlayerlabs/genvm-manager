@@ -44,7 +44,8 @@ Root Slot
 the following data:
 
 
-- ``major``: (offset 0) Single octet (``u8``) identifying the major version of the public ABI
+- ``major``: (offset :ref:`gvm-def-consts-value-root-offsets-major`) Single octet (``u8``)
+  identifying the major version of the public ABI
     that the contract was built against. It is written at deploy time (the value is detected
     from the contract package — see :doc:`04-upgradability` and the impl-spec for the detection flow)
     and read on every load so :term:`GenVM` can refuse to execute a contract whose public ABI
@@ -59,11 +60,16 @@ the following data:
     the contract code is read from the ``code`` slot (offset 2); otherwise the code is read from
     the slot it points to (same 4-byte-length-prefixed layout). This lets a contract serve its
     code from an arbitrary slot, including one shared via a ``chain:<address>:<a|f>:<slot>`` runner id.
+- ``permissions``: (offset 37) A 32-byte (``u256``) little-endian permission bitfield read by
+    the executor at the start of every load. Bit ``n`` corresponds to the permission whose value
+    is ``n`` (currently only bit ``0``, ``can_use_balance_for_message_fees``). It is not reserved:
+    contracts may set it (see ``Root.get_permission`` / ``Root.set_permission`` in the Python SDK).
 
 Offsets are byte offsets into the root slot, so ``code_slot`` (32 bytes) occupies offsets ``5``
-through ``36``; the next field would start at offset ``37``.
+through ``36`` and ``permissions`` (32 bytes) occupies offsets ``37`` through ``68``; the next
+field would start at offset ``69``.
 
-Offsets at and above ``37`` are reserved for future :term:`GenVM` use and should remain zero:
+Offsets at and above ``69`` are reserved for future :term:`GenVM` use and should remain zero:
 a contract must not store data in them, otherwise a future :term:`GenVM` version that starts
 reading those offsets may break the contract. Contract runtimes that need scratch space for
 bootstrapping should derive a separate sub-slot instead (see ``Root.get_vacant_slot`` in the

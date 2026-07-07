@@ -10,7 +10,7 @@ The ADR-012 load action emits one stable ``"runner load"`` record per load,
 carrying:
 
 - ``runner``      — the canonical runner id (``chain:``/``custom:``/``name:hash``);
-- ``load_const``  — the flat per-load constant (``host_fns::LOAD_CONST``);
+- ``runner_load_cost``  — the flat per-load constant (``host_fns::RUNNER_LOAD_COST``);
 - ``size``        — the charged content size (archive ``total_size``);
 - ``status``      — ``"charged"`` (first load in this VM) or ``"cached"``
 					(already in the VM's loaded set — free).
@@ -19,7 +19,7 @@ This module is deliberately message-agnostic: a matcher's ``message`` defaults
 to ``"runner load"`` but may name any message, so the same machinery serves
 future charge-related log lines.
 
-Numeric fields (``size``, ``load_const``) are emitted by the executor as JSON
+Numeric fields (``size``, ``runner_load_cost``) are emitted by the executor as JSON
 *strings* (the logger's default ``Display`` capture), so every comparison here
 is done on the string form — an assertion may write ``4096`` or ``'4096'``
 interchangeably.
@@ -109,7 +109,7 @@ def summarize(genvm_log: list[dict]) -> list[dict]:
 		out.append(
 			{
 				'runner': r.get('runner'),
-				'load_const': r.get('load_const'),
+				'runner_load_cost': r.get('runner_load_cost'),
 				'size': r.get('size'),
 				'status': r.get('status'),
 			}

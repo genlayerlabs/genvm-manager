@@ -186,11 +186,15 @@ def _trie(t: StrTrie, buf: list[str]) -> None:
 
 def render(defs: list[Definition], **_opts) -> str:
 	has_str_trie = any(isinstance(d, StrTrie) for d in defs)
+	# Only enums and str-tries derive serde; a const-only data file (e.g.
+	# public-abi-pending.json) must not emit an unused `use serde` import.
+	has_serde = any(isinstance(d, (Enum, StrTrie)) for d in defs)
 	buf: list[str] = []
 	buf.append('// This file is auto-generated. Do not edit!\n\n')
 	buf.append('#![allow(dead_code, clippy::redundant_static_lifetimes)]\n')
 	buf.append('\n')
-	buf.append('use serde::{Deserialize, Serialize};\n\n')
+	if has_serde:
+		buf.append('use serde::{Deserialize, Serialize};\n\n')
 	if has_str_trie:
 		buf.append('use std::borrow::Cow;\n\n')
 	for d in defs:

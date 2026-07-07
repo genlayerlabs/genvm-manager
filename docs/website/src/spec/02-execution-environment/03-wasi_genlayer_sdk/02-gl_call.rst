@@ -296,7 +296,7 @@ Registers a runner archive at runtime, making it available under the
 Registration performs a load action for ``custom:<hash>`` in the calling
 :term:`sub-VM`. The hash is computed first. If ``custom:<hash>`` is already in
 the caller's loaded set, registration is a free no-op that returns the same
-runner id. Otherwise the flat load constant plus ``code`` length is charged
+runner id. Otherwise :ref:`gvm-def-const-runner-load-cost` plus ``code`` length is charged
 against the caller's RAM budget **before** the archive is parsed; on success
 the runner enters the caller's loaded set (see
 :ref:`gvm-def-custom-runner-visibility`). Returns the resulting runner id

@@ -36,7 +36,8 @@ The request body is the raw contract bytecode; the response is::
    { "specified_major": <u8> }
 
 The node MUST store the returned value in the contract's :ref:`genvm-def-root-slot` at
-offset ``4`` (the ``major`` field — see :doc:`/spec/04-contract-interface/03-storage`).
+offset :ref:`gvm-def-consts-value-root-offsets-major`. See
+:doc:`/spec/04-contract-interface/03-storage` for the root-slot layout.
 On every subsequent load :term:`GenVM` re-reads that byte and refuses to execute when it
 does not match its own ``CURRENT_MAJOR``. Without this check a node running a newer
 GenVM could silently mis-interpret an older contract's calldata or storage.

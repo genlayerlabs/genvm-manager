@@ -305,7 +305,7 @@ Loading a :term:`runner` goes through a single **load action**, defined per
 ids it has already loaded. The load action for an id is:
 
 - if the id is already in the :term:`sub-VM`'s loaded set, nothing is charged;
-- otherwise a flat load constant plus the runner's size in octets is charged as
+- otherwise :ref:`gvm-def-const-runner-load-cost` plus the runner's size in octets is charged as
   :ref:`gvm-def-ram-consumption` against the :term:`sub-VM`'s RAM budget, and
   the id is then added to the loaded set.
 

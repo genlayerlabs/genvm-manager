@@ -35,17 +35,15 @@ The following operations consume RAM:
 - **File mapping**: :ref:`gvm-def-consts-value-memory-limiter-consts-file-mapping` octets base cost plus the length of the filename in bytes
 - **File descriptor allocation**: :ref:`gvm-def-consts-value-memory-limiter-consts-fd-allocation` octets per descriptor
 - **Runner loading**: the first load of a :term:`runner` in a :term:`sub-VM`
-  costs a flat load constant plus the runner's size in octets. A runner already
+  costs :ref:`gvm-def-const-runner-load-cost` plus the runner's size in octets. A runner already
   in that :term:`sub-VM`'s loaded set costs nothing, and the charge is released
   when the :term:`sub-VM` finishes, like any other charge. Loading covers
   spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``
   and ``RegisterRunner`` ``gl_call``\ s, and inheriting a custom runner at
   sub-VM creation (see :doc:`../02-execution-environment/04-runners`)
 
-The load constant is a fixed per-load overhead. Its value currently lives in
-the executor implementation, pending migration to the public ABI; once
-migrated it will be published in :doc:`../appendix/constants` alongside the
-other memory-limiter constants. Its value is **pending**.
+The runner load cost (:ref:`gvm-def-const-runner-load-cost`) is a fixed per-load
+overhead
 
 RAM Release
 -----------

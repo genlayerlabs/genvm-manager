@@ -42,6 +42,3 @@ CURRENT_MAJOR: typing.Final[int] = 0
 
 
 CURRENT_MAJOR_STR: typing.Final[str] = 'v0.0.0'
-
-
-LOAD_CONST: typing.Final[int] = 4096

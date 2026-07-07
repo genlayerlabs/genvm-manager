@@ -261,11 +261,18 @@ def main(ctx: common.Context, args) -> int:
 	host_fns_py = source_dir / 'tests/runner/origin/host_fns.py'
 	public_abi_py = source_dir / 'tests/runner/origin/public_abi.py'
 	constants_rst = source_dir / 'docs/website/src/spec/appendix/constants.rst'
+	# Pending public-abi constants (ADR-012): documented in their own appendix
+	# page so the spec can reference them, without feeding the runner-hashed
+	# `public_abi.py`. Sourced from the primary line's pending data file.
+	constants_pending_rst = (
+		source_dir / 'docs/website/src/spec/appendix/constants-pending.rst'
+	)
 
 	n.codegen(host_fns_py, 'python', p_data / 'host-fns.json')
 	n.codegen(public_abi_py, 'python', p_data / 'public-abi.json')
 	n.codegen(constants_rst, 'rst', p_data / 'public-abi.json')
-	for out in (host_fns_py, public_abi_py, constants_rst):
+	n.codegen(constants_pending_rst, 'rst', p_data / 'public-abi-pending.json')
+	for out in (host_fns_py, public_abi_py, constants_rst, constants_pending_rst):
 		codegen_phony.add_dependency(out)
 
 	cargo_cmd = [common.command_to_executable('cargo')]
