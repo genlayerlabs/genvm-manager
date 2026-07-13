@@ -10,7 +10,8 @@
     "needed-for": [
       "x86_64-linux",
       "manager-amd64-linux",
-      "executor-amd64-linux"
+      "executor-amd64-linux",
+      "genvm-amd64-linux"
     ],
     "fetcher": "fetchzip",
     "alternative_name": null
@@ -26,7 +27,8 @@
     "needed-for": [
       "aarch64-linux",
       "manager-arm64-linux",
-      "executor-arm64-linux"
+      "executor-arm64-linux",
+      "genvm-arm64-linux"
     ],
     "fetcher": "fetchzip"
   },
@@ -41,7 +43,8 @@
     "needed-for": [
       "aarch64-macos",
       "manager-arm64-macos",
-      "executor-arm64-macos"
+      "executor-arm64-macos",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -62,7 +65,10 @@
       "manager-arm64-linux",
       "executor-arm64-linux",
       "manager-arm64-macos",
-      "executor-arm64-macos"
+      "executor-arm64-macos",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchurl",
     "upload_as": "channel-rust-stable-2026-03-05.toml"
@@ -77,7 +83,10 @@
     "must_preload": false,
     "needed-for": [
       "runners-all",
-      "runners-all-dist"
+      "runners-all-dist",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -91,7 +100,10 @@
     "must_preload": false,
     "needed-for": [
       "runners-all",
-      "runners-all-dist"
+      "runners-all-dist",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -106,7 +118,10 @@
     "must_preload": true,
     "needed-for": [
       "runners-all",
-      "runners-all-dist"
+      "runners-all-dist",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -121,7 +136,10 @@
     "must_preload": false,
     "needed-for": [
       "runners-all",
-      "runners-all-dist"
+      "runners-all-dist",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -135,7 +153,10 @@
     "must_preload": false,
     "needed-for": [
       "runners-all",
-      "runners-all-dist"
+      "runners-all-dist",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -150,7 +171,10 @@
     "must_preload": false,
     "needed-for": [
       "runners-all",
-      "runners-all-dist"
+      "runners-all-dist",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -171,7 +195,10 @@
       "manager-arm64-linux",
       "executor-arm64-linux",
       "manager-arm64-macos",
-      "executor-arm64-macos"
+      "executor-arm64-macos",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip",
     "fetcher_args": {
@@ -190,7 +217,8 @@
     "needed-for": [
       "aarch64-linux",
       "manager-arm64-linux",
-      "executor-arm64-linux"
+      "executor-arm64-linux",
+      "genvm-arm64-linux"
     ],
     "fetcher": "fetchzip",
     "fetcher_args": {
@@ -208,7 +236,8 @@
     "needed-for": [
       "aarch64-macos",
       "manager-arm64-macos",
-      "executor-arm64-macos"
+      "executor-arm64-macos",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -229,7 +258,10 @@
       "manager-arm64-linux",
       "executor-arm64-linux",
       "manager-arm64-macos",
-      "executor-arm64-macos"
+      "executor-arm64-macos",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchurl",
     "upload_as": "channel-rust-stable-2025-03-18.toml"
@@ -245,7 +277,10 @@
     "must_preload": false,
     "needed-for": [
       "runners-all",
-      "runners-all-dist"
+      "runners-all-dist",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip"
   },
@@ -266,7 +301,10 @@
       "manager-arm64-linux",
       "executor-arm64-linux",
       "manager-arm64-macos",
-      "executor-arm64-macos"
+      "executor-arm64-macos",
+      "genvm-amd64-linux",
+      "genvm-arm64-linux",
+      "genvm-arm64-macos"
     ],
     "fetcher": "fetchzip",
     "fetcher_args": {

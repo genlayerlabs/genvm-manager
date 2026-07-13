@@ -8,6 +8,12 @@ name: GenVM release
 #                                        lines' runners at executor/<version>/legacy-runners
 # All three extract at the same install root.
 #
+# Alongside the split assets above, one self-contained combined bundle per
+# platform is also published (the flake's combine-genvm target — manager +
+# every executor line + all runners merged into one writable tree):
+#   genvm-<arch>-<os>.tar.xz           — combined, self-contained (single download)
+# Consumers may take either the three split tarballs or the one combined bundle.
+#
 # The release tag is the manager version from .genvm-monorepo-root (also baked
 # into the binaries as GENVM_PROFILE), so tagging is derived from the source
 # tree instead of bumping the previous git tag.
@@ -98,6 +104,40 @@ jobs:
     with:
       target: manager-arm64-macos
       secondary_target: executor-arm64-macos
+      executor_version: ${{ needs.gen-tag.outputs.tag }}
+    secrets:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+
+  # Combined self-contained bundles (flake combine-genvm target). build.sh names
+  # the artifact `genvm-<target>.tar.xz`; the target is already `genvm-<arch>-<os>`
+  # so the GCS blob is `genvm-genvm-<arch>-<os>.tar.xz`, renamed to the clean
+  # `genvm-<arch>-<os>.tar.xz` at publish time below.
+  build-combined-amd64-linux:
+    needs:
+      - gen-tag
+    uses: ./.github/workflows/incl_build_trg.yaml
+    with:
+      target: genvm-amd64-linux
+      executor_version: ${{ needs.gen-tag.outputs.tag }}
+    secrets:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+
+  build-combined-arm64-linux:
+    needs:
+      - gen-tag
+    uses: ./.github/workflows/incl_build_trg.yaml
+    with:
+      target: genvm-arm64-linux
+      executor_version: ${{ needs.gen-tag.outputs.tag }}
+    secrets:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+
+  build-combined-arm64-macos:
+    needs:
+      - gen-tag
+    uses: ./.github/workflows/incl_build_trg.yaml
+    with:
+      target: genvm-arm64-macos
       executor_version: ${{ needs.gen-tag.outputs.tag }}
     secrets:
       GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
@@ -238,6 +278,9 @@ jobs:
       - build-linux-arm64
       - build-macos-arm64
       - build-runners-all
+      - build-combined-amd64-linux
+      - build-combined-arm64-linux
+      - build-combined-arm64-macos
       - test-linux-amd64
       - test-linux-arm64
       - test-macos-arm64
@@ -259,6 +302,9 @@ jobs:
           curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64-executor.tar.xz ${{ needs.build-linux-amd64.outputs.secondary_artifact_url }}
           curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64-executor.tar.xz ${{ needs.build-linux-arm64.outputs.secondary_artifact_url }}
           curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64-executor.tar.xz ${{ needs.build-macos-arm64.outputs.secondary_artifact_url }}
+          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-amd64-linux.tar.xz ${{ needs.build-combined-amd64-linux.outputs.artifact_url }}
+          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-arm64-linux.tar.xz ${{ needs.build-combined-arm64-linux.outputs.artifact_url }}
+          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-arm64-macos.tar.xz ${{ needs.build-combined-arm64-macos.outputs.artifact_url }}
 
       - run: |
           git tag ${{ needs.gen-tag.outputs.tag }} && \
@@ -287,6 +333,9 @@ jobs:
             genvm-linux-amd64-executor.tar.xz
             genvm-linux-arm64-executor.tar.xz
             genvm-macos-arm64-executor.tar.xz
+            genvm-amd64-linux.tar.xz
+            genvm-arm64-linux.tar.xz
+            genvm-arm64-macos.tar.xz
           name: Release ${{ needs.gen-tag.outputs.tag }}
           tag_name: ${{ needs.gen-tag.outputs.tag }}
           body_path: release-notes.md
