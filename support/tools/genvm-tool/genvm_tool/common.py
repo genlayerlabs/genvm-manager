@@ -9,6 +9,7 @@ engine (tool profiles, filtering, runner, builtins) lives in
 import functools
 import json
 import os
+import re
 import subprocess
 import types
 from dataclasses import dataclass
@@ -45,6 +46,7 @@ class Context:
 	root: Path
 	logger: formatter.Formatter
 	printer: formatter.Sink
+	python_command: list[str]
 	# The manager's loaded `.genvm-tool.py` module (or None if absent). Populated
 	# once in `__main__` before dispatch; subcommands query its exported funcs.
 	project: types.ModuleType | None = None
@@ -103,6 +105,11 @@ def active_versions(root: Path) -> list[str]:
 	return sorted(vers, key=_ver_key)
 
 
+# Release/branch-model branches (`main`, a version branch `v0.3.x`, or a dev
+# branch `v0.3-dev`) — already line-scoped, so they are never feature-namespaced.
+_MODEL_BRANCH = re.compile(r'main|v[\d.]+\.x|v[\d.]+-dev')
+
+
 class Repo:
 	"""One git repo in the umbrella: the manager or an executor submodule."""
 
@@ -127,6 +134,30 @@ class Repo:
 		"""Make a repo-relative path manager-root-relative."""
 		return f'{self.rel}/{rel_path}' if self.rel else rel_path
 
+	@property
+	def line(self) -> str | None:
+		"""The version-line tag (e.g. `v0.3`) for an executor submodule, or None
+		for the manager."""
+		m = re.fullmatch(r'executors/(v\d+\.\d+)\.x', self.name)
+		return m.group(1) if m else None
+
+	def feature_branch(self, name: str) -> str:
+		"""Physical branch name for the logical feature branch `name` in this repo.
+
+		The manager is its own repo, so it carries `name` verbatim. Every executor
+		submodule, however, shares ONE remote (`genvm-executor`): a bare `name`
+		would collide between two active lines that branch off it at once. So an
+		executor feature branch is namespaced under `pr/<line>/` (e.g.
+		`pr/v0.3/<name>`) — the `<line>` segment is what keeps the two lines
+		distinct, matching how the release branches (`v0.3-dev`, `v0.3.x`) are
+		already line-scoped and thus never clash. Release-model branches and an
+		already-prefixed `name` pass through unchanged (idempotent).
+		"""
+		line = self.line
+		if line is None or name.startswith(f'pr/{line}/') or _MODEL_BRANCH.fullmatch(name):
+			return name
+		return f'pr/{line}/{name}'
+
 
 def discover_repos(root: Path, which: str = 'all') -> list[Repo]:
 	repos = [Repo('manager', root, '')]
@@ -148,6 +179,32 @@ def executor_rels(root: Path) -> set[str]:
 
 
 # --- git -------------------------------------------------------------------
+
+# git scopes itself to one repo through these variables. A pre-commit / commit-msg
+# hook runs with them set to the *parent* repo (GIT_INDEX_FILE points at the
+# in-progress commit's index, GIT_DIR at the parent .git, ...). Because we operate
+# on each repo — and its submodules — by explicit path (`git -C <path>`), those
+# inherited values must be dropped: otherwise a submodule `git` reads the parent's
+# index/objects and dies (e.g. `git diff --cached` -> exit 128, "unable to read
+# <sha>"). See `strip_inherited_git_env`.
+_INHERITED_GIT_ENV_VARS = (
+	'GIT_DIR',
+	'GIT_WORK_TREE',
+	'GIT_INDEX_FILE',
+	'GIT_PREFIX',
+	'GIT_COMMON_DIR',
+	'GIT_OBJECT_DIRECTORY',
+	'GIT_ALTERNATE_OBJECT_DIRECTORIES',
+	'GIT_NAMESPACE',
+)
+
+
+def strip_inherited_git_env() -> None:
+	"""Drop the repo-scoping GIT_* variables inherited from a parent git hook, so
+	our per-repo `git -C <path>` calls discover each repo from its own path
+	instead of being pinned to the invoking repo."""
+	for var in _INHERITED_GIT_ENV_VARS:
+		os.environ.pop(var, None)
 
 
 def _git_z(repo: Repo, *args: str) -> list[str]:

@@ -168,8 +168,13 @@ root_dir = script_dir
 while not root_dir.joinpath(MONO_REPO_ROOT_FILE).exists():
 	root_dir = root_dir.parent
 MONOREPO_CONF = json.loads(root_dir.joinpath(MONO_REPO_ROOT_FILE).read_text())
-sys.path.append(str(root_dir.joinpath(*MONOREPO_CONF['py-std'])))
-sys.path.append(str(root_dir.joinpath(*MONOREPO_CONF['py-emb'])))
+active_versions = MONOREPO_CONF['active-versions']
+primary_executor = root_dir / 'executors' / f'{active_versions[0]}.x'
+py_std = primary_executor / 'runners' / 'genlayer-py-std' / 'src'
+py_emb = primary_executor / 'runners' / 'genlayer-py-std' / 'src-emb'
+
+sys.path.append(str(py_std))
+sys.path.append(str(py_emb))
 
 os.environ['GENERATING_DOCS'] = 'true'
 

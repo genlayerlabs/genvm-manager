@@ -1,4 +1,5 @@
 use base64::Engine;
+use genlayer_calldata as calldata;
 use genvm_common::*;
 use genvm_modules_interfaces::GenericValue;
 use serde::{Deserialize, Serialize};
@@ -234,8 +235,8 @@ async fn loop_one_inner_handle<T, R>(
 where
     T: calldata::codec::Decode + 'static,
 {
-    let payload = genvm_common::calldata::decode_obj(text)
-        .with_context(|| format!("parsing calldata format {text:?}"))?;
+    let payload =
+        calldata::decode_obj(text).with_context(|| format!("parsing calldata format {text:?}"))?;
     handler
         .handle(payload)
         .await
@@ -288,7 +289,7 @@ where
             },
         };
 
-        let message = genvm_common::calldata::encode_obj(&res);
+        let message = calldata::encode_obj(&res);
 
         write_message(stream, &message)
             .await
@@ -310,7 +311,7 @@ where
     };
 
     let genvm_hello: genvm_modules_interfaces::GenVMHello =
-        genvm_common::calldata::decode_obj(&data).context("decoding GenVMHello")?;
+        calldata::decode_obj(&data).context("decoding GenVMHello")?;
 
     Ok(Some(genvm_hello))
 }

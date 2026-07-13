@@ -20,7 +20,7 @@ The recommended import pattern has changed:
     import genlayer as gl
     from genlayer.types import *
 
-The ``from genlayer import *`` star-import previously brought ``gl`` (a lazy proxy to ``genlayer.gl``), all types, and storage names into scope. Now ``import genlayer as gl`` gives you direct access to submodules (``gl.contract``, ``gl.vm``, ``gl.message``, ``gl.chain``, etc.), decorators (``gl.public``, ``gl.private``), and storage types (``gl.TreeMap``, ``gl.DynArray``, ``gl.Array``). The ``from genlayer.types import *`` import brings the type aliases (``u8``..``u256``, ``i8``..``i256``, ``Address``, ``bigint``, etc.) into local scope.
+The ``from genlayer import *`` star-import previously brought ``gl`` (a lazy proxy to ``genlayer.gl``), all types, and storage names into scope. Now ``import genlayer as gl`` gives you direct access to submodules (``gl.contract``, ``gl.vm``, ``gl.message``, ``gl.chain``, ``gl.storage``, etc.) and decorators (``gl.public``, ``gl.private``). The ``from genlayer.types import *`` import brings the type aliases (``u8``..``u256``, ``i8``..``i256``, ``Address``, ``bigint``, etc.) into local scope.
 
 Module Path Changes
 ~~~~~~~~~~~~~~~~~~~~~
@@ -257,21 +257,23 @@ Two runtime helpers were added: ``gl.vm.register_runner(code)`` registers a runn
 Storage
 ~~~~~~~
 
-``allow_storage`` decorator is renamed to ``allow`` and is available as ``gl.storage.allow`` (also re-exported at ``gl.allow``):
+Storage types (``DynArray``, ``Array``, ``TreeMap``) and the ``allow`` decorator are accessible via ``gl.storage``:
 
 .. code-block:: python
 
     # v0.2.x
-    @gl.storage.allow_storage
-    class MyRecord:
-        x: u32
+    x: gl.DynArray[str]
+    m: gl.TreeMap[str, u32]
+    @gl.allow
+    class MyRecord: ...
 
     # v0.3.0
+    x: gl.storage.DynArray[str]
+    m: gl.storage.TreeMap[str, u32]
     @gl.storage.allow
-    class MyRecord:
-        x: u32
+    class MyRecord: ...
 
-A new ``gl.storage.Pickled[T]`` helper is available for storing arbitrary picklable objects.
+``allow_storage`` was renamed to ``allow`` (accessible as ``gl.storage.allow``). A new ``gl.storage.Pickled[T]`` helper is available for storing arbitrary picklable objects.
 
 Decorators
 ~~~~~~~~~~
@@ -334,5 +336,13 @@ Summary of Renames
      - ``gl.message.raw``
    * - ``gl.storage.allow_storage``
      - ``gl.storage.allow``
+   * - ``gl.allow``
+     - ``gl.storage.allow``
+   * - ``gl.DynArray``
+     - ``gl.storage.DynArray``
+   * - ``gl.Array``
+     - ``gl.storage.Array``
+   * - ``gl.TreeMap``
+     - ``gl.storage.TreeMap``
    * - ``UserError(msg: str).message``
      - ``UserError(data: Encodable).data``

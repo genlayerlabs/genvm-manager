@@ -42,6 +42,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dcfed56ad506cb2c684a14971b8861fdc3baaaae314b9e5f9bb532cbe3ba7a4f"
 
 [[package]]
+name = "arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+
+[[package]]
 name = "arrayvec"
 version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -134,9 +140,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "chrono"
-version = "0.4.43"
+version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fac4744fb15ae8337dc853fee7fb3f4e48c0fbaa23d0afe49c447b4fab126118"
+checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
  "iana-time-zone",
  "js-sys",
@@ -271,27 +277,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "genlayer_sdk"
-version = "0.0.2"
-dependencies = [
- "bytes",
- "chrono",
- "genlayer_calldata",
- "hex",
- "num-bigint",
- "primitive-types",
- "serde",
- "serde_bytes",
- "sha3",
-]
-
-[[package]]
 name = "genvm-modules-interfaces"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "arbitrary",
+ "bytes",
+ "chrono",
  "genlayer_calldata",
- "genlayer_sdk",
  "num-bigint",
  "num-traits",
  "primitive-types",

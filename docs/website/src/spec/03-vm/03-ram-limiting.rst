@@ -12,20 +12,52 @@ RAM Consumption
 
 Every resource allocation subtracts from the RAM budget of the current :ref:`gvm-def-vm-mode`.
 When an allocation would cause the remaining budget to become negative,
-the :term:`sub-VM` exits with :ref:`gvm-def-vm-error` with :ref:`gvm-def-str-trie-value-vm-error-OOM-RAM` message.
+the :term:`sub-VM` exits with :ref:`gvm-def-vm-error` carrying the
+:ref:`gvm-def-str-trie-value-vm-error-out-of-memory` message, or one of its
+:ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-memory` /
+:ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-table` variants for the
+corresponding WASM allocations. ``memory.grow`` and ``table.grow`` are the
+exception: at runtime they are recoverable rather than fatal (see the two
+bullets below).
 
 The following operations consume RAM:
 
-- **WASM memory growth**: each page (65536 octets) costs its size in bytes
-- **WASM table growth**: each table entry costs :ref:`gvm-def-consts-value-memory-limiter-consts-table-entry` octets
+- **WASM memory growth**: each page (65536 octets) costs its size in bytes.
+  A runtime ``memory.grow`` that would exceed the budget is **not** fatal:
+  following the WASM specification it leaves memory unchanged and evaluates to
+  :math:`-1`, so the guest can react. Only the memory's initial,
+  instantiation-time reservation being unmet makes the :term:`sub-VM` exit with
+  :ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-memory`.
+- **WASM table growth**: each table entry costs :ref:`gvm-def-consts-value-memory-limiter-consts-table-entry` octets.
+  As with memory, a runtime ``table.grow`` beyond the budget evaluates to
+  :math:`-1`; only the instantiation-time reservation being unmet exits with
+  :ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-table`.
 - **File mapping**: :ref:`gvm-def-consts-value-memory-limiter-consts-file-mapping` octets base cost plus the length of the filename in bytes
 - **File descriptor allocation**: :ref:`gvm-def-consts-value-memory-limiter-consts-fd-allocation` octets per descriptor
+- **Runner loading**: the first load of a :term:`runner` in a :term:`sub-VM`
+  costs :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus the runner's size in octets. A runner already
+  in that :term:`sub-VM`'s loaded set costs nothing, and the charge is released
+  when the :term:`sub-VM` finishes, like any other charge. Loading covers
+  spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``
+  and ``RegisterRunner`` ``gl_call``\ s, and receiving a custom-runner grant at
+  sub-VM creation (see :doc:`../02-execution-environment/04-runners` and
+  :ref:`gvm-meta-property-custom-runners`)
+- **Sub-VM creation**: each new :term:`sub-VM` costs
+  :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets,
+  charged to the new :term:`sub-VM` at creation (see :doc:`01-startup`) and
+  released when it finishes
+
+The runner load cost (:ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost`) is a fixed per-load
+overhead
 
 RAM Release
 -----------
 
 File content memory is released when the corresponding file descriptor is closed via ``fd_close``.
 When a :term:`sub-VM` finishes execution, all remaining RAM consumed by it is released back to the shared budget.
+This applies to runner charges as well: memory consumed by loading or
+registering a runner is released when the registering :term:`sub-VM` finishes,
+like any other charge. There are no permanent charges.
 
 Other Limits
 ------------

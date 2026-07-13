@@ -21,8 +21,10 @@ General runner config (``artifacts_dir`` / ``extra_python_paths``) lives in
 its own ``hooks``.
 """
 
+import genvm_tool
 
-def hooks(ctx):
+
+def hooks(ctx: 'genvm_tool.common.Context'):
 	"""Manager commit-hook definitions (was support/nix/precommit/hooks.toml).
 
 	Tools resolve from the sibling flake's buildEnv (``nix = "<flake output>"``);
@@ -73,6 +75,15 @@ def hooks(ctx):
 			'types_or': ['toml'],
 		},
 		{
+			'id': 'toml-format',
+			'nix': 'taplo',
+			'entry': 'taplo',
+			'args': ['format', '--check'],
+			'fix_args': ['format'],
+			'types_or': ['toml'],
+			'pass_filenames': True,
+		},
+		{
 			'id': 'check-merge-conflict',
 			'nix': 'pre-commit-hooks',
 			'entry': 'check-merge-conflict',
@@ -98,7 +109,6 @@ def hooks(ctx):
 			'fix_args': ['format'],
 			'types_or': ['python'],
 		},
-		# --- python / lua / ts (manager-owned languages) -------------------
 		{
 			'id': 'ruff-check',
 			'nix': 'ruff',
@@ -161,8 +171,12 @@ def hooks(ctx):
 			# independently (its own repo/hooks own that); we never touch it.
 			'id': 'check-cargo-versions',
 			'local': True,
-			'entry': 'support/ci/check-versions.py',
-			'args': ['sync'],
+			'entry': ctx.python_command[0],
+			'args': [
+				*ctx.python_command[1:],
+				str(ctx.root / 'support/ci/check-versions.py'),
+				'sync',
+			],
 			'pass_filenames': False,
 			'files': r'^(implementation/Cargo\.toml|\.genvm-monorepo-root)$',
 		},
@@ -170,6 +184,19 @@ def hooks(ctx):
 			'id': 'markdown-local-links',
 			'builtin': 'md-local-links',
 			'types_or': ['markdown'],
+		},
+		# --- commit-msg ----------------------------------------------------
+		{
+			'id': 'check-commit-message',
+			'local': True,
+			'entry': ctx.python_command[0],
+			'args': [
+				*ctx.python_command[1:],
+				str(ctx.root / 'support/scripts/check-commit-message.py'),
+				'--message-file',
+			],
+			'stages': ['commit-msg'],
+			'pass_filenames': False,
 		},
 	]
 
@@ -326,6 +353,7 @@ def tests(ctx):
 		)
 		no_manager = getattr(ctx.configuration.args, 'no_manager', False)
 		no_webdriver = getattr(ctx.configuration.args, 'no_webdriver', False)
+		ci = getattr(ctx.configuration.args, 'ci', False)
 
 		manager_port = genvm.get_manager_port(ctx.configuration)
 
@@ -338,13 +366,14 @@ def tests(ctx):
 				bin_path=build_dir.joinpath('out', 'bin', 'genvm-modules'),
 				log_path=tests_output_root.joinpath('manager.log'),
 				env=ctx.configuration,
+				ci=ci,
 			)
 			# Create webdriver service
 			if no_webdriver:
 				webdriver_impl = genvm.NoOpService()
 			else:
 				webdriver_impl = genvm_tool.tests.exec.service.FunctionService(
-					lambda: genvm.start_webdriver_service(ctx.configuration)
+					lambda: genvm.start_webdriver_service(ctx.configuration, ci=ci)
 				)
 			# This starts Llm and Web modules on the manager
 			modules_impl = genvm.ModulesService(
@@ -374,6 +403,7 @@ def tests(ctx):
 			manager_service=manager_service,
 			modules_service=modules_service,
 			webdriver_service=webdriver_service,
+			ci=ci,
 		)
 
 		ctx.collect_dir('tests/system/permits', manager_service=manager_service)

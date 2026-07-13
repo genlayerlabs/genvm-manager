@@ -28,6 +28,11 @@ done
 [ -f "$dir/.genvm-monorepo-root" ] || exit 0  # standalone checkout: skip
 tool="$dir/{cache}/{link}/bin/genvm-tool"
 [ -x "$tool" ] || {{ echo "genvm-tool not built (run 'genvm-tool hook install'); skipping {stage}" >&2; exit 0; }}
+# The dev shell exports PYTHONPATH pointing at *its* genvm-tool build; left set,
+# the hook's python would import genvm_tool from there instead of the tool we
+# just resolved (running stale code). The nix wrapper bakes in every dep, so drop
+# the inherited python path and let it use its own.
+unset PYTHONPATH NIX_PYTHONPATH
 exec "$tool" hook run --repo {repo} --hook-stage {stage} -- "$@"
 """
 

@@ -73,7 +73,6 @@ if [[ -n "${COMPRESSION:-}" && "$COMPRESSION" != "skip" ]]; then
 		echo "Error: --compression must be 1-9 or 'skip'" >&2
 		exit 1
 	fi
-	exit 1
 fi
 
 HEAD_REVISION=$(git rev-parse HEAD)
@@ -89,7 +88,7 @@ source "$SCRIPT_DIR/_common.sh"
 cat <<EOF > flake-config.json
 {
   "executor-version": "$EXECUTOR_VERSION",
-  "repo-url": "https://github.com/genlayerlabs/genvm.git",
+  "repo-url": "https://github.com/genlayerlabs/genvm-manager.git",
   "head-revision": "$HEAD_REVISION"
 }
 EOF
@@ -99,7 +98,9 @@ if [[ -z "${NO_REFETCH:-}" ]]; then
 fi
 
 mkdir -p build
-nix build -o "build/out-$TARGET" -v -L ".#$TARGET" --show-trace
+# `?submodules=1`: the executor lines are git submodules; without it the flake
+# source tree has empty executors/<line>.x dirs and evaluation fails.
+nix build -o "build/out-$TARGET" -v -L ".?submodules=1#$TARGET" --show-trace
 
 PREV=$(readlink -f .)
 pushd "build/out-$TARGET"

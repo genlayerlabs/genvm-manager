@@ -24,6 +24,7 @@ import genvm_tool.tests
 import origin.base_host as base_host
 import origin.calldata as gvm_calldata
 import origin.fees as fees
+import origin.log_asserts as log_asserts
 import origin.logger as origin_logger
 import origin.public_abi as public_abi
 from genvm_tool.tests.exec.command import Command, RunMode
@@ -54,13 +55,12 @@ def _is_ignore_hash_enabled() -> bool:
 	return '--ignore-hash' in sys.argv
 
 
-# Integration cases live in the executor checkout (per-version, per-branch).
-# The active executor version line is mounted as a submodule at executors/v0.3.x.
-# TODO(multi-version): iterate over executors/* once several minors coexist.
-# The test harness (templates, runner) is version-independent and lives in the
-# manager root.
-EXEC_SUBDIR = 'executors/v0.3.x'
-CASES_DIR = local_ctx.shared.root_dir.joinpath(EXEC_SUBDIR, 'tests', 'integration')
+# Integration cases live per-version in each executor checkout
+# (executors/<line>.x/tests/integration). `integration_test` iterates the active
+# version lines from .genvm-monorepo-root and runs each line's suite against that
+# line's own executor (see `integration_test_single_executor`, which resolves the
+# line's cases dir and reroute target). The harness itself (templates, runner) is
+# version-independent and lives in the manager root.
 TEMPLATES_DIR = local_ctx.shared.root_dir.joinpath('tests', 'templates')
 
 # Default environment for tests
@@ -94,6 +94,73 @@ class _SavedLog(typing.TypedDict):
 	level: str
 	msg: str
 	kwargs: dict
+
+
+_SHORT_TEXT_LIMIT = 2000
+_SHORT_LIST_LIMIT = 12
+_NOISY_CONTEXT_KEYS = frozenset(
+	{
+		'exp',
+		'got',
+		'genvm_log',
+		'log',
+		'logs',
+		'semantics',
+		'stderr',
+		'stdout',
+	}
+)
+
+
+def _shorten_text(value: str, limit: int = _SHORT_TEXT_LIMIT) -> str:
+	if len(value) <= limit:
+		return value
+	omitted = len(value) - limit
+	return f'<truncated {omitted} chars>\n{value[-limit:]}'
+
+
+def _shorten_value(value: typing.Any) -> typing.Any:
+	if isinstance(value, str):
+		return _shorten_text(value)
+	if isinstance(value, bytes):
+		if len(value) <= _SHORT_TEXT_LIMIT:
+			return value
+		return value[:_SHORT_TEXT_LIMIT] + b'<truncated>'
+	if isinstance(value, BaseException):
+		return {
+			'type': value.__class__.__name__,
+			'message': str(value),
+		}
+	if isinstance(value, list):
+		if len(value) <= _SHORT_LIST_LIMIT:
+			return value
+		return [
+			*value[:_SHORT_LIST_LIMIT],
+			f'<truncated {len(value) - _SHORT_LIST_LIMIT} items>',
+		]
+	return value
+
+
+def _short_failure_context(
+	context: dict[str, typing.Any], artifacts_dir: Path | None = None, *, ci: bool
+) -> dict[str, typing.Any]:
+	if ci:
+		return context
+
+	short = {
+		k: _shorten_value(v) for k, v in context.items() if k not in _NOISY_CONTEXT_KEYS
+	}
+	for key in ('stderr', 'stdout'):
+		if key in context and context[key]:
+			short[f'{key}_tail'] = _shorten_value(context[key])
+	if 'logs' in context:
+		short['log_count'] = len(context['logs'])
+	if 'genvm_log' in context:
+		short['genvm_log_count'] = len(context['genvm_log'])
+	if artifacts_dir is not None:
+		short['artifacts_dir'] = str(artifacts_dir)
+	short['hint'] = 'run with --ci for full inline failure context'
+	return short
 
 
 def _make_log_adapter(formatter: genvm_tool.tests.Formatter) -> 'origin_logger.Logger':
@@ -167,6 +234,7 @@ class IntegrationPrepareCase(genvm_tool.tests.test.Case):
 	jsonnet_path: Path
 	top_level_conf: dict
 	tmp_dir: Path
+	ci: bool
 
 	hidden: bool = True
 
@@ -180,6 +248,8 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 
 	description: genvm_tool.tests.test.Description
 	jsonnet_path: Path
+	cases_dir: Path
+	reroute_to: str
 	manager_service: genvm_tool.tests.stage.collection.Service
 	tree_path: str
 	parent_tree_path: str | None
@@ -187,7 +257,9 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 	total_steps: int
 	tmp_dir: Path
 	max_attempts: int
+	ignore_hash: bool = False
 	is_benchmark: bool = False
+	ci: bool = False
 
 	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
 		step = IntegrationSingleStep(self)
@@ -282,16 +354,21 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 			)
 			result = await cmd.run(local_ctx.shared, mode=RunMode.SILENT)
 			if result.exit_code != 0:
+				context = _short_failure_context(
+					{
+						'reason': 'prepare script failed',
+						'exit_code': result.exit_code,
+						'stdout': result.stdout,
+						'stderr': result.stderr,
+						'log': result.stderr,
+					},
+					tmp_dir,
+					ci=self._case.ci,
+				)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
-						context={
-							'reason': 'prepare script failed',
-							'exit_code': result.exit_code,
-							'stdout': result.stdout,
-							'stderr': result.stderr,
-							'log': result.stderr,
-						},
+						context=context,
 						elapsed_seconds=0,
 					)
 				)
@@ -384,6 +461,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		self._total_steps = case.total_steps
 		self._tmp_dir = case.tmp_dir
 		self._max_attempts = case.max_attempts
+		self._ignore_hash = case.ignore_hash
+		self._ci = case.ci
 
 	def to_str(self) -> str:
 		return f'<step {self._tree_path}: {self._test_case.jsonnet_path.name}>'
@@ -407,6 +486,11 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				# Raise FinishedEarlyException to stop subsequent steps
 				context = result.get('context', {})
 				context['logs'] = sub_logger.saved_logs
+				context = _short_failure_context(
+					context,
+					self._tmp_dir.joinpath(self._tree_path),
+					ci=self._ci,
+				)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
@@ -421,7 +505,11 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				max_attempts=self._max_attempts,
 				test_name=str(self._test_case.description.name),
 				tree_path=self._tree_path,
-				context=result.get('context', {}),
+				context=_short_failure_context(
+					result.get('context', {}),
+					self._tmp_dir.joinpath(self._tree_path),
+					ci=self._ci,
+				),
 			)
 
 		# Should not reach here
@@ -509,13 +597,16 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		single_conf['message']['origin_address'] = Address(
 			single_conf['message']['origin_address']
 		)
+		single_conf['message']['signer_address'] = Address(
+			single_conf['message']['signer_address']
+		)
 
 		path_to_which_leader_puts_result = my_tmp_dir.parent.joinpath(
 			my_tmp_dir.name[:-1] + '_leader_nondet.pickle'
 		)
 
 		# Set up paths
-		rel_path = jsonnet_path.relative_to(CASES_DIR)
+		rel_path = jsonnet_path.relative_to(self._test_case.cases_dir)
 		mock_sock_path = Path('/tmp', 'genvm-test', rel_path.with_suffix(f'.sock{suff}'))
 		mock_sock_path.parent.mkdir(exist_ok=True, parents=True)
 
@@ -547,6 +638,17 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						encoded_nondet.append(
 							bytes([public_abi.ResultCode.VM_ERROR]) + res['value'].encode('utf-8')
 						)
+					elif res['kind'] == 'rollback':
+						# v0.2.x: a rollback is a user error carrying a plain UTF-8
+						# string (v0.2 user errors are string-only).
+						encoded_nondet.append(
+							bytes([public_abi.ResultCode.USER_ERROR]) + res['value'].encode('utf-8')
+						)
+					elif res['kind'] == 'contract_error':
+						# v0.2.x: a vm error carrying a plain UTF-8 string.
+						encoded_nondet.append(
+							bytes([public_abi.ResultCode.VM_ERROR]) + res['value'].encode('utf-8')
+						)
 					elif res['kind'] == 'raw':
 						encoded_nondet.append(bytes(res['value']))
 					else:
@@ -569,7 +671,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		# Get manager URI from the service
 		manager_svc = self._test_case.manager_service
 		port = manager_svc.meta['port']
-		reroute_to = manager_svc.meta.get('reroute_to', '')
+		reroute_to = self._test_case.reroute_to
 		manager_uri = f'http://localhost:{port}'
 
 		# Run the test
@@ -589,9 +691,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				if case_permissions is not None:
 					request_extra['permissions'] = case_permissions
 				dflt_bucket = 2**200
-				bucket_totals: list[int] = single_conf.get(
-					'bucket_totals', [dflt_bucket, dflt_bucket]
-				)
+				bucket_totals: list[int] = single_conf.get('bucket_totals', [dflt_bucket] * 10)
 
 				default_message_fee_allocation = [
 					fees.DEFAULT_EXTERNAL_MESSAGE_ALLOC,
@@ -761,6 +861,32 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				# Create expected output file
 				exp_semantics_path.write_text(semantics)
 
+		# ADR-012 load-action log-grep assertions. A case may declare
+		# `runner_load_asserts` on a step to assert on the executor's stable
+		# `runner load` log records (charge counts, per-runner sizes, cached vs
+		# charged); see origin.log_asserts for the schema. Gated on the main mode
+		# (semantics_components is non-empty only there) so a nondet leader's
+		# extra loads do not make validator/sandbox re-runs flaky.
+		runner_load_asserts = single_conf.get('runner_load_asserts')
+		if runner_load_asserts and semantics_components:
+			load_errors = log_asserts.check(
+				res.genvm_log,
+				runner_load_asserts,
+				code_len=(len(code) if code is not None else None),
+			)
+			if load_errors:
+				return {
+					'passed': False,
+					'context': {
+						'reason': 'runner load assertion failed',
+						'tree_path': tree_path,
+						'errors': load_errors,
+						'runner_loads': log_asserts.summarize(res.genvm_log),
+						'stderr': res.stderr,
+						'genvm_log': res.genvm_log,
+					},
+				}
+
 		my_tmp_dir.joinpath('hash').write_bytes(base64.b64encode(hash_data))
 
 		expected_hash_path = single_conf['expected_hash_path']
@@ -770,7 +896,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			res.result_kind == public_abi.ResultCode.VM_ERROR and res.result_data == 'timeout'
 		):
 			check_expected_hash = False  # Don't check hash for timeouts, as they can be flaky
-		if _is_ignore_hash_enabled():
+		if _is_ignore_hash_enabled() or self._ignore_hash:
 			check_expected_hash = False
 
 		if check_expected_hash:
@@ -813,6 +939,30 @@ def integration_test(
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
+) -> None:
+	active_versions: list[str] = json.loads(
+		local_ctx.shared.root_dir.joinpath('.genvm-monorepo-root').read_text()
+	)['active-versions']
+	for ver in active_versions:
+		integration_test_single_executor(
+			ctx,
+			executor_version=ver,
+			manager_service=manager_service,
+			modules_service=modules_service,
+			webdriver_service=webdriver_service,
+			ci=ci,
+		)
+
+
+def integration_test_single_executor(
+	ctx: genvm_tool.tests.stage.collection.Context,
+	*,
+	executor_version: str,
+	manager_service: genvm_tool.tests.stage.collection.Service,
+	modules_service: genvm_tool.tests.stage.collection.Service,
+	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
 ) -> None:
 	"""
 	Collect integration tests from tests/integration/ directory.
@@ -823,6 +973,25 @@ def integration_test(
 
 	Steps depend on /prepare, and child steps depend on their parent step.
 	"""
+
+	import genvm_tool.common
+
+	EXEC_SUBDIR = os.environ.get(
+		'GENVM_TEST_EXEC_SUBDIR', f'executors/{executor_version}.x'
+	)
+	executor_root = local_ctx.shared.root_dir / EXEC_SUBDIR
+	CASES_DIR = executor_root / 'tests' / 'integration'
+
+	# Run this line's cases against this line's own executor. The version key
+	# (e.g. "v0.2") maps to the concrete built version (e.g. "v0.2.16").
+	reroute_to = build_info['executor_versions'].get(executor_version, executor_version)
+
+	executor_project = genvm_tool.common.load_project(executor_root)
+	executor_integration_fn = getattr(executor_project, 'integration', None)
+	executor_integration_conf: dict = (
+		executor_integration_fn() if executor_integration_fn else {}
+	)
+	ignore_hash = executor_integration_conf.get('ignore-hash', False)
 
 	jsonnet_files = list(CASES_DIR.glob('**/*.jsonnet'))
 	jsonnet_files.sort()
@@ -837,9 +1006,13 @@ def integration_test(
 				_single_integration_test,
 				ctx,
 				jsonnet_file,
+				cases_dir=CASES_DIR,
+				reroute_to=reroute_to,
+				ignore_hash=ignore_hash,
 				manager_service=manager_service,
 				modules_service=modules_service,
 				webdriver_service=webdriver_service,
+				ci=ci,
 			): jsonnet_file
 			for jsonnet_file in jsonnet_files
 		}
@@ -851,13 +1024,17 @@ def _single_integration_test(
 	ctx: genvm_tool.tests.stage.collection.Context,
 	jsonnet_file: Path,
 	*,
+	cases_dir: Path,
+	reroute_to: str,
+	ignore_hash: bool,
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
 ) -> None:
 	import _jsonnet
 
-	rel_path = jsonnet_file.relative_to(CASES_DIR)
+	rel_path = jsonnet_file.relative_to(cases_dir)
 
 	# Determine stability tag from path
 	tags: set[str] = {'integration'}
@@ -945,6 +1122,7 @@ def _single_integration_test(
 			jsonnet_path=jsonnet_file,
 			top_level_conf=top_level_conf,
 			tmp_dir=tmp_dir,
+			ci=ci,
 		)
 	)
 
@@ -977,6 +1155,8 @@ def _single_integration_test(
 			IntegrationSingleCase(
 				description=step_desc,
 				jsonnet_path=jsonnet_file,
+				cases_dir=cases_dir,
+				reroute_to=reroute_to,
 				manager_service=manager_service,
 				tree_path=tree_path,
 				parent_tree_path=single_conf.get('parent_tree_path'),
@@ -984,6 +1164,8 @@ def _single_integration_test(
 				total_steps=total_steps,
 				tmp_dir=tmp_dir,
 				max_attempts=max_attempts,
+				ignore_hash=ignore_hash,
 				is_benchmark=is_benchmark,
+				ci=ci,
 			)
 		)

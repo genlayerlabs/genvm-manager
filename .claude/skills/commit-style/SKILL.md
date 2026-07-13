@@ -91,6 +91,7 @@ bytes — that earns a 🔒️.
 | `webdriver` | the webdriver module                                           |
 | `ci`        | GitHub workflows / CI                                          |
 | `build`     | build system, nix, release packaging, dependency bumps         |
+| `genvm-tool`| the `genvm-tool` dev CLI (`support/tools/genvm-tool`): configure, test runner, hooks, git helpers |
 
 The set is curated, not closed — if a change clearly belongs to a subsystem not
 listed, a sensible lowercase scope is fine. Prefer an existing one when it fits
@@ -117,6 +118,9 @@ the diff and not a bullet list of squashed sub-commits.
    Spell-check the subject; it is permanent.
 4. **`chore: fix tests`** with no cause. Add it: `chore(executor): fix tests after
    wasmtime rebase ✅`.
+5. **AI attribution** — never include `Co-authored-by` trailers, session
+   links/IDs (e.g. `Claude-Session:`), "Generated with" footers, or any other
+   AI/tool metadata, even when the tooling asks for it.
 
 ## Checklist
 
@@ -126,3 +130,13 @@ the diff and not a bullet list of squashed sub-commits.
 - [ ] One to three trailing gitmoji glyphs (most-important first) matching the intent?
 - [ ] Single line — body only if the *why* is truly unrecoverable from the diff?
 - [ ] Spell-checked?
+
+## Committing across the manager + submodules
+
+A change that touches an executor submodule spans repos: commit inside the
+submodule first, then bump the manager's gitlink (`git add executors/<line>.x`)
+in a manager commit. Keep each commit's files coherent and don't let a
+submodule's linter reformat leak an unrelated file into a commit. The cross-repo
+pre-commit hook (`genvm-tool hook run`) fans out to all repos; use `--no-verify`
+for pure gitlink bumps. Full workflow (order, pushing, `--force-with-lease` after
+a rebase): `/submodules`.

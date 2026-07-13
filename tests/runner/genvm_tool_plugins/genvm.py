@@ -22,6 +22,8 @@ def get_manager_port(env: genvm_tool.tests.stage.configuration.Env) -> int:
 
 async def start_webdriver_service(
 	env: genvm_tool.tests.stage.configuration.Env,
+	*,
+	ci: bool = False,
 ) -> genvm_tool.tests.exec.service.Handle:
 	context_dir = local_ctx.shared.root_dir.joinpath('webdriver')
 
@@ -36,7 +38,10 @@ async def start_webdriver_service(
 			proc_env[k] = v
 
 	return await docker.ContainerHandle.run(
-		['-p', f'{port}:4444', image_sha], cwd=local_ctx.shared.root_dir, env=proc_env
+		['-p', f'{port}:4444', image_sha],
+		cwd=local_ctx.shared.root_dir,
+		env=proc_env,
+		ci=ci,
 	)
 
 
@@ -54,6 +59,8 @@ async def _read_log_pipe(
 	stream: asyncio.StreamReader,
 	log_file: typing.IO[str],
 	logger: genvm_tool.tests.Formatter,
+	*,
+	ci: bool,
 ) -> None:
 	while True:
 		line_bytes = await stream.readline()
@@ -65,13 +72,15 @@ async def _read_log_pipe(
 		try:
 			parsed = json.loads(line)
 			level = parsed.get('level', '')
-			if _LOG_LEVEL_PRIORITY.get(level, -1) >= _LOG_LEVEL_PRIORITY['info']:
+			min_level = 'info' if ci else 'warning'
+			if _LOG_LEVEL_PRIORITY.get(level, -1) >= _LOG_LEVEL_PRIORITY[min_level]:
 				message = parsed.get('message', line)
 				extra = {k: v for k, v in parsed.items() if k not in ('level', 'message')}
 				fmt_level = genvm_tool.tests.Formatter.Level.from_str(level)
 				logger.log(fmt_level, f'[manager] {message}', **extra)
 		except (json.JSONDecodeError, ValueError):
-			logger.warning(f'[manager] {line}')
+			if ci:
+				logger.warning(f'[manager] {line}')
 
 
 class ManagerHandle(genvm_tool.tests.exec.service.Handle):
@@ -132,10 +141,12 @@ class ManagerService(genvm_tool.tests.exec.service.Service):
 		env: genvm_tool.tests.stage.configuration.Env,
 		bin_path: Path,
 		log_path: Path | None = None,
+		ci: bool = False,
 	):
 		self._bin_path = bin_path
 		self._log_path = log_path
 		self._env = env
+		self._ci = ci
 
 	async def start(self) -> ManagerHandle:
 		log_file = None
@@ -162,8 +173,12 @@ class ManagerService(genvm_tool.tests.exec.service.Service):
 		if use_pipe:
 			logger = local_ctx.shared.logger
 			log_tasks = [
-				asyncio.create_task(_read_log_pipe(process.stdout, log_file, logger)),
-				asyncio.create_task(_read_log_pipe(process.stderr, log_file, logger)),
+				asyncio.create_task(
+					_read_log_pipe(process.stdout, log_file, logger, ci=self._ci)
+				),
+				asyncio.create_task(
+					_read_log_pipe(process.stderr, log_file, logger, ci=self._ci)
+				),
 			]
 
 		handle = ManagerHandle(port, process, log_file, log_tasks)

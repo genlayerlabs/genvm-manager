@@ -16,9 +16,18 @@ from pathlib import Path
 
 import shtab
 
-from . import cmd_build_manifest, cmd_configure, cmd_test, common, formatter, git, hook
+from . import (
+	cmd_build_manifest,
+	cmd_codegen,
+	cmd_configure,
+	cmd_test,
+	common,
+	formatter,
+	git,
+	hook,
+)
 
-TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest]
+TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest, cmd_codegen]
 GROUPS = [git, hook]
 
 
@@ -61,9 +70,7 @@ def _create_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
-	from dotenv import load_dotenv
-
-	load_dotenv()
+	sys.dont_write_bytecode = True
 
 	parser = _create_parser()
 	args = parser.parse_args()
@@ -88,12 +95,22 @@ def main() -> None:
 
 	try:
 		root = common.find_root()
+
+		env_file = root / '.env'
+		if env_file.exists():
+			from dotenv import load_dotenv
+
+			load_dotenv(env_file)
+
+		python_command = [sys.executable, '-B']
+
 		# Pre-subcommand: exec the manager's `.genvm-tool.py` so subcommands can
 		# ask it for the test suite (`tests`) and the manager's commit hooks.
 		ctx = common.Context(
 			root=root,
 			logger=logger,
 			printer=printer,
+			python_command=python_command,
 			project=common.load_project(root),
 		)
 		func = args.func

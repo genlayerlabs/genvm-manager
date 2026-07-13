@@ -23,6 +23,15 @@ from .logger import Logger
 ACCOUNT_ADDR_SIZE = 20
 SLOT_ID_SIZE = 32
 
+# Mirrors the executor's `DebugMode` enum (crates/common/src/debug_mode.rs).
+DebugMode = typing.Literal[
+	'disabled',
+	'safe',
+	'safe-unbounded',
+	'unsafe',
+	'unsafe-tracing',
+]
+
 # Default host-provided `node` fee constants (see fees.expr_prelude in
 # install/config/genvm.yaml). Values are strings (gas_data is Map<str, str>)
 # and are kept minimal/deterministic for tests. `validatorsPerRound` is
@@ -36,6 +45,10 @@ DEFAULT_GAS_DATA: dict[str, str] = {
 	'fixedProposeReceiptGas': '0',
 	'fixedMessageRevealGas': '0',
 	'genPerTimeUnit': '0',
+	# 0 = no per-phase timeunit floor, so default-allocation tests are unaffected.
+	'minTimeUnitsPerPhase': '0',
+	# 0 = no per-round execution-budget floor for balance-funded messages.
+	'messageBudgetFloor': '0',
 }
 
 
@@ -94,6 +107,7 @@ class Message(typing.TypedDict):
 	contract_address: Address
 	sender_address: Address
 	origin_address: Address
+	signer_address: Address
 	chain_id: int
 	value: typing.NotRequired[int]
 	is_init: bool
@@ -131,6 +145,8 @@ class PostMessageInner(typing.TypedDict):
 	fee_params: fees.InternalMessageParams
 	# ABI-encoded allocation subtree carried in the receipt under commitment modes.
 	subtree: bytes
+	# Chain `useBalance`: fee funded from the emitting contract's balance.
+	use_balance: bool
 
 
 class DeployContractInner(typing.TypedDict):
@@ -145,6 +161,8 @@ class DeployContractInner(typing.TypedDict):
 	fee_params: fees.InternalMessageParams
 	# ABI-encoded allocation subtree carried in the receipt under commitment modes.
 	subtree: bytes
+	# Chain `useBalance`: fee funded from the emitting contract's balance.
+	use_balance: bool
 
 
 class EmitEventInner(typing.TypedDict):
@@ -434,7 +452,7 @@ async def run_genvm(
 	manager_uri: str = 'http://127.0.0.1:3999',
 	ctx: Context,
 	is_sync: bool,
-	debug_mode: str = 'disabled',
+	debug_mode: DebugMode = 'disabled',
 	message: Message,
 	host_data: str = '',
 	gas_data: dict[str, str] | None = None,

@@ -252,3 +252,57 @@ A minimal, illustrative ``fees`` block::
 
 ``message_fee`` and ``message_receipt`` share ``bucket_no = 1`` here, so an outbound
 message debits both costs atomically against bucket 1.
+
+Message-Fee Allocation Matching
+-------------------------------
+
+The ``a.matchedFeeParams`` above is selected per outbound message from the call's
+allocation list (``accumulator.message_fee_allocation``). A node
+(``domain/fees.rs``, ``matches_internal`` / ``matches_external``) matches on kind
+(``External`` for ``EthSend``, else ``Internal``), ``on`` (internal only), and
+``recipient`` / ``call_key`` (each a wildcard ``None`` or an exact match). Selection
+is **first-match-wins** in list order (``find_map``); no match yields the
+``fee no_matching_node`` VM error.
+
+Wildcards are not reordered, so a wildcard node shadows every more-specific node
+after it: producers are advised to sort more-specific nodes ahead of wildcard ones.
+
+Funding modes
+~~~~~~~~~~~~~~
+
+An outgoing internal message is funded one of two ways:
+
+- **Allocation-matched (default).** The fee is matched against the allocation
+  tree as above, capped by the matched node's ``budget``, and consumes both the
+  ``message_fee`` and ``message_receipt`` buckets.
+- **Balance-funded (``use_balance``).** When a ``PostMessage`` / ``DeployContract``
+  sets ``use_balance`` (the chain's ``useBalance``, gated on
+  :ref:`gvm-perm-use-balance-for-message-fees`), allocation matching is skipped
+  entirely. The fee is metered from the guest-supplied ``fee_params`` and that
+  metered amount is the child's ``declaredBudget``, reserved from the emitting
+  contract's balance (jointly with ``value``; insufficient balance yields
+  ``Inbalance``). The ``message_fee`` bucket is **not** consumed (the message is
+  excluded from the sender pool on-chain); only ``message_receipt`` is. The emitted
+  allocation subtree is empty, so nested child messages must each fund themselves.
+
+  Because ``fee_params`` is guest-supplied, it is validated before it reaches the
+  fee evaluator (``validate_balance_fee``): empty ``rotations`` and any zero price
+  cap (``max_price_gen_per_time_unit`` / ``storage_fee_max_gas_price`` /
+  ``receipt_fee_max_gas_price``) are rejected with ``Inval``, matching the chain's
+  reveal-time ``FeeValueMustBeNonZero`` checks. Magnitudes are bounded too
+  (prices/budgets below 2\ :sup:`96`, counts — time units and rotations
+  entries — below 2\ :sup:`32`) so the worst-case metered floor provably fits
+  in ``U256`` and cannot trip the evaluator's overflow abort.
+
+  The floor replicates the chain's ``minMessagePrimaryFees`` rather than the
+  allocation-matched floor: the consensus term is charged at the guest's
+  ``max_price_gen_per_time_unit`` (the funding cap), not the node's
+  ``genPerTimeUnit`` (the allocation path keeps the ``genPerTimeUnit`` multiplier
+  — this branch is selected by the ``balanceFunded`` flag threaded into the
+  ``message_fee`` expression). Two further node-configured floors fire as
+  ``VMError``\ s: ``fee below_minimum`` when a non-zero ``execution_budget_per_round``
+  is below ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``), and
+  ``fee too_many_rounds`` when ``rotations`` implies more rounds than the validator
+  table (``node.validatorsPerRound``) covers. The per-phase time-unit floor
+  (``fee below_minimum`` against ``node.minTimeUnitsPerPhase``) applies on both
+  funding paths.

@@ -1,4 +1,9 @@
 reviews:
+  # Review PRs targeting the long-lived version branches (e.g. v0.6, v0.6-dev)
+  # and main; feature/topic branches are reviewed via their target base.
+  base_branches:
+    - "main"
+    - "v\\d+\\.\\d+(-dev)?"
   path_filters:
     - "!**/*.onnx"
     - "!**/*.txt"
@@ -10,3 +15,8 @@ reviews:
     - "!executors/v0.3.x/runners/models/**"
     - "!executors/v0.3.x/runners/softfloat/berkeley-softfloat-3/**"
     - "!**/fuzz/inputs*/**"
+    # Root-level system-test fixtures (contracts, expected outputs); crate and
+    # runner test code under */tests/ is still reviewed.
+    - "!tests/**"
+    # genvm-tool is internal dev tooling; not worth reviewing.
+    - "!support/tools/genvm-tool/**"

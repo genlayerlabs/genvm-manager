@@ -92,6 +92,20 @@ consensus_stage
 
 Value: ``2``
 
+.. _gvm-def-enum-permissions:
+
+permissions
+-----------
+
+Type: u32
+
+.. _gvm-def-enum-value-permissions-can-use-balance-for-message-fees:
+
+can_use_balance_for_message_fees
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``1``
+
 .. _gvm-def-consts-memory-limiter-consts:
 
 memory_limiter_consts
@@ -119,6 +133,20 @@ fd_allocation
 ~~~~~~~~~~~~~
 
 Value: ``96``
+
+.. _gvm-def-consts-value-memory-limiter-consts-runner-load-cost:
+
+runner_load_cost
+~~~~~~~~~~~~~~~~
+
+Value: ``4096``
+
+.. _gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost:
+
+vm_spawn_cost
+~~~~~~~~~~~~~
+
+Value: ``134217728``
 
 .. _gvm-def-consts-root-offsets:
 
@@ -168,6 +196,13 @@ code_slot
 ~~~~~~~~~
 
 Value: ``5``
+
+.. _gvm-def-consts-value-root-offsets-permissions:
+
+permissions
+~~~~~~~~~~~
+
+Value: ``37``
 
 .. _gvm-def-consts-top-limits:
 
@@ -225,6 +260,20 @@ max_fds
 
 Value: ``1024``
 
+.. _gvm-def-consts-value-top-limits-wasm-call-depth:
+
+wasm_call_depth
+~~~~~~~~~~~~~~~
+
+Value: ``1024``
+
+.. _gvm-def-consts-value-top-limits-wasm-stack-value-slots:
+
+wasm_stack_value_slots
+~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``65535``
+
 .. _gvm-def-enum-special-method:
 
 special_method
@@ -275,57 +324,175 @@ Param: i32
 ``wasm_trap``
 ~~~~~~~~~~~~~
 
-Param: str
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-unreachable:
 
-.. _gvm-def-str-trie-value-vm-error-OOM-RAM:
+``wasm_trap unreachable``
+~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``OOM RAM``
-~~~~~~~~~~~
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-stack-overflow:
 
-.. _gvm-def-str-trie-value-vm-error-OOM-RAM-table:
+``wasm_trap stack_overflow``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``OOM RAM table``
-~~~~~~~~~~~~~~~~~
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-memory-out-of-bounds:
 
-.. _gvm-def-str-trie-value-vm-error-OOM-RAM-memory:
+``wasm_trap memory_out_of_bounds``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``OOM RAM memory``
-~~~~~~~~~~~~~~~~~~
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-table-out-of-bounds:
 
-.. _gvm-def-str-trie-value-vm-error-OOM-RAM-limit:
+``wasm_trap table_out_of_bounds``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``OOM RAM limit``
-~~~~~~~~~~~~~~~~~
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-indirect-call-to-null:
 
-.. _gvm-def-str-trie-value-vm-error-OOM-storage:
+``wasm_trap indirect_call_to_null``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``OOM storage``
-~~~~~~~~~~~~~~~
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-bad-signature:
 
-.. _gvm-def-str-trie-value-vm-error-OOM-receipt-nondet-output:
+``wasm_trap bad_signature``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-``OOM receipt nondet_output``
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-integer-overflow:
+
+``wasm_trap integer_overflow``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-integer-divide-by-zero:
+
+``wasm_trap integer_divide_by_zero``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-bad-conversion-to-integer:
+
+``wasm_trap bad_conversion_to_integer``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-heap-misaligned:
+
+``wasm_trap heap_misaligned``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-OOM-receipt-message-internal:
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-atomic-wait-non-shared-memory:
 
-``OOM receipt message internal``
+``wasm_trap atomic_wait_non_shared_memory``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-out-of-fuel:
+
+``wasm_trap out_of_fuel``
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-interrupt:
+
+``wasm_trap interrupt``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-nondet-instruction:
+
+``wasm_trap nondet_instruction``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-OOM-receipt-message-external:
+.. _gvm-def-str-trie-value-vm-error-wasm-trap-fault:
 
-``OOM receipt message external``
+``wasm_trap fault``
+~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-memory:
+
+``out_of memory``
+~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-memory-wasm-memory:
+
+``out_of memory wasm_memory``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-memory-wasm-table:
+
+``out_of memory wasm_table``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-storage:
+
+``out_of storage``
+~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-receipt-nondet-output:
+
+``out_of receipt nondet_output``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-OOM-fees-internal:
+.. _gvm-def-str-trie-value-vm-error-out-of-receipt-message:
 
-``OOM fees internal``
+``out_of receipt message``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-receipt-event:
+
+``out_of receipt event``
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-message-fee-total:
+
+``out_of message_fee total``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-message-fee-node:
+
+``out_of message_fee node``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-vm-recursion:
+
+``out_of vm_recursion``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-nondet-blocks:
+
+``out_of nondet_blocks``
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-locked-slots:
+
+``out_of locked_slots``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-upgraders:
+
+``out_of upgraders``
+~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-fds:
+
+``out_of fds``
+~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-fee-no-matching-node:
+
+``fee no_matching_node``
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-fee-below-minimum:
+
+``fee below_minimum``
 ~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-OOM-fees-external:
+.. _gvm-def-str-trie-value-vm-error-fee-too-many-rounds:
 
-``OOM fees external``
-~~~~~~~~~~~~~~~~~~~~~
+``fee too_many_rounds``
+~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-host-forbidden:
+
+``host_forbidden``
+~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-evm-reverted:
+
+``evm reverted``
+~~~~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-invalid-contract:
 
@@ -366,13 +533,6 @@ Param: str
 
 ``invalid_contract wasm entrypoint``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _gvm-def-str-trie-value-vm-error-host:
-
-``host``
-~~~~~~~~
-
-Param: str
 
 .. _gvm-def-const-event-max-topics:
 

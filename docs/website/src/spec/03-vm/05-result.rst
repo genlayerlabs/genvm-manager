@@ -21,6 +21,31 @@ exceeding resource limits.
 
 It uses predefined string error codes.
 
+.. _gvm-def-vm-error-code:
+
+VM Error Code Format
+--------------------
+
+::
+
+   vm-error-code := public-code [ " # " detail ]
+
+- ``public-code`` — a sequence of ``snake_case`` components separated by single
+  spaces, drawn from the :ref:`predefined codes <gvm-def-str-trie-vm-error>`. It
+  never contains ``#``.
+- ``detail`` — optional free-form UTF-8 diagnostic. When present, it is
+  separated from the public code by ``#`` surrounded by a single space on each
+  side.
+
+The detail MUST be a deterministic function of execution (the full string is
+covered by the :ref:`gvm-def-execution-hash`), but its content carries no
+compatibility promise — see :ref:`gvm-def-vm-error-compat`.
+
+Consumers MUST compare and match VM error codes only by the public code (the
+part before the first `` # ``). A consumer matching a known code ``P`` MUST
+treat a code as matching iff its public code equals ``P`` or extends ``P``
+with further space-separated components.
+
 .. _gvm-def-user-error:
 
 .. rubric:: UserError
@@ -92,10 +117,10 @@ Both fields are serialized using :ref:`gvm-def-calldata-encoding` to be determin
 #. Memories are ordered by their index in WASM module
 #. Memories are hashed using BLAKE3 hash function, which is cryptographically secure and provides acceptable performance
 
+.. _gvm-def-execution-hash:
+
 Execution Hash
 --------------
-
-.. _gvm-def-execution-hash:
 
 Every run produces an *execution hash*: a SHA3-256 digest over a
 :ref:`gvm-def-calldata-encoding` encoding of the consensus-visible result, as a map
@@ -112,10 +137,10 @@ with the following keys (in this order):
 Two runs that agree on the deterministic result produce the same execution hash, so
 consensus can compare a single 32-byte value instead of the full result.
 
+.. _gvm-def-subvm-hash:
+
 Sub-VM Result Hash
 ------------------
-
-.. _gvm-def-subvm-hash:
 
 A deterministic run accumulates the result of each deterministic :term:`sub-VM` call
 into a rolling SHA3-256 accumulator. The finalized accumulator is the

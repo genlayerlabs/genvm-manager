@@ -5,6 +5,7 @@ use std::{
     sync::Arc,
 };
 
+use genlayer_calldata as calldata;
 use genvm_common::io::{set_fd_nonblocking, AsyncCustomFD, FdWrapper};
 use genvm_common::*;
 use tokio::io::AsyncBufReadExt;
@@ -390,7 +391,7 @@ fn default_reroute_to() -> String {
 )]
 pub struct Request {
     pub major: u32,
-    pub message: genvm_common::domain::MessageData,
+    pub message: genvm_modules_interfaces::MessageData,
     pub is_sync: bool,
     /// Executor debug level. Controls captured-output bounding, tracing, runner
     /// `:latest`/`:test` resolution (under `unsafe`), and (under `unsafe-tracing`)
@@ -433,21 +434,29 @@ pub struct Request {
     /// Message-fee allocation tree passed alongside the execution.
     #[serde(default)]
     #[calldata(default = default_message_fee_allocation)]
-    pub message_fee_allocation: Vec<genvm_common::domain::fees::MessageAllocationNode>,
+    pub message_fee_allocation: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
     /// Initial time-unit budget for this execution.
     pub initial_time_units_allocation: u32,
+    /// Auditable supervisor action kinds to return in the execution result.
+    #[serde(default)]
+    #[calldata(default = default_record_actions)]
+    pub record_actions: Vec<String>,
 }
 
 fn default_gas_data() -> std::collections::BTreeMap<String, String> {
     std::collections::BTreeMap::new()
 }
 
-fn default_message_fee_allocation() -> Vec<genvm_common::domain::fees::MessageAllocationNode> {
+fn default_message_fee_allocation() -> Vec<genvm_modules_interfaces::fees::MessageAllocationNode> {
+    Vec::new()
+}
+
+fn default_record_actions() -> Vec<String> {
     Vec::new()
 }
 
 fn default_permissions() -> String {
-    "rwscn".to_owned()
+    "wscn".to_owned()
 }
 
 impl Request {
@@ -456,6 +465,33 @@ impl Request {
     /// unless no_modules flag is set.
     pub fn needs_modules(&self) -> bool {
         !self.no_modules && !self.is_sync && self.permissions.contains('n')
+    }
+
+    /// The legacy v0.2 ABI stored the contract method name under the calldata
+    /// key `"method"`; the current ABI uses the empty key `""`. A client sending
+    /// old-format calldata would otherwise reach the executor with a `"method"`
+    /// key its runner no longer understands. Detect that here, log an error so
+    /// the stale caller is visible, and rewrite the key in place. No-op for
+    /// well-formed (new-format) calldata or non-map calldata.
+    pub fn patch_legacy_method_key(&mut self) {
+        const LEGACY_METHOD_KEY: &str = "method";
+        const NEW_METHOD_KEY: &str = "";
+
+        let mut value = match calldata::decode(&self.calldata) {
+            Ok(v @ calldata::Value::Map(_)) => v,
+            _ => return,
+        };
+        let calldata::Value::Map(map) = &mut value else {
+            return;
+        };
+
+        if let Some(method) = map.remove(LEGACY_METHOD_KEY) {
+            log_error!(
+                "received legacy 'method' key in run calldata; patching it to the new empty key"
+            );
+            map.insert(NEW_METHOD_KEY.to_owned(), method);
+            self.calldata = bytes::Bytes::from(calldata::encode(&value));
+        }
     }
 }
 
@@ -1019,7 +1055,7 @@ pub async fn start_genvm(
     let mut method_hosts: Vec<u8> = vec![0; host_fns::Methods::SIZE];
     method_hosts[host_fns::Methods::ConsumeResult as usize] = 1;
 
-    let execution_data = genvm_common::domain::ExecutionData {
+    let execution_data = genvm_modules_interfaces::ExecutionData {
         calldata: req.calldata.clone(),
         message: req.message.clone(),
         host_data: req.host_data.clone(),
@@ -1030,8 +1066,9 @@ pub async fn start_genvm(
         gas_data: req.gas_data.clone(),
         message_fee_allocation: req.message_fee_allocation.clone(),
         initial_time_units_allocation: req.initial_time_units_allocation,
+        record_actions: req.record_actions.clone(),
     };
-    let execution_data_bytes = genvm_common::calldata::encode_obj(&execution_data);
+    let execution_data_bytes = calldata::encode_obj(&execution_data);
 
     let execution_data_bytes = bytes::Bytes::from(execution_data_bytes);
 

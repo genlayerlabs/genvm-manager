@@ -1,0 +1,41 @@
+name: branch / open linked executor PRs
+
+# When a manager PR is opened against a dev branch, open the matching executor
+# PR(s) in the genvm-executor repo. The manager release line is independent of the
+# executor lines it ships, so one manager PR fans out over EVERY active executor
+# line (.genvm-monorepo-root): for each, `pr/<line>/<feature>` -> <line>-dev. Each
+# is listed on the manager PR as an `executor: <url>` line. The executor work lives
+# on line-namespaced mirror branches the developer pushed via
+# `genvm-tool git create-branches`. See support/ci/open-executor-prs.py.
+#
+# pull_request_target gives a manager-scoped write token for the comment; the
+# cross-repo executor PR needs a PAT with genvm-executor access
+# (GENVM_EXECUTOR_PR_TOKEN) — the default GITHUB_TOKEN cannot reach another repo.
+# We check out only the base repo to run the trusted script — never PR code.
+
+on:
+  pull_request_target:
+    branches: ['v*-dev']
+    types: [opened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+defaults:
+  run:
+    shell: bash -x {0}
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open and link executor PR(s)
+        env:
+          MANAGER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTOR_TOKEN: ${{ secrets.GENVM_EXECUTOR_PR_TOKEN }}
+          MANAGER_REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+        run: python3 support/ci/open-executor-prs.py

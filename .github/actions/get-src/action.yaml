@@ -30,7 +30,17 @@ runs:
           if [ "${{ inputs.third_party }}" != "none" ]
           then
             source env.sh
-            git third-party update ${{ inputs.third_party }}
+            # Vendored third-party trees are registered per executor submodule:
+            # `.git-third-party/config.json` lives inside each executor, which is
+            # its own git repo. `git third-party` resolves its config from the
+            # current git toplevel, so it must run *inside* each executor —
+            # running it once at the manager root finds no config and
+            # materializes nothing (which then breaks the cargo build).
+            for cfg in executors/*/.git-third-party/config.json
+            do
+              [ -e "$cfg" ] || continue
+              ( cd "$(dirname "$(dirname "$cfg")")" && git third-party update ${{ inputs.third_party }} )
+            done
           fi
         fi
       shell: bash -ex {0}

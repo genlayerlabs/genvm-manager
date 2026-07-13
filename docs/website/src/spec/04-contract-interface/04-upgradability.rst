@@ -15,40 +15,44 @@ The upgrade system works through access control during write transactions:
     It does not lead to :ref:`gvm-def-ram-consumption`
 #. If the sender is not in the ``upgraders`` list of :ref:`genvm-def-root-slot`\,
     :term:`GenVM` reads ``locked_slots`` and will prevent writing to them.
-    It implies :math:`32*n` :ref:`gvm-def-ram-consumption`\, where :math:`n` is the number of locked slots.
+    It implies :math:`32*n` :ref:`gvm-def-ram-consumption`\, where :math:`n` is the number of locked slots
+    (bounded by :ref:`gvm-def-consts-value-top-limits-locked-slots`).
     This memory is never released.
-#. :term:`GenVM` reads the ``code`` field of :ref:`genvm-def-root-slot` and executes it.
-    It causes exactly ``code`` size in octets :ref:`gvm-def-ram-consumption`
+#. :term:`GenVM` loads the contract code as the entry runner. This is a runner
+    load action; its :ref:`gvm-def-ram-consumption` is specified in
+    :doc:`../02-execution-environment/04-runners` and released when the
+    :term:`sub-VM` finishes.
 
 .. _gvm-def-locked-slot-nesting:
 
 Locked Slots in Nested Calls
 ----------------------------
 
-Each :term:`sub-VM` reads the ``upgraders`` and ``locked_slots`` of *its own* contract address
-(the callee), not the caller's. There is no transitive inheritance: a parent VM cannot
-relax or tighten its child's locked slots, and an upgrader on contract ``A`` is not implicitly
-an upgrader on contract ``B`` that ``A`` calls.
+The ``upgraders`` and ``locked_slots`` lists are read once per execution, for
+the top-level contract and the top-level sender, before any :term:`sub-VM`
+exists; the resulting charge is the one in `Upgrade Control Mechanism`_ and no
+:term:`sub-VM` pays it again.
 
-Two consequences:
+One set suffices because only the top-level contract's storage is ever
+writable within an execution:
 
-#. Permission to overwrite a locked slot is determined by ``msg.sender`` *as seen by the
-   callee*. For a ``CallContract`` invocation, that is the calling contract's address — the
-   caller must be in the callee's ``upgraders`` list for any locked-slot writes to succeed.
-#. The :math:`32\cdot n` :ref:`gvm-def-ram-consumption` of materializing ``locked_slots`` is
-   paid independently in every sub-VM that needs it and is bounded by
-   ``top_limits::LOCKED_SLOTS``. The memory is never released for the lifetime of that sub-VM.
-
-Sub-VMs created by ``Sandbox`` and ``RunNondet`` cannot reach storage at all
-(see :ref:`gvm-permissions`), so locked-slot checking does not apply to them.
+#. A :ref:`gvm-def-gl-call-call-contract` child cannot write storage at all
+   (see :ref:`gvm-meta-property-derivation`), so the callee's own
+   ``locked_slots`` are never consulted, and being an upgrader of the callee
+   grants a calling contract nothing.
+#. A :ref:`gvm-def-gl-call-sandbox` child that was granted
+   :ref:`gvm-perm-write-storage` writes the *same* contract's storage as its
+   parent, under the same sender — the top-level set applies to it unchanged.
+#. A :ref:`gvm-def-gl-call-run-nondet` child cannot write storage.
 
 .. _gvm-def-contract-version:
 
 Contract Major Version
 ----------------------
 
-The ``major`` field of :ref:`genvm-def-root-slot` (offset 0) stores the public-ABI major version
-that the contract was built against. On every load :term:`GenVM` compares this byte to its own
+The ``major`` field of :ref:`genvm-def-root-slot` is at
+:ref:`gvm-def-consts-value-root-offsets-major` and stores the public-ABI major version that the
+contract was built against. On every load :term:`GenVM` compares this byte to its own
 ``CURRENT_MAJOR`` constant and refuses to execute a contract whose major differs.
 
 The value is **not** modifiable by the contract itself: it is written once at deploy time by
