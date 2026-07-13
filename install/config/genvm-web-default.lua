@@ -22,6 +22,7 @@ function Render(ctx, payload)
 		headers = {},
 		error_on_status = true,
 		response_body_max_size = payload.size_limit,
+		unfiltered = true,
 	})
 
 	lib.log {
