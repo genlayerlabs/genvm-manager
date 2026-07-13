@@ -7,6 +7,7 @@ import platform
 import shlex
 import subprocess
 import traceback
+import typing
 from pathlib import Path
 
 target_os = platform.system().lower()
@@ -240,6 +241,55 @@ def patch_executable(path: Path):
 	logger.info(f'Successfully patched interpreter: {path}')
 
 
+# linux ships ELF, macos ships Mach-O; these are the only OSes we target.
+BinaryOS = typing.Literal['linux', 'macos']
+
+# Mach-O magics (thin 32/64-bit and universal/fat), in both stored byte orders.
+_MACHO_MAGICS = frozenset(
+	{
+		b'\xfe\xed\xfa\xce',
+		b'\xce\xfa\xed\xfe',
+		b'\xfe\xed\xfa\xcf',
+		b'\xcf\xfa\xed\xfe',
+		b'\xca\xfe\xba\xbe',
+		b'\xbe\xba\xfe\xca',
+		b'\xca\xfe\xba\xbf',
+		b'\xbf\xba\xfe\xca',
+	}
+)
+
+
+def detect_executable_platform(path: Path) -> BinaryOS | None:
+	"""Sniff a binary's header to identify its target OS: ELF -> linux, Mach-O
+	(any variant/byte order) -> macos. Returns None for anything unrecognized
+	(wrapper scripts, truncated/empty files, unknown formats)."""
+	try:
+		with open(path, 'rb') as f:
+			magic = f.read(4)
+	except OSError:
+		return None
+	if magic == b'\x7fELF':
+		return 'linux'
+	if magic in _MACHO_MAGICS:
+		return 'macos'
+	return None
+
+
+def check_executable_platform(path: Path):
+	"""Refuse a wrong-OS binary before we trust it. A bad release once shipped a
+	macOS (Mach-O) executor inside a linux tarball; the missing-only download
+	guard accepted it and it surfaced as an opaque `Exec format error` at
+	runtime. Here we error on a clear OS mismatch instead. Unrecognized formats
+	(None) are left alone rather than guessed at."""
+	detected = detect_executable_platform(path)
+	if detected is not None and detected != args.os:
+		logger.error(
+			f'{path} is a {detected} binary but target OS is {args.os}; '
+			'wrong-platform executor shipped'
+		)
+		raise RuntimeError(f'{path} is a {detected} binary but target OS is {args.os}')
+
+
 def run_check_command(command: list[str | Path]):
 	env = os.environ.copy()
 	env['LLVM_PROFILE_FILE'] = '/dev/null'
@@ -251,6 +301,7 @@ def run_check_command(command: list[str | Path]):
 
 
 modules_executable = genvm_root_dir.joinpath('bin', 'genvm-modules')
+check_executable_platform(modules_executable)
 if patch_interpreter:
 	patch_executable(modules_executable)
 
@@ -398,6 +449,11 @@ def process_executor_version(executor_version: str):
 
 	executor_root_dir = genvm_root_dir.joinpath('executor', executor_version)
 	executor_executable = executor_root_dir.joinpath('bin', 'genvm')
+
+	# Refuse a wrong-OS executor before anything trusts it, regardless of which
+	# steps run (a missing file is a no-op here; missing-file policy is handled
+	# per-step below). Mirrors the unconditional modules_executable check.
+	check_executable_platform(executor_executable)
 
 	if patch_interpreter or args.bin_check:
 		if not executor_executable.exists():
