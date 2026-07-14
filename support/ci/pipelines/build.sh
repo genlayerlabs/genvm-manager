@@ -93,22 +93,33 @@ cat <<EOF > flake-config.json
 }
 EOF
 
+echo "::group::prefetch dependencies"
 if [[ -z "${NO_REFETCH:-}" ]]; then
 	python3 "$SCRIPT_DIR/../../runner-script.py" dependencies prefetch-needed --all --target "$TARGET"
 fi
+echo "::endgroup::"
 
 mkdir -p build
+echo "::group::nix build ($TARGET)"
 # `?submodules=1`: the executor lines are git submodules; without it the flake
 # source tree has empty executors/<line>.x dirs and evaluation fails.
 nix build -o "build/out-$TARGET" -v -L ".?submodules=1#$TARGET" --show-trace
+echo "::endgroup::"
 
+echo "::group::package tarball"
 PREV=$(readlink -f .)
 pushd "build/out-$TARGET"
-find . -type f -print0 | sort -z | \
-	xargs -0 tar --transform 's,^\./,,' --mode=ug+w -cf "$PREV/build/genvm-$TARGET.tar"
+# The nix outputs are symlink trees (real dirs, leaves symlinked into the store).
+# Materialise them into real files in the archive: `-L` makes find follow the
+# symlinked leaves (so they match -type f) and `--dereference` makes tar store
+# the target's contents — otherwise the tarball would carry dangling symlinks to
+# /nix/store paths absent on the consumer's machine.
+find -L . -type f -print0 | sort -z | \
+	xargs -0 tar --dereference --transform 's,^\./,,' --mode=ug+w -cf "$PREV/build/genvm-$TARGET.tar"
 
 if [[ "${COMPRESSION:-9}" != "skip" ]]; then
 	xz -z -"${COMPRESSION:-9}" --force "$PREV/build/genvm-$TARGET.tar"
 fi
 
 popd
+echo "::endgroup::"

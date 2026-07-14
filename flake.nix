@@ -416,24 +416,27 @@
 
           universal-of = import ./runners/views/universal.nix runners-args;
 
+          # `cp -rsf src/. $out/` lays out a shadow tree: real directories, but
+          # every leaf is a symlink to the source file. It merges the top-level
+          # trees WITHOUT copying — each output is just symlinks into the store,
+          # and the referenced store paths stay as runtime deps (gc-roots). `-f`
+          # keeps the old last-one-wins overwrite semantics on any path that
+          # appears in more than one source (unlike lndir/symlinkJoin, which
+          # would error). Real files are materialised only later, at the upload
+          # tar (build.sh runs `tar --dereference`).
+          symlink-merge-srcs = ''
+            for src in $srcs; do
+              cp -rsf "$src"/. $out/
+            done
+          '';
+
           # Merge a { uid -> `<id>/<aa>/<rest>.tar` tree } set into one tree.
           merge-runner-trees =
             name: uni:
-            pkgs.stdenvNoCC.mkDerivation {
-              inherit name;
-              srcs = builtins.attrValues uni;
-              dontUnpack = true;
-              dontConfigure = true;
-              dontBuild = true;
-              dontFixup = true;
-              installPhase = ''
-                mkdir -p $out
-                for src in $srcs; do
-                cp --no-preserve=ownership -r $src/. $out/.
-                chmod -R u+w $out
-                done
-              '';
-            };
+            pkgs.runCommand name { srcs = builtins.attrValues uni; } ''
+              mkdir -p $out
+              ${symlink-merge-srcs}
+            '';
 
           runners-all = merge-runner-trees "genvm-runners-all" (universal-of shared-runners-list);
 
@@ -462,7 +465,7 @@
               in
               ''
                 mkdir -p "$out/$(dirname -- "${dst}")"
-                cp "${r.derivation}" "$out/${dst}"
+                ln -s "${r.derivation}" "$out/${dst}"
               ''
             ) legacy-runners-list;
           };
@@ -495,18 +498,13 @@
               dontBuild = true;
               dontFixup = true;
               installPhase = ''
-                mkdir -p $out
-                for src in $srcs; do
-                cp --no-preserve=ownership -r $src/. $out/.
-                chmod -R u+w $out
-                done
-                mkdir -p $out/runners
-                cp --no-preserve=ownership -r $runnersAll/. $out/runners/.
-                chmod -R u+w $out/runners
+                mkdir -p $out $out/runners
+                ${symlink-merge-srcs}
+                # runners-all nested under runners/ (matching the CI layout).
+                cp -rsf "$runnersAll"/. $out/runners/
                 # Legacy lines carry their runners under their own executor root
                 # (executor/<version>/legacy-runners); overlay that tree here.
-                cp --no-preserve=ownership -r $legacyRunnersAll/. $out/.
-                chmod -R u+w $out
+                cp -rsf "$legacyRunnersAll"/. $out/
               '';
             };
           genvm-packages = builtins.listToAttrs (
@@ -522,21 +520,14 @@
           # they ship platform-independently via runners-all-dist.
           combine-executors =
             suffix:
-            pkgs.stdenvNoCC.mkDerivation {
-              name = "genvm-executor${suffix}";
-              srcs = builtins.map (line: executor-packages."executor-${line.clamped}${suffix}") executor-lines;
-              dontUnpack = true;
-              dontConfigure = true;
-              dontBuild = true;
-              dontFixup = true;
-              installPhase = ''
+            pkgs.runCommand "genvm-executor${suffix}"
+              {
+                srcs = builtins.map (line: executor-packages."executor-${line.clamped}${suffix}") executor-lines;
+              }
+              ''
                 mkdir -p $out
-                for src in $srcs; do
-                cp --no-preserve=ownership -r $src/. $out/.
-                chmod -R u+w $out
-                done
+                ${symlink-merge-srcs}
               '';
-            };
           executor-dist-packages = builtins.listToAttrs (
             builtins.map (
               suffix: pkgs.lib.nameValuePair "executor${suffix}" (combine-executors suffix)
@@ -557,10 +548,8 @@
             dontFixup = true;
             installPhase = ''
               mkdir -p $out/runners
-              cp --no-preserve=ownership -r $runnersAll/. $out/runners/.
-              chmod -R u+w $out/runners
-              cp --no-preserve=ownership -r $legacyRunnersAll/. $out/.
-              chmod -R u+w $out
+              cp -rsf "$runnersAll"/. $out/runners/
+              cp -rsf "$legacyRunnersAll"/. $out/
             '';
           };
         in

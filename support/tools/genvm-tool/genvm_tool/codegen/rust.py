@@ -211,6 +211,8 @@ def render(defs: list[Definition], **_opts) -> str:
 			buf.append('}\n\n')
 		elif isinstance(d, StrTrie):
 			_trie(d, buf)
+
+	buf.append('\n// EOF\n')
 	return ''.join(buf)
 
 
