@@ -14,20 +14,29 @@ Gates (all required, all on the head commit):
 4. the cross-repo E2E check concluded success
 5. the PR is 0 commits behind base
 
-Strategy: 1 commit -> fast-forward the original commit (SHA preserved);
-more -> squash into one commit on top of base, then fast-forward. The PR
-is closed afterwards.
+Strategy: every repo ends up with ONE commit per merged PR. The manager's
+commits are squashed onto base (a single commit that needs no gitlink rewrite is
+fast-forwarded as-is, preserving its SHA); each executor line's commits are
+squashed onto its own dev branch. The PR is closed afterwards.
 
 Executor mirror: the manager release line (e.g. v0.6) is independent of the
 executor lines it ships (v0.2, v0.3), so a single manager commit carries a
-gitlink into EACH active line's submodule. We mirror every active line by
-fast-forwarding its own `<line>-dev` branch (`v0.2-dev`, `v0.3-dev`, ...) to
-that line's gitlink commit. True cross-repo atomicity is impossible, so we
-(1) fast-forward-check all sides up front, then (2) push the executors first —
-they are the dependencies the manager commit points at — and (3) push the
-manager. If the manager push then loses a race the executors are left one
-fast-forward ahead, which is harmless (monotonic) and reconciled when Merge is
-re-ticked. Lines whose gitlink is unchanged are skipped.
+gitlink into EACH active line's submodule. Every active line is squashed onto
+its own `<line>-dev` branch (`v0.2-dev`, `v0.3-dev`, ...). Squashing gives the
+line a NEW commit, so the sha the PR pinned never lands — the manager commit is
+rewritten to gitlink the squashed commit instead (`update-index --cacheinfo`).
+Lines whose gitlink is unchanged, or that already sit at a single commit on
+their dev tip, are left alone.
+
+True cross-repo atomicity is impossible, so we (1) plan and fast-forward-check
+all sides up front, then (2) push the executors first — they are the
+dependencies the manager commit points at — and (3) push the manager. If the
+manager push then loses a race the executors are left one fast-forward ahead,
+which is harmless (monotonic) and reconciled when Merge is re-ticked.
+
+Squashing collapses several authors into one, so `Co-authored-by:` trailers are
+added for every other human author in the range (never tool/AI attribution — the
+commit-message hook rejects that).
 
 After a successful merge each line's executor mirror branch
 (`pr/<line>/<feature>`, opened by branch_executor_prs.yaml) is deleted — its
@@ -62,8 +71,12 @@ E2E_PATTERN = os.environ.get('E2E_CHECK_PATTERN', 'e2e')
 HERE = Path(__file__).resolve().parent
 
 
-def run(*args, check=True):
-	return subprocess.run(args, check=check, text=True, capture_output=True)
+def run(*args, check=True, env=None):
+	full_env = None
+	if env is not None:
+		full_env = os.environ.copy()
+		full_env.update(env)
+	return subprocess.run(args, check=check, text=True, capture_output=True, env=full_env)
 
 
 def gh(*args):
@@ -74,9 +87,34 @@ def git(*args, check=True):
 	return run('git', *args, check=check)
 
 
-def egit(submodule, *args, check=True):
+def egit(submodule, *args, check=True, env=None):
 	"""git inside an executor submodule checkout."""
-	return run('git', '-C', submodule, *args, check=check)
+	return run('git', '-C', submodule, *args, check=check, env=env)
+
+
+def is_ancestor(repo, maybe_ancestor, descendant):
+	args = ('merge-base', '--is-ancestor', maybe_ancestor, descendant)
+	if repo is None:
+		return git(*args, check=False).returncode == 0
+	return egit(repo, *args, check=False).returncode == 0
+
+
+def coauthor_trailers(repo, rev_range, author):
+	"""`Co-authored-by:` for every human author in the range except `author`.
+
+	A squash keeps only one author, so everyone else who wrote a commit in the
+	range would otherwise lose attribution. Never emit tool/AI attribution — the
+	commit-message hook rejects it.
+	"""
+	args = ('log', '--format=%an <%ae>', rev_range)
+	out = (git(*args) if repo is None else egit(repo, *args)).stdout
+
+	seen = []
+	for line in out.splitlines():
+		line = line.strip()
+		if line and line != author and line not in seen:
+			seen.append(line)
+	return [f'Co-authored-by: {a}' for a in sorted(seen)]
 
 
 def active_lines():
@@ -187,13 +225,40 @@ def executor_gitlink(commit, submodule):
 	return m.group(1)
 
 
-def executor_mirror_action(submodule, exec_base, exec_sha):
-	"""Decide how to mirror `exec_sha` onto the executor's `<exec_base>` branch.
+# Provenance trailer on a squashed executor commit: the PR-side commit whose
+# content it carries. A squash keeps only the TREE of that commit, so the sha the
+# manager PR pins never becomes an ancestor of the dev branch — ancestry alone can
+# no longer answer "did this line already land?". Re-ticking Merge after a failed
+# manager push (the executors are pushed first) would otherwise see a tip that is
+# neither ancestor nor descendant of the pinned sha and block the PR as diverged,
+# forever. This trailer is how the second run recognises its own work.
+SQUASHED_FROM = 'GenVM-Squashed-From'
 
-	Returns 'push' (fast-forward, including a fresh create) or 'skip' (the
-	branch already contains exec_sha because the executor advanced past what
-	this PR pins). Blocks if exec_sha is unknown to the executor repo or the
-	branch has diverged from it."""
+
+def already_squashed(submodule, exec_base, exec_sha):
+	"""The commit on `<exec_base>` that already carries `exec_sha`'s content, if any."""
+	out = egit(
+		submodule,
+		'log',
+		f'refs/remotes/origin/{exec_base}',
+		f'--grep=^{SQUASHED_FROM}: {exec_sha}$',
+		'--format=%H',
+		'-1',
+	).stdout.strip()
+	return out or None
+
+
+def plan_executor_line(submodule, exec_base, exec_sha, message):
+	"""Work out what this line should land on its `<line>-dev`.
+
+	Returns `(sha, needs_push)`. The PR's commits on this line are squashed into
+	one commit on top of the line's dev tip, so the executor history mirrors the
+	manager's: one commit per merged PR. `sha` is that squashed commit — or
+	`exec_sha` itself when there is nothing to squash (a single commit already
+	sitting on the tip, or a branch that has to be created).
+
+	Blocks if exec_sha is unknown to the executor repo or the branch has diverged.
+	"""
 	# Bring every executor head (and thus exec_sha, if pushed) local.
 	egit(submodule, 'fetch', '--no-tags', 'origin', '+refs/heads/*:refs/remotes/origin/*')
 
@@ -211,59 +276,102 @@ def executor_mirror_action(submodule, exec_base, exec_sha):
 		egit(submodule, 'rev-parse', '--verify', '--quiet', ref, check=False).returncode
 		!= 0
 	):
-		return 'push'  # branch absent -> push creates it
+		return exec_sha, True  # branch absent -> push creates it
 
 	tip = egit(submodule, 'rev-parse', ref).stdout.strip()
 	if tip == exec_sha:
-		return 'skip'  # already there
-	if (
-		egit(
-			submodule, 'merge-base', '--is-ancestor', exec_sha, tip, check=False
-		).returncode
-		== 0
-	):
+		return exec_sha, False  # already there
+
+	landed = already_squashed(submodule, exec_base, exec_sha)
+	if landed is not None:
+		# A previous run squashed this line and pushed it; only the manager push
+		# is left. Reuse that commit rather than squashing a second one.
+		print(f'Executor {exec_base} already carries {exec_sha[:12]} as {landed[:12]}')
+		return landed, False
+
+	if is_ancestor(submodule, exec_sha, tip):
 		# Executor moved ahead of what this PR pins; the pinned commit is
 		# already contained, so there is nothing to push.
-		return 'skip'
-	if (
-		egit(
-			submodule, 'merge-base', '--is-ancestor', tip, exec_sha, check=False
-		).returncode
-		== 0
-	):
-		return 'push'  # clean fast-forward
-	block(
-		f'executor `{exec_base}` (`{tip[:12]}`) has diverged from the PR executor '
-		f'commit `{exec_sha[:12]}`; mirror is not a fast-forward.'
-	)
+		return exec_sha, False
+	if not is_ancestor(submodule, tip, exec_sha):
+		block(
+			f'executor `{exec_base}` (`{tip[:12]}`) has diverged from the PR executor '
+			f'commit `{exec_sha[:12]}`; mirror is not a fast-forward.'
+		)
+
+	commits = egit(submodule, 'rev-list', f'{tip}..{exec_sha}').stdout.split()
+	if len(commits) == 1:
+		# Already a single commit on top of the tip: squashing it would only
+		# rewrite it into an identical tree under a new sha.
+		return exec_sha, True
+
+	author = egit(submodule, 'log', '-1', '--format=%an <%ae>', exec_sha).stdout.strip()
+	name, _, email = author.partition(' <')
+	email = email.rstrip('>')
+
+	trailers = coauthor_trailers(submodule, f'{tip}..{exec_sha}', author)
+	# The provenance trailer must be there for a re-tick to recognise this commit.
+	trailers.append(f'{SQUASHED_FROM}: {exec_sha}')
+	full_message = message + '\n' + '\n'.join(trailers) + '\n'
+
+	# A squash is just the PR's tree on top of the tip; commit-tree builds it
+	# without touching the working tree or index.
+	tree = egit(submodule, 'rev-parse', f'{exec_sha}^{{tree}}').stdout.strip()
+	squashed = egit(
+		submodule,
+		'commit-tree',
+		tree,
+		'-p',
+		tip,
+		'-m',
+		full_message,
+		env={
+			'GIT_AUTHOR_NAME': name,
+			'GIT_AUTHOR_EMAIL': email,
+			'GIT_COMMITTER_NAME': 'genvm-ci',
+			'GIT_COMMITTER_EMAIL': 'genvm-ci@genlayer.com',
+		},
+	).stdout.strip()
+	print(f'Squashed {len(commits)} executor commits ({exec_base}) into {squashed}')
+	return squashed, True
 
 
-def mirror_executor_lines(push_sha):
-	"""Fast-forward each active executor line's `<line>-dev` to the gitlink this
-	merge pins, BEFORE the manager push (the manager commit references them). Lines
-	whose gitlink is unchanged are skipped. Returns the lines that were pinned so
-	their mirror branches can be cleaned up after the manager push lands."""
-	pinned = []
+def plan_executor_lines(head_sha, message):
+	"""Plan every active line off the PR head's gitlinks.
+
+	Returns a list of `(submodule, line, exec_base, pinned_sha, landed_sha,
+	needs_push)`. `landed_sha` differs from `pinned_sha` when the line's commits
+	were squashed — the manager commit must then be rewritten to gitlink the
+	squashed commit, since the one the PR pinned never lands on the dev branch.
+	"""
+	plans = []
 	for line in active_lines():
 		submodule = f'executors/{line}.x'
 		exec_base = f'{line}-dev'
-		exec_sha = executor_gitlink(push_sha, submodule)
-		if executor_mirror_action(submodule, exec_base, exec_sha) == 'push':
-			print(f'Mirroring executor {exec_base} -> {exec_sha}')
-			if (
-				egit(
-					submodule, 'push', 'origin', f'{exec_sha}:refs/heads/{exec_base}', check=False
-				).returncode
-				!= 0
-			):
-				block(
-					f'fast-forward push of executor `{exec_base}` was rejected (it advanced); '
-					f're-tick Merge.'
-				)
-		else:
-			print(f'Executor {exec_base} already contains {exec_sha}; nothing to mirror')
-		pinned.append((submodule, line))
-	return pinned
+		pinned = executor_gitlink(head_sha, submodule)
+		landed, needs_push = plan_executor_line(submodule, exec_base, pinned, message)
+		plans.append((submodule, line, exec_base, pinned, landed, needs_push))
+	return plans
+
+
+def push_executor_lines(plans):
+	"""Push each line's landed commit onto its `<line>-dev`, BEFORE the manager
+	push (the manager commit gitlinks into them, so the dependencies land first)."""
+	for submodule, _line, exec_base, _pinned, landed, needs_push in plans:
+		if not needs_push:
+			print(f'Executor {exec_base} already contains {landed}; nothing to mirror')
+			continue
+		print(f'Mirroring executor {exec_base} -> {landed}')
+		if (
+			egit(
+				submodule, 'push', 'origin', f'{landed}:refs/heads/{exec_base}', check=False
+			).returncode
+			!= 0
+		):
+			block(
+				f'fast-forward push of executor `{exec_base}` was rejected (it advanced); '
+				f're-tick Merge.'
+			)
 
 
 def merge(pr, base, head_sha):
@@ -297,25 +405,50 @@ def merge(pr, base, head_sha):
 	git('config', 'user.name', 'genvm-ci')
 	git('config', 'user.email', 'genvm-ci@genlayer.com')
 
-	if len(pr['commits']) == 1:
+	message = f'{pr["title"]} (#{PR})\n\n{pr["body"] or ""}\n'
+
+	# Plan every active executor line first: each line's commits are squashed into
+	# one commit on its `<line>-dev`, so a line that was squashed lands under a
+	# NEW sha and the manager commit has to gitlink that one instead of the sha the
+	# PR pinned (which never lands on the dev branch).
+	plans = plan_executor_lines(head_sha, message)
+	rewritten = {
+		submodule: landed
+		for submodule, _line, _base, pinned, landed, _push in plans
+		if landed != pinned
+	}
+
+	if len(pr['commits']) == 1 and not rewritten:
 		print(f'Single commit: fast-forwarding {base} to {head_sha}')
 		push_sha = head_sha
 	else:
+		if rewritten:
+			print(
+				f'Executor lines were squashed; rewriting the manager gitlinks: {rewritten}'
+			)
 		print(f'Squashing {len(pr["commits"])} commits onto {base}')
 		author = git('log', '-1', '--format=%an <%ae>', head_sha).stdout.strip()
 		git('checkout', '-B', '_merge', f'origin/{base}')
 		git('merge', '--squash', head_sha)
-		message = f'{pr["title"]} (#{PR})\n\n{pr["body"] or ""}\n'
-		git('commit', '--author', author, '-m', message)
+
+		# Repoint each squashed line at the commit that actually lands. The index
+		# holds the PR's gitlinks after `merge --squash`; overwrite them in place
+		# (no submodule checkout involved).
+		for submodule, landed in rewritten.items():
+			git('update-index', '--cacheinfo', f'160000,{landed},{submodule}')
+
+		trailers = coauthor_trailers(None, f'origin/{base}..{head_sha}', author)
+		full_message = message
+		if trailers:
+			full_message += '\n' + '\n'.join(trailers) + '\n'
+
+		git('commit', '--author', author, '-m', full_message)
 		push_sha = git('rev-parse', 'HEAD').stdout.strip()
 
-	# Mirror every active executor line onto its own `<line>-dev` branch. The
-	# manager line (e.g. v0.6) is independent of the executor lines (v0.2, v0.3)
-	# it ships, so one merge fast-forwards each changed line. Fast-forward-check
-	# all of them BEFORE the manager push (the manager side was checked above),
-	# pushing the executors first: the manager commit gitlinks into them, so the
+	# Push the executors first: the manager commit gitlinks into them, so the
 	# dependencies must land before the referrer.
-	pinned = mirror_executor_lines(push_sha)
+	push_executor_lines(plans)
+	pinned = [(submodule, line) for submodule, line, _b, _p, _l, _push in plans]
 
 	# Non-force FF push; rejected if base advanced since the checks. The
 	# executors are already advanced at this point; a rejection here leaves them
