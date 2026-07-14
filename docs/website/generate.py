@@ -1,34 +1,42 @@
 #!/usr/bin/env python3
 
 import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-script_dir = Path('__file__').parent.absolute()
+script_dir = Path(__file__).resolve().parent
 genvm_root_dir = script_dir
 while not genvm_root_dir.joinpath('.genvm-monorepo-root').exists():
 	genvm_root_dir = genvm_root_dir.parent
 
 docs_src_root_dir = genvm_root_dir.joinpath('docs', 'website', 'src')
 
-proc = subprocess.run(
-	['git', 'remote', 'get-url', 'origin'],
-	check=True,
-	capture_output=True,
-	text=True,
+# Runners belong to the EXECUTOR, not the manager: a runner's version is an
+# executor-version, tagged in the executor repo, and its sources live under that
+# repo's runners/. So every git lookup behind this page — tags, tag messages, the
+# log between two runner versions — has to run against an executor checkout, not
+# the manager's. All active lines are branches of ONE repo, so any of them sees
+# every executor tag; take the first.
+monorepo = json.loads(genvm_root_dir.joinpath('.genvm-monorepo-root').read_text())
+executor_dir = genvm_root_dir.joinpath(
+	'executors', f'{monorepo["active-versions"][0]}.x'
 )
 
-origin_url = proc.stdout.strip()
 
-proc = subprocess.run(
-	['git', 'ls-remote', '--tags', origin_url],
-	check=True,
-	capture_output=True,
-	text=True,
-)
+def executor_git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+	return subprocess.run(
+		['git', '-C', str(executor_dir), *args],
+		check=check,
+		capture_output=True,
+		text=True,
+	)
+
+
+origin_url = executor_git('remote', 'get-url', 'origin').stdout.strip()
+
+proc = executor_git('ls-remote', '--tags', origin_url)
 
 commit2tag = {}
 
@@ -45,18 +53,11 @@ for line in proc.stdout.splitlines():
 
 	commit2tag[commit] = bad_id.sub('_', rev)
 
-cwd = Path(os.getcwd())
-
-# Ensure tags are available locally (CI may use shallow checkout)
-subprocess.run(['git', 'fetch', '--tags'], capture_output=True, check=True, text=True)
+# Ensure tags are available locally (CI may use a shallow checkout)
+executor_git('fetch', '--tags', check=False)
 
 # Collect tag messages (one-line) for descriptions
-proc_tags = subprocess.run(
-	['git', 'tag', '-l', '-n1'],
-	check=True,
-	capture_output=True,
-	text=True,
-)
+proc_tags = executor_git('tag', '-l', '-n1')
 tag_messages = {}
 for line in proc_tags.stdout.splitlines():
 	parts = line.split(None, 1)
@@ -65,24 +66,10 @@ for line in proc_tags.stdout.splitlines():
 	elif len(parts) == 1:
 		tag_messages[parts[0]] = ''
 
-current_commit = subprocess.run(
-	['git', 'rev-parse', 'HEAD'],
-	check=True,
-	capture_output=True,
-	text=True,
-)
-
-current_commit = current_commit.stdout.strip()
-
 eval_file = genvm_root_dir.joinpath('runners', 'docs.nix')
 
-build_config = json.loads(genvm_root_dir.joinpath('flake-config.json').read_text())
-build_config['head-revision'] = current_commit
-commit2tag[current_commit] = build_config['executor-version']
-
-print(commit2tag)
-print(build_config)
-
+# Each runner carries the version of the executor line it came from, so docs.nix
+# groups them itself and needs no commit-to-tag map (it takes no arguments).
 proc = subprocess.run(
 	[
 		'nix',
@@ -93,13 +80,9 @@ proc = subprocess.run(
 		'--show-trace',
 		'--json',
 		'--file',
-		str(eval_file.relative_to(cwd)),
+		str(eval_file),
 		'--apply',
-		'f: f { commitToTagStr = "'
-		+ json.dumps(commit2tag).replace('"', '\\"')
-		+ '"; build-config-str = "'
-		+ json.dumps(build_config).replace('"', '\\"')
-		+ '"; }',
+		'f: f { }',
 	],
 	check=True,
 	capture_output=True,
@@ -170,27 +153,26 @@ for i, ver in enumerate(semver_versions):
 	prev_commit_hash = tag2commit.get(prev_ver)
 	curr_commit_hash = tag2commit.get(ver)
 	if prev_commit_hash and curr_commit_hash:
-		try:
-			log_proc = subprocess.run(
-				[
-					'git',
-					'log',
-					'--oneline',
-					f'{prev_commit_hash}..{curr_commit_hash}',
-					'--',
-					'executors/v0.3.x/runners/',
-				],
-				capture_output=True,
-				text=True,
-				check=True,
-			)
-			commits_map[ver] = [
+		# In the executor repo, and over ITS runners/ — the manager's history has
+		# no executor commits (they sit behind a gitlink), so asking it for the
+		# log between two runner versions silently yields nothing.
+		log_proc = executor_git(
+			'log',
+			'--oneline',
+			f'{prev_commit_hash}..{curr_commit_hash}',
+			'--',
+			'runners/',
+			check=False,
+		)
+		commits_map[ver] = (
+			[
 				line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else line
 				for line in log_proc.stdout.strip().splitlines()
 				if line.strip()
 			]
-		except subprocess.CalledProcessError:
-			commits_map[ver] = []
+			if log_proc.returncode == 0
+			else []
+		)
 	else:
 		commits_map[ver] = []
 
