@@ -1,16 +1,29 @@
 name: GenVM release
 
-# Builds and publishes the release artifacts consumed by other projects
-# (node's download_genvm.sh and friends):
-#   genvm-<os>-<arch>.tar.xz           — manager bundle (bin/, lib/, config/, data/)
-#   genvm-<os>-<arch>-executor.tar.xz  — every active executor line (executor/<version>/...)
-#   genvm-runners-all.tar.xz           — shared runners under runners/ + legacy
-#                                        lines' runners at executor/<version>/legacy-runners
-# All three extract at the same install root.
+# Builds every release artifact here (the executor is not a standalone build
+# entry point — the umbrella flake feeds it compiled-libs/deps/support), then
+# publishes each one to the repo that owns it:
 #
-# The release tag is the manager version from .genvm-monorepo-root (also baked
-# into the binaries as GENVM_PROFILE), so tagging is derived from the source
-# tree instead of bumping the previous git tag.
+#   genvm-manager release, tagged with `version` from .genvm-monorepo-root:
+#     genvm-<arch>-<os>.tar.xz  — manager bundle (bin/, lib/, config/, data/)
+#     genvm-universal.tar.xz    — shared runners under runners/ + legacy lines'
+#                                 runners at executor/<version>/legacy-runners
+#
+#   genvm-executor release, one per active line, tagged with that line's
+#   `executor-version` from executors/<line>.x/manifest.json:
+#     genvm-<arch>-<os>-executor.tar.xz  — executor/<version>/...
+#
+# Platforms are named the way nix names them (amd64-linux, arm64-linux,
+# arm64-macos) everywhere: targets, jobs and published assets.
+#
+# The manager release no longer carries the executors. Everything still extracts
+# at the same install root, so a consumer wanting a full install takes the
+# manager bundle + genvm-universal from here and each executor from the executor
+# repo's release for the line it wants.
+#
+# Cross-repo publishing needs a token with `contents: write` on genvm-executor:
+# GITHUB_TOKEN is scoped to this repo only. Provide it as the EXECUTOR_RELEASE_TOKEN
+# secret (PAT or GitHub App installation token).
 
 on:
   workflow_dispatch:
@@ -30,14 +43,23 @@ permissions:
 
 env:
   GCS_BUCKET: "gh-af"
+  EXECUTOR_REPO: ${{ github.repository_owner }}/genvm-executor
 
 jobs:
   gen-tag:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.determine-version.outputs.new_version }}
+      executor_lines: ${{ steps.plan.outputs.executor_lines }}
+      targets_amd64_linux: ${{ steps.plan.outputs.targets_amd64_linux }}
+      targets_arm64_linux: ${{ steps.plan.outputs.targets_arm64_linux }}
+      targets_arm64_macos: ${{ steps.plan.outputs.targets_arm64_macos }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Each line's manifest.json (its executor-version) lives in the
+          # submodule, so the gitlinks must be materialized.
+          submodules: true
 
       - name: Determine final version
         id: determine-version
@@ -60,43 +82,64 @@ jobs:
           fi
           echo "new_version=$tag" >> $GITHUB_OUTPUT
 
+      - name: Plan executor lines and build targets
+        id: plan
+        run: |
+          set -euo pipefail
+          python3 - >> "$GITHUB_OUTPUT" <<'PY'
+          import json
+          from pathlib import Path
+
+          monorepo = json.loads(Path('.genvm-monorepo-root').read_text())
+
+          lines = []
+          for line in monorepo['active-versions']:
+              manifest = json.loads(Path(f'executors/{line}.x/manifest.json').read_text())
+              lines.append({'line': line, 'version': manifest['executor-version']})
+
+          print('executor_lines=' + json.dumps(lines))
+
+          # One build job per platform builds the manager and every executor
+          # line: they share a nix store, so it is cheaper than a job per target.
+          for platform in ('amd64-linux', 'arm64-linux', 'arm64-macos'):
+              targets = [f'manager-{platform}']
+              targets += [f'executor-{l["line"]}-{platform}' for l in lines]
+              print(f'targets_{platform.replace("-", "_")}<<TARGETS_EOF')
+              print('\n'.join(targets))
+              print('TARGETS_EOF')
+          PY
+
   build-runners-all:
     needs: [gen-tag]
     uses: ./.github/workflows/incl_build_trg.yaml
     with:
-      target: runners-all-dist
+      targets: runners-all-dist
       executor_version: ${{ needs.gen-tag.outputs.tag }}
 
-  build-linux-amd64:
-    needs:
-      - gen-tag
+  build-amd64-linux:
+    needs: [gen-tag]
     uses: ./.github/workflows/incl_build_trg.yaml
     with:
-      target: manager-amd64-linux
-      secondary_target: executor-amd64-linux
+      targets: ${{ needs.gen-tag.outputs.targets_amd64_linux }}
       executor_version: ${{ needs.gen-tag.outputs.tag }}
 
-  build-linux-arm64:
-    needs:
-      - gen-tag
+  build-arm64-linux:
+    needs: [gen-tag]
     uses: ./.github/workflows/incl_build_trg.yaml
     with:
-      target: manager-arm64-linux
-      secondary_target: executor-arm64-linux
+      targets: ${{ needs.gen-tag.outputs.targets_arm64_linux }}
       executor_version: ${{ needs.gen-tag.outputs.tag }}
 
-  build-macos-arm64:
-    needs:
-      - gen-tag
+  build-arm64-macos:
+    needs: [gen-tag]
     uses: ./.github/workflows/incl_build_trg.yaml
     with:
-      target: manager-arm64-macos
-      secondary_target: executor-arm64-macos
+      targets: ${{ needs.gen-tag.outputs.targets_arm64_macos }}
       executor_version: ${{ needs.gen-tag.outputs.tag }}
 
-  test-linux-arm64:
+  test-arm64-linux:
     needs:
-      - build-linux-arm64
+      - build-arm64-linux
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -106,23 +149,23 @@ jobs:
           third_party: --all
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download manager artifact
-        id: download_manager
+      - name: Download platform artifacts
+        id: download_platform
         uses: ./.github/actions/download-pipeline-artifact
         with:
-          token: ${{ needs.build-linux-arm64.outputs.artifact_token }}
-      - name: Download executor artifact
-        id: download_executor
-        uses: ./.github/actions/download-pipeline-artifact
-        with:
-          token: ${{ needs.build-linux-arm64.outputs.secondary_artifact_token }}
+          token: ${{ needs.build-arm64-linux.outputs.artifact_token }}
       - name: Materialize artifacts
+        env:
+          PLATFORM_DIR: ${{ steps.download_platform.outputs.dir }}
         run: |
           set -euo pipefail
           mkdir -p build/out
           pushd build/out
-          tar -xf "${{ steps.download_manager.outputs.file }}" --no-same-owner
-          tar -xf "${{ steps.download_executor.outputs.file }}" --no-same-owner
+          # The platform artifact holds the manager plus one tarball per
+          # executor line; they all overlay onto the same install root.
+          for archive in "$PLATFORM_DIR"/*.tar.xz; do
+            tar -xf "$archive" --no-same-owner
+          done
           popd
       - name: Run post-install
         run: |
@@ -136,9 +179,9 @@ jobs:
             timeout 5 qemu-aarch64 ./build/out/bin/genvm-modules llm --allow-empty-backends --config ./build/out/config/genvm-module-llm.yaml || test $? -eq 124
           '
 
-  test-linux-amd64:
+  test-amd64-linux:
     needs:
-      - build-linux-amd64
+      - build-amd64-linux
       - build-runners-all
     runs-on: ubuntu-latest
     steps:
@@ -149,29 +192,28 @@ jobs:
           third_party: --all
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download manager artifact
-        id: download_manager
+      - name: Download platform artifacts
+        id: download_platform
         uses: ./.github/actions/download-pipeline-artifact
         with:
-          token: ${{ needs.build-linux-amd64.outputs.artifact_token }}
+          token: ${{ needs.build-amd64-linux.outputs.artifact_token }}
       - name: Download runners artifact
         id: download_runners
         uses: ./.github/actions/download-pipeline-artifact
         with:
           token: ${{ needs.build-runners-all.outputs.artifact_token }}
-      - name: Download executor artifact
-        id: download_executor
-        uses: ./.github/actions/download-pipeline-artifact
-        with:
-          token: ${{ needs.build-linux-amd64.outputs.secondary_artifact_token }}
       - name: Materialize artifacts
+        env:
+          PLATFORM_DIR: ${{ steps.download_platform.outputs.dir }}
+          RUNNERS_FILE: ${{ steps.download_runners.outputs.file }}
         run: |
           set -euo pipefail
           mkdir -p build/out
           pushd build/out
-          tar -xf "${{ steps.download_manager.outputs.file }}" --no-same-owner
-          tar -xf "${{ steps.download_runners.outputs.file }}" --no-same-owner
-          tar -xf "${{ steps.download_executor.outputs.file }}" --no-same-owner
+          for archive in "$PLATFORM_DIR"/*.tar.xz; do
+            tar -xf "$archive" --no-same-owner
+          done
+          tar -xf "$RUNNERS_FILE" --no-same-owner
           popd
       - name: Run post-install
         run: |
@@ -192,9 +234,9 @@ jobs:
             genvm-tool test run --ci --filter-tag "$(cat tests/presets/release.txt)"
           '
 
-  test-macos-arm64:
+  test-arm64-macos:
     needs:
-      - build-macos-arm64
+      - build-arm64-macos
       - build-runners-all
     runs-on: macos-latest
     steps:
@@ -204,29 +246,28 @@ jobs:
         with:
           third_party: --all
           with_nix: "false"
-      - name: Download manager artifact
-        id: download_manager
+      - name: Download platform artifacts
+        id: download_platform
         uses: ./.github/actions/download-pipeline-artifact
         with:
-          token: ${{ needs.build-macos-arm64.outputs.artifact_token }}
+          token: ${{ needs.build-arm64-macos.outputs.artifact_token }}
       - name: Download runners artifact
         id: download_runners
         uses: ./.github/actions/download-pipeline-artifact
         with:
           token: ${{ needs.build-runners-all.outputs.artifact_token }}
-      - name: Download executor artifact
-        id: download_executor
-        uses: ./.github/actions/download-pipeline-artifact
-        with:
-          token: ${{ needs.build-macos-arm64.outputs.secondary_artifact_token }}
       - name: Materialize artifacts
+        env:
+          PLATFORM_DIR: ${{ steps.download_platform.outputs.dir }}
+          RUNNERS_FILE: ${{ steps.download_runners.outputs.file }}
         run: |
           set -euo pipefail
           mkdir -p build/out
           pushd build/out
-          tar -xf "${{ steps.download_manager.outputs.file }}" --no-same-owner
-          tar -xf "${{ steps.download_runners.outputs.file }}" --no-same-owner
-          tar -xf "${{ steps.download_executor.outputs.file }}" --no-same-owner
+          for archive in "$PLATFORM_DIR"/*.tar.xz; do
+            tar -xf "$archive" --no-same-owner
+          done
+          tar -xf "$RUNNERS_FILE" --no-same-owner
           popd
       - name: Get wabt
         run: |
@@ -254,16 +295,113 @@ jobs:
           genvm-tool configure
           genvm-tool test run --ci --filter-tag "$(cat tests/presets/release.txt)"
 
+  # Executor lines are released into the executor repo, each at its own version,
+  # at the commit this manager release pins as its gitlink.
+  release-executors:
+    needs:
+      - gen-tag
+      - build-amd64-linux
+      - build-arm64-linux
+      - build-arm64-macos
+      - test-amd64-linux
+      - test-arm64-linux
+      - test-arm64-macos
+    runs-on: ubuntu-latest
+    strategy:
+      # Lines share nothing; publish them one at a time so a failure is
+      # attributable and two lines never race on the same release.
+      max-parallel: 1
+      matrix:
+        line: ${{ fromJSON(needs.gen-tag.outputs.executor_lines) }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download amd64-linux artifacts
+        id: download_amd64_linux
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-amd64-linux.outputs.artifact_token }}
+      - name: Download arm64-linux artifacts
+        id: download_arm64_linux
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-arm64-linux.outputs.artifact_token }}
+      - name: Download arm64-macos artifacts
+        id: download_arm64_macos
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-arm64-macos.outputs.artifact_token }}
+
+      - name: Collect executor assets
+        env:
+          LINE: ${{ matrix.line.line }}
+          DIR_AMD64_LINUX: ${{ steps.download_amd64_linux.outputs.dir }}
+          DIR_ARM64_LINUX: ${{ steps.download_arm64_linux.outputs.dir }}
+          DIR_ARM64_MACOS: ${{ steps.download_arm64_macos.outputs.dir }}
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp "$DIR_AMD64_LINUX/genvm-executor-$LINE-amd64-linux.tar.xz" release-assets/genvm-amd64-linux-executor.tar.xz
+          cp "$DIR_ARM64_LINUX/genvm-executor-$LINE-arm64-linux.tar.xz" release-assets/genvm-arm64-linux-executor.tar.xz
+          cp "$DIR_ARM64_MACOS/genvm-executor-$LINE-arm64-macos.tar.xz" release-assets/genvm-arm64-macos-executor.tar.xz
+          ls -l release-assets
+
+      - name: Publish executor release
+        env:
+          GH_TOKEN: ${{ secrets.EXECUTOR_RELEASE_TOKEN }}
+          LINE: ${{ matrix.line.line }}
+          VERSION: ${{ matrix.line.version }}
+          MANAGER_TAG: ${{ needs.gen-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "::error::EXECUTOR_RELEASE_TOKEN is not set; it needs contents:write on $EXECUTOR_REPO"
+            exit 1
+          fi
+
+          # The commit to tag in the executor repo is exactly the gitlink this
+          # manager release pins. `git ls-tree` reports it as the object id of
+          # the commit entry, so no submodule checkout is needed.
+          sha=$(git ls-tree HEAD "executors/$LINE.x" | awk '{print $3}')
+          if [ -z "$sha" ]; then
+            echo "::error::no gitlink for executors/$LINE.x"
+            exit 1
+          fi
+          echo "executor line $LINE -> $VERSION @ $sha"
+
+          # A line that did not move since the last manager release (the legacy
+          # v0.2 line usually has not) already has its release; leave it alone.
+          if gh release view "$VERSION" --repo "$EXECUTOR_REPO" > /dev/null 2>&1; then
+            echo "::notice::$EXECUTOR_REPO already has release $VERSION; skipping"
+            exit 0
+          fi
+
+          prerelease=()
+          case "$VERSION" in
+            *-*) prerelease=(--prerelease) ;;
+          esac
+
+          gh release create "$VERSION" \
+            --repo "$EXECUTOR_REPO" \
+            --target "$sha" \
+            --title "Executor $VERSION" \
+            --notes "Executor line \`$LINE\` at \`$VERSION\`, as shipped with genvm-manager \`$MANAGER_TAG\`." \
+            "${prerelease[@]}" \
+            release-assets/genvm-amd64-linux-executor.tar.xz \
+            release-assets/genvm-arm64-linux-executor.tar.xz \
+            release-assets/genvm-arm64-macos-executor.tar.xz
+
   release-publish:
     needs:
       - gen-tag
-      - build-linux-amd64
-      - build-linux-arm64
-      - build-macos-arm64
+      - build-amd64-linux
+      - build-arm64-linux
+      - build-arm64-macos
       - build-runners-all
-      - test-linux-amd64
-      - test-linux-arm64
-      - test-macos-arm64
+      - test-amd64-linux
+      - test-arm64-linux
+      - test-arm64-macos
+      - release-executors
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Needed for creating releases
@@ -278,46 +416,37 @@ jobs:
         uses: ./.github/actions/download-pipeline-artifact
         with:
           token: ${{ needs.build-runners-all.outputs.artifact_token }}
-      - name: Download linux-amd64 manager artifact
-        id: download_linux_amd64_manager
+      - name: Download amd64-linux artifacts
+        id: download_amd64_linux
         uses: ./.github/actions/download-pipeline-artifact
         with:
-          token: ${{ needs.build-linux-amd64.outputs.artifact_token }}
-      - name: Download linux-arm64 manager artifact
-        id: download_linux_arm64_manager
+          token: ${{ needs.build-amd64-linux.outputs.artifact_token }}
+      - name: Download arm64-linux artifacts
+        id: download_arm64_linux
         uses: ./.github/actions/download-pipeline-artifact
         with:
-          token: ${{ needs.build-linux-arm64.outputs.artifact_token }}
-      - name: Download macos-arm64 manager artifact
-        id: download_macos_arm64_manager
+          token: ${{ needs.build-arm64-linux.outputs.artifact_token }}
+      - name: Download arm64-macos artifacts
+        id: download_arm64_macos
         uses: ./.github/actions/download-pipeline-artifact
         with:
-          token: ${{ needs.build-macos-arm64.outputs.artifact_token }}
-      - name: Download linux-amd64 executor artifact
-        id: download_linux_amd64_executor
-        uses: ./.github/actions/download-pipeline-artifact
-        with:
-          token: ${{ needs.build-linux-amd64.outputs.secondary_artifact_token }}
-      - name: Download linux-arm64 executor artifact
-        id: download_linux_arm64_executor
-        uses: ./.github/actions/download-pipeline-artifact
-        with:
-          token: ${{ needs.build-linux-arm64.outputs.secondary_artifact_token }}
-      - name: Download macos-arm64 executor artifact
-        id: download_macos_arm64_executor
-        uses: ./.github/actions/download-pipeline-artifact
-        with:
-          token: ${{ needs.build-macos-arm64.outputs.secondary_artifact_token }}
+          token: ${{ needs.build-arm64-macos.outputs.artifact_token }}
+
       - name: Copy release artifacts
+        env:
+          RUNNERS_FILE: ${{ steps.download_runners.outputs.file }}
+          DIR_AMD64_LINUX: ${{ steps.download_amd64_linux.outputs.dir }}
+          DIR_ARM64_LINUX: ${{ steps.download_arm64_linux.outputs.dir }}
+          DIR_ARM64_MACOS: ${{ steps.download_arm64_macos.outputs.dir }}
         run: |
           set -euo pipefail
-          cp "${{ steps.download_runners.outputs.file }}" genvm-runners-all.tar.xz
-          cp "${{ steps.download_linux_amd64_manager.outputs.file }}" genvm-linux-amd64.tar.xz
-          cp "${{ steps.download_linux_arm64_manager.outputs.file }}" genvm-linux-arm64.tar.xz
-          cp "${{ steps.download_macos_arm64_manager.outputs.file }}" genvm-macos-arm64.tar.xz
-          cp "${{ steps.download_linux_amd64_executor.outputs.file }}" genvm-linux-amd64-executor.tar.xz
-          cp "${{ steps.download_linux_arm64_executor.outputs.file }}" genvm-linux-arm64-executor.tar.xz
-          cp "${{ steps.download_macos_arm64_executor.outputs.file }}" genvm-macos-arm64-executor.tar.xz
+          # Runners are platform-independent; they ship as the `-universal`
+          # asset. The executor tarballs sitting in the same platform dirs are
+          # released to the executor repo, not attached here.
+          cp "$RUNNERS_FILE" genvm-universal.tar.xz
+          cp "$DIR_AMD64_LINUX/genvm-manager-amd64-linux.tar.xz" genvm-amd64-linux.tar.xz
+          cp "$DIR_ARM64_LINUX/genvm-manager-arm64-linux.tar.xz" genvm-arm64-linux.tar.xz
+          cp "$DIR_ARM64_MACOS/genvm-manager-arm64-macos.tar.xz" genvm-arm64-macos.tar.xz
 
       - run: |
           git tag ${{ needs.gen-tag.outputs.tag }} && \
@@ -339,13 +468,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            genvm-runners-all.tar.xz
-            genvm-linux-amd64.tar.xz
-            genvm-linux-arm64.tar.xz
-            genvm-macos-arm64.tar.xz
-            genvm-linux-amd64-executor.tar.xz
-            genvm-linux-arm64-executor.tar.xz
-            genvm-macos-arm64-executor.tar.xz
+            genvm-universal.tar.xz
+            genvm-amd64-linux.tar.xz
+            genvm-arm64-linux.tar.xz
+            genvm-arm64-macos.tar.xz
           name: Release ${{ needs.gen-tag.outputs.tag }}
           tag_name: ${{ needs.gen-tag.outputs.tag }}
           body_path: release-notes.md

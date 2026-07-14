@@ -3,26 +3,18 @@ name: Build Release For Target
 on:
   workflow_call:
     inputs:
-      target:
-        description: 'Target to build'
+      targets:
+        description: 'Nix targets to build, one per line'
         required: true
         type: string
-      secondary_target:
-        description: 'Secondary target to build'
-        required: false
-        type: string
-        default: ''
       executor_version:
         description: 'Version name of the executor'
         required: true
         type: string
     outputs:
       artifact_token:
-        description: "Token to download the built artifact"
+        description: "Token to download the built artifacts (build/genvm-<target>.tar.xz per target)"
         value: ${{ jobs.build.outputs.artifact_token }}
-      secondary_artifact_token:
-        description: "Token to download the secondary built artifact"
-        value: ${{ jobs.build.outputs.secondary_artifact_token }}
 
 jobs:
   build:
@@ -32,7 +24,6 @@ jobs:
       actions: write
     outputs:
       artifact_token: ${{ steps.upload.outputs.token }}
-      secondary_artifact_token: ${{ steps.upload_secondary.outputs.token }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -53,27 +44,23 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
+        env:
+          TARGETS: ${{ inputs.targets }}
+          EXECUTOR_VERSION: ${{ inputs.executor_version }}
         run: |
-          ./support/ci/pipelines/build.sh \
-            --target ${{ inputs.target }} \
-            --executor-version ${{ inputs.executor_version }}
+          set -euo pipefail
+          # The targets of one job share a nix store, so building the manager
+          # and every executor line here costs no more than building them in
+          # separate jobs would.
+          while IFS= read -r target; do
+            [ -n "$target" ] || continue
+            ./support/ci/pipelines/build.sh \
+              --target "$target" \
+              --executor-version "$EXECUTOR_VERSION"
+          done <<< "$TARGETS"
 
-      - name: Build Secondary
-        if: ${{ inputs.secondary_target != '' }}
-        run: |
-          ./support/ci/pipelines/build.sh \
-            --target ${{ inputs.secondary_target }} \
-            --executor-version ${{ inputs.executor_version }}
-
-      - name: Upload artifact
+      - name: Upload artifacts
         id: upload
         uses: ./.github/actions/upload-pipeline-artifact
         with:
-          file: build/genvm-${{ inputs.target }}.tar.xz
-
-      - name: Upload secondary artifact
-        id: upload_secondary
-        if: ${{ inputs.secondary_target != '' }}
-        uses: ./.github/actions/upload-pipeline-artifact
-        with:
-          file: build/genvm-${{ inputs.secondary_target }}.tar.xz
+          path: build/*.tar.xz

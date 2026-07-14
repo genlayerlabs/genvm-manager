@@ -1,8 +1,8 @@
 name: GenVM upload pipeline artifact
-description: Upload a single file as a pipeline-local artifact and return its token.
+description: Upload one or more files as a pipeline-local artifact and return its token.
 inputs:
-  file:
-    description: File to upload
+  path:
+    description: File or glob to upload
     required: true
 outputs:
   token:
@@ -15,14 +15,20 @@ runs:
       id: meta
       shell: bash
       env:
-        PIPELINE_ARTIFACT_FILE: ${{ inputs.file }}
+        PIPELINE_ARTIFACT_PATH: ${{ inputs.path }}
       run: |
         set -euo pipefail
 
-        if [ ! -f "$PIPELINE_ARTIFACT_FILE" ]; then
-          echo "pipeline artifact file does not exist: $PIPELINE_ARTIFACT_FILE" >&2
+        # A glob, not a single file: one platform job builds the manager plus
+        # one tarball per active executor line and uploads them together.
+        shopt -s nullglob
+        matches=($PIPELINE_ARTIFACT_PATH)
+        if [ "${#matches[@]}" -eq 0 ]; then
+          echo "pipeline artifact path matched no files: $PIPELINE_ARTIFACT_PATH" >&2
           exit 1
         fi
+        printf 'uploading:\n'
+        printf '  %s\n' "${matches[@]}"
 
         token="pipeline-artifact-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
         echo "token=$token" >> "$GITHUB_OUTPUT"
@@ -31,6 +37,6 @@ runs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.meta.outputs.token }}
-        path: ${{ inputs.file }}
+        path: ${{ inputs.path }}
         if-no-files-found: error
         retention-days: 3

@@ -19,11 +19,34 @@ Platform suffixes: none (native), `-amd64-linux`, `-arm64-linux`, `-arm64-macos`
 nix build -v -L '.?submodules=1#genvm-amd64-linux'
 ```
 
-Release assets (`.github/workflows/release.yaml`; tag = `version` from
-`.genvm-monorepo-root`, see [versioning.md](versioning.md)):
+## Release assets
 
-- `genvm-<os>-<arch>.tar.xz` ← `manager-<platform>`
-- `genvm-<os>-<arch>-executor.tar.xz` ← `executor-<platform>`
-- `genvm-runners-all.tar.xz` ← `runners-all-dist`
+`.github/workflows/release.yaml` builds everything here — the executor is not a
+standalone build entry point — then publishes each asset to the repo that owns
+it.
 
-All three extract at the same install root.
+Assets are named with the same platform token as the nix targets
+(`amd64-linux`, …), not a reversed one.
+
+**genvm-manager**, tagged with `version` from `.genvm-monorepo-root` (see
+[versioning.md](versioning.md)):
+
+- `genvm-<platform>.tar.xz` ← `manager-<platform>`
+- `genvm-universal.tar.xz` ← `runners-all-dist` (platform-independent)
+
+**genvm-executor**, one release per active line, tagged with that line's
+`executor-version` from `executors/<line>.x/manifest.json`, created at the
+commit the manager pins as its gitlink:
+
+- `genvm-<platform>-executor.tar.xz` ← `executor-<line>-<platform>`
+
+The manager release does not carry the executors. Assets still overlay onto one
+install root, so a full install is the manager bundle + `genvm-universal` from
+genvm-manager, plus each executor line from genvm-executor.
+
+A line whose release tag already exists is skipped, not rebuilt — the legacy
+v0.2 line usually does not move between manager releases.
+
+Publishing into genvm-executor needs the `EXECUTOR_RELEASE_TOKEN` secret (a PAT
+or GitHub App token with `contents: write` there); `GITHUB_TOKEN` cannot write
+across repos.

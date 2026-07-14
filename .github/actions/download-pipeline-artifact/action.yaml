@@ -1,12 +1,15 @@
 name: GenVM download pipeline artifact
-description: Download a single-file pipeline-local artifact by token and expose the local file path.
+description: Download a pipeline-local artifact by token and expose its directory (and, for single-file artifacts, the file path).
 inputs:
   token:
     description: Token returned by upload-pipeline-artifact
     required: true
 outputs:
+  dir:
+    description: Local directory holding the downloaded files
+    value: ${{ steps.materialize.outputs.dir }}
   file:
-    description: Local path to the downloaded file
+    description: Local path to the downloaded file; empty unless the artifact holds exactly one
     value: ${{ steps.materialize.outputs.file }}
 runs:
   using: composite
@@ -17,7 +20,7 @@ runs:
         name: ${{ inputs.token }}
         path: ${{ runner.temp }}/pipeline-artifacts/${{ inputs.token }}
 
-    - name: Validate and expose downloaded file
+    - name: Validate and expose downloaded files
       id: materialize
       shell: bash
       env:
@@ -32,10 +35,19 @@ runs:
           file=$candidate
         done < <(find "$PIPELINE_ARTIFACT_DIR" -type f | sort)
 
-        if [ "$count" -ne 1 ]; then
-          echo "expected exactly one file in downloaded artifact, found $count" >&2
-          find "$PIPELINE_ARTIFACT_DIR" -type f | sort >&2
+        if [ "$count" -eq 0 ]; then
+          echo "downloaded artifact is empty" >&2
           exit 1
         fi
 
-        echo "file=$file" >> "$GITHUB_OUTPUT"
+        echo "contents:"
+        find "$PIPELINE_ARTIFACT_DIR" -type f | sort | sed 's/^/  /'
+
+        echo "dir=$PIPELINE_ARTIFACT_DIR" >> "$GITHUB_OUTPUT"
+        # `file` is a convenience for single-file artifacts; multi-file
+        # consumers index into `dir` by the known genvm-<target>.tar.xz name.
+        if [ "$count" -eq 1 ]; then
+          echo "file=$file" >> "$GITHUB_OUTPUT"
+        else
+          echo "file=" >> "$GITHUB_OUTPUT"
+        fi
