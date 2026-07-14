@@ -515,9 +515,12 @@
 
           # ---- Release distribution bundles -------------------------
           # `executor[-<platform>]` (no version) merges every active line's
-          # executor tree (executor/<version>/...) — the release asset
-          # genvm-<os>-<arch>-executor.tar.xz. Runners are NOT included;
-          # they ship platform-independently via runners-all-dist.
+          # executor tree (executor/<version>/...) into one bundle. The release
+          # publishes each line on its own (`executor-<version>[-<platform>]`,
+          # one release per line in the executor repo), so this merged bundle has
+          # no CI consumer; it stays as the convenient "give me every line"
+          # target for local use. Runners are NOT included; they ship
+          # platform-independently via runners-all-dist.
           combine-executors =
             suffix:
             pkgs.runCommand "genvm-executor${suffix}"
@@ -534,7 +537,7 @@
             ) platform-suffixes
           );
 
-          # The release asset genvm-runners-all.tar.xz: consumers extract it at
+          # The release asset genvm-universal.tar.xz: consumers extract it at
           # the install root, so the shared runners sit under runners/ and the
           # legacy lines' runners at their executor/<version>/legacy-runners
           # destination (the same overlay combine-genvm applies).

@@ -20,8 +20,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
+      # A called workflow cannot ask for more than the caller granted, and the
+      # release workflow grants `actions: read`. Uploading an artifact does not
+      # need `actions: write` anyway (upload-artifact uses the runtime token).
       contents: read
-      actions: write
+      actions: read
     outputs:
       artifact_token: ${{ steps.upload.outputs.token }}
     steps:

@@ -7,7 +7,7 @@ Runners build only on x86_64 Linux (part of the `all` ninja target /
 python3 build/out/bin/post-install.py --create-venv false --default-step false --runners-download true --error-on-missing-executor false
 ```
 
-or fetch `genvm-runners-all.tar.xz` from a
+or fetch `genvm-universal.tar.xz` from a
 [genvm-manager release](https://github.com/genlayerlabs/genvm-manager/releases)
 and extract it over `build/out`.
 

@@ -93,9 +93,15 @@ jobs:
           monorepo = json.loads(Path('.genvm-monorepo-root').read_text())
 
           lines = []
-          for line in monorepo['active-versions']:
+          for index, line in enumerate(monorepo['active-versions']):
               manifest = json.loads(Path(f'executors/{line}.x/manifest.json').read_text())
-              lines.append({'line': line, 'version': manifest['executor-version']})
+              lines.append({
+                  'line': line,
+                  'version': manifest['executor-version'],
+                  # active-versions is ordered head-first; only the head line may
+                  # claim "Latest" in the executor repo.
+                  'head': index == 0,
+              })
 
           print('executor_lines=' + json.dumps(lines))
 
@@ -296,7 +302,11 @@ jobs:
           genvm-tool test run --ci --filter-tag "$(cat tests/presets/release.txt)"
 
   # Executor lines are released into the executor repo, each at its own version,
-  # at the commit this manager release pins as its gitlink.
+  # at the commit this manager release pins as its gitlink. This runs before the
+  # manager is tagged, so a manager tag never references executors that failed to
+  # publish. The reverse is still possible (executors published, manager tag
+  # fails); re-running is safe because a line already released at the pinned
+  # commit is skipped, and one released at a different commit is a hard error.
   release-executors:
     needs:
       - gen-tag
@@ -308,8 +318,8 @@ jobs:
       - test-arm64-macos
     runs-on: ubuntu-latest
     strategy:
-      # Lines share nothing; publish them one at a time so a failure is
-      # attributable and two lines never race on the same release.
+      # Each line has its own tag, but they all touch the same repo's release
+      # list (and its "Latest" marker); publish them one at a time.
       max-parallel: 1
       matrix:
         line: ${{ fromJSON(needs.gen-tag.outputs.executor_lines) }}
@@ -350,6 +360,7 @@ jobs:
           GH_TOKEN: ${{ secrets.EXECUTOR_RELEASE_TOKEN }}
           LINE: ${{ matrix.line.line }}
           VERSION: ${{ matrix.line.version }}
+          IS_HEAD: ${{ matrix.line.head }}
           MANAGER_TAG: ${{ needs.gen-tag.outputs.tag }}
         run: |
           set -euo pipefail
@@ -369,24 +380,40 @@ jobs:
           fi
           echo "executor line $LINE -> $VERSION @ $sha"
 
-          # A line that did not move since the last manager release (the legacy
-          # v0.2 line usually has not) already has its release; leave it alone.
+          # A line that has not moved since its release (the legacy v0.2 line
+          # usually has not) is already published. Only skip it if that release
+          # sits on the very commit this manager pins: otherwise the manager
+          # would ship a gitlink whose binaries were never published, and the
+          # existing release's assets would silently be the stale ones.
           if gh release view "$VERSION" --repo "$EXECUTOR_REPO" > /dev/null 2>&1; then
-            echo "::notice::$EXECUTOR_REPO already has release $VERSION; skipping"
-            exit 0
+            released=$(gh api "repos/$EXECUTOR_REPO/commits/$VERSION" --jq '.sha')
+            if [ "$released" = "$sha" ]; then
+              echo "::notice::$EXECUTOR_REPO already has release $VERSION at $sha; skipping"
+              exit 0
+            fi
+            echo "::error::$EXECUTOR_REPO release $VERSION is at $released, but this manager pins $sha — bump executor-version in executors/$LINE.x/manifest.json"
+            exit 1
           fi
 
-          prerelease=()
+          flags=()
           case "$VERSION" in
-            *-*) prerelease=(--prerelease) ;;
+            *-*) flags+=(--prerelease) ;;
           esac
+          # Lines publish identically named assets, so a legacy line marked
+          # "Latest" would make /releases/latest/download/... serve the legacy
+          # executor. Only the head line may claim it.
+          if [ "$IS_HEAD" = "true" ]; then
+            flags+=(--latest)
+          else
+            flags+=(--latest=false)
+          fi
 
           gh release create "$VERSION" \
             --repo "$EXECUTOR_REPO" \
             --target "$sha" \
             --title "Executor $VERSION" \
             --notes "Executor line \`$LINE\` at \`$VERSION\`, as shipped with genvm-manager \`$MANAGER_TAG\`." \
-            "${prerelease[@]}" \
+            "${flags[@]}" \
             release-assets/genvm-amd64-linux-executor.tar.xz \
             release-assets/genvm-arm64-linux-executor.tar.xz \
             release-assets/genvm-arm64-macos-executor.tar.xz
