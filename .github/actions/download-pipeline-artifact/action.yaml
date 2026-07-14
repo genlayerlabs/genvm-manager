@@ -1,0 +1,41 @@
+name: GenVM download pipeline artifact
+description: Download a single-file pipeline-local artifact by token and expose the local file path.
+inputs:
+  token:
+    description: Token returned by upload-pipeline-artifact
+    required: true
+outputs:
+  file:
+    description: Local path to the downloaded file
+    value: ${{ steps.materialize.outputs.file }}
+runs:
+  using: composite
+  steps:
+    - name: Download artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.token }}
+        path: ${{ runner.temp }}/pipeline-artifacts/${{ inputs.token }}
+
+    - name: Validate and expose downloaded file
+      id: materialize
+      shell: bash
+      env:
+        PIPELINE_ARTIFACT_DIR: ${{ runner.temp }}/pipeline-artifacts/${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        count=0
+        file=""
+        while IFS= read -r candidate; do
+          count=$((count + 1))
+          file=$candidate
+        done < <(find "$PIPELINE_ARTIFACT_DIR" -type f | sort)
+
+        if [ "$count" -ne 1 ]; then
+          echo "expected exactly one file in downloaded artifact, found $count" >&2
+          find "$PIPELINE_ARTIFACT_DIR" -type f | sort >&2
+          exit 1
+        fi
+
+        echo "file=$file" >> "$GITHUB_OUTPUT"

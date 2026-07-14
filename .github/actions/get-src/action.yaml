@@ -5,10 +5,6 @@ inputs:
     description: if should setup nix
     required: false
     default: "false"
-  load_submodules:
-    description: if should update submodules
-    required: false
-    default: "true"
   third_party:
     description: third-party modules to install
     required: false
@@ -24,25 +20,7 @@ runs:
         cd "$GITHUB_WORKSPACE"
         git config --global user.email "ci@genlayerlabs.com"
         git config --global user.name "CI worker"
-        if [ "${{ inputs.load_submodules }}" == "true" ]
-        then
-          git submodule update --init --recursive --depth 1
-          if [ "${{ inputs.third_party }}" != "none" ]
-          then
-            source env.sh
-            # Vendored third-party trees are registered per executor submodule:
-            # `.git-third-party/config.json` lives inside each executor, which is
-            # its own git repo. `git third-party` resolves its config from the
-            # current git toplevel, so it must run *inside* each executor —
-            # running it once at the manager root finds no config and
-            # materializes nothing (which then breaks the cargo build).
-            for cfg in executors/*/.git-third-party/config.json
-            do
-              [ -e "$cfg" ] || continue
-              ( cd "$(dirname "$(dirname "$cfg")")" && git third-party update ${{ inputs.third_party }} )
-            done
-          fi
-        fi
+        python3 support/scripts/get-all-git.py "--third-party=${{ inputs.third_party }}"
       shell: bash -ex {0}
     - name: setup nix
       if: ${{ inputs.with_nix == 'true' }}

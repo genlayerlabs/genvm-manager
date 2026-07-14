@@ -14,10 +14,6 @@ while [[ $# -gt 0 ]]; do
 			TARGET="${1#*=}"
 			shift
 			;;
-		--executor-version)
-			EXECUTOR_VERSION="$2"
-			shift 2
-			;;
 		--executor-version=*)
 			EXECUTOR_VERSION="${1#*=}"
 			shift
@@ -63,11 +59,6 @@ if [[ -n "$TARGET" && -z "$TARGET" ]]; then
 	exit 1
 fi
 
-if [[ -n "$EXECUTOR_VERSION" && -z "$EXECUTOR_VERSION" ]]; then
-	echo "Error: --executor-version cannot be empty" >&2
-	exit 1
-fi
-
 if [[ -n "${COMPRESSION:-}" && "$COMPRESSION" != "skip" ]]; then
 	if ! [[ "$COMPRESSION" =~ ^[1-9]$ ]]; then
 		echo "Error: --compression must be 1-9 or 'skip'" >&2
@@ -79,19 +70,10 @@ HEAD_REVISION=$(git rev-parse HEAD)
 
 echo "\$TARGET = $TARGET"
 echo "\$HEAD_REVISION = $HEAD_REVISION"
-echo "\$EXECUTOR_VERSION = $EXECUTOR_VERSION"
 echo "\$EXTRA_BUNDLE = $EXTRA_BUNDLE"
 
 SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
 source "$SCRIPT_DIR/_common.sh"
-
-cat <<EOF > flake-config.json
-{
-  "executor-version": "$EXECUTOR_VERSION",
-  "repo-url": "https://github.com/genlayerlabs/genvm-manager.git",
-  "head-revision": "$HEAD_REVISION"
-}
-EOF
 
 echo "::group::prefetch dependencies"
 if [[ -z "${NO_REFETCH:-}" ]]; then

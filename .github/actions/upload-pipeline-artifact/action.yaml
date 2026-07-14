@@ -1,0 +1,36 @@
+name: GenVM upload pipeline artifact
+description: Upload a single file as a pipeline-local artifact and return its token.
+inputs:
+  file:
+    description: File to upload
+    required: true
+outputs:
+  token:
+    description: Token to pass to download-pipeline-artifact
+    value: ${{ steps.meta.outputs.token }}
+runs:
+  using: composite
+  steps:
+    - name: Validate input and generate token
+      id: meta
+      shell: bash
+      env:
+        PIPELINE_ARTIFACT_FILE: ${{ inputs.file }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "$PIPELINE_ARTIFACT_FILE" ]; then
+          echo "pipeline artifact file does not exist: $PIPELINE_ARTIFACT_FILE" >&2
+          exit 1
+        fi
+
+        token="pipeline-artifact-$(python3 -c 'import uuid; print(uuid.uuid4().hex)')"
+        echo "token=$token" >> "$GITHUB_OUTPUT"
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.meta.outputs.token }}
+        path: ${{ inputs.file }}
+        if-no-files-found: error
+        retention-days: 3
