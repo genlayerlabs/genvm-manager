@@ -4,7 +4,7 @@ Runners build only on x86_64 Linux (part of the `all` ninja target /
 `#runners-all` nix attr). On other hosts, download them:
 
 ```bash
-python3 build/out/bin/post-install.py --create-venv false --default-step false --runners-download true --error-on-missing-executor false
+python3 build/out/bin/genvm-post-install --create-venv false --default-step false --runners-download true --error-on-missing-executor false
 ```
 
 or fetch `genvm-universal.tar.xz` from a

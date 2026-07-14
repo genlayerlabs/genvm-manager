@@ -13,7 +13,7 @@ ninja -v -C build all/bin
 echo "::endgroup::"
 
 echo "::group::post-install"
-python3 ./build/out/bin/post-install.py \
+python3 ./build/out/bin/genvm-post-install \
     --error-on-missing-executor=false \
     --default-download=false
 echo "::endgroup::"

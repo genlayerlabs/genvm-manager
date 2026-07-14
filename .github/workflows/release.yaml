@@ -175,7 +175,7 @@ jobs:
           popd
       - name: Run post-install
         run: |
-          ./build/out/bin/post-install.py \
+          ./build/out/bin/genvm-post-install \
             --error-on-missing-executor=false \
             --default-download=false || true
           nix develop '.?submodules=1#check-qemu' --command bash -c 'qemu-aarch64 ./build/out/bin/genvm-modules --version'
@@ -223,7 +223,7 @@ jobs:
           popd
       - name: Run post-install
         run: |
-          ./build/out/bin/post-install.py \
+          ./build/out/bin/genvm-post-install \
             --default-download=false
       - name: Smoke test modules startup
         run: |
@@ -287,7 +287,7 @@ jobs:
           python-version: '3.12'
       - name: Run post-install
         run: |
-          ./build/out/bin/post-install.py \
+          ./build/out/bin/genvm-post-install \
             --default-download=false
       - name: Smoke test modules startup
         run: |
