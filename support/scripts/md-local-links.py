@@ -1,13 +1,19 @@
-"""Local Markdown link checking (pure, no I/O orchestration).
+#!/usr/bin/env python3
+"""Pre-commit guard: verify local file-path links in Markdown resolve.
 
-Validates that **local** link targets (and reference definitions) resolve to
+Validates that **local** link targets (and reference definitions) point at
 existing files; ignores external links (http(s)/mailto/other schemes),
-protocol-relative `//host` links, and in-page `#anchor` links. Used by the
-genvm-tool `md-local-links` builtin in place of the network `markdown-link-check`.
+protocol-relative `//host` links, and in-page `#anchor` links. Replaces the
+network `markdown-link-check`.
+
+Invoked by the git-hooks `markdown-local-links` hook with the changed markdown
+files as arguments; the repo root is the current working directory (pre-commit
+runs hooks from the repo top level).
 """
 
 import os
 import re
+import sys
 import urllib.parse
 from pathlib import Path
 
@@ -67,3 +73,17 @@ def broken_links(md: Path, root: Path) -> list[str]:
 				f'{_rel(md, root)}: broken local link {raw!r} -> {_rel(dest, root)} (not found)'
 			)
 	return out
+
+
+def main(argv: list[str]) -> int:
+	root = Path.cwd()
+	problems = []
+	for arg in argv:
+		problems += broken_links(Path(arg), root)
+	for p in problems:
+		print(p, file=sys.stderr)
+	return 1 if problems else 0
+
+
+if __name__ == '__main__':
+	raise SystemExit(main(sys.argv[1:]))

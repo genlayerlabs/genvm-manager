@@ -4,8 +4,8 @@ Everything after `test` is forwarded to the runner under `genvm_tool/tests/`:
 its `run` / `show plan|test|services|tags` subcommands plus the suite-provided
 filter flags. The runner reuses genvm-tool's `Context` (logger/printer) and the
 top-level `-C` / `--log-format` / `--log-level`; the runner package is imported
-lazily so the stdlib-only paths (`configure`, `git ls`, `hook run`,
-`hook install`) never pull in its `aiohttp` / `jsonnet` dependency closure.
+lazily so the stdlib-only paths (`configure`, `git ls`) never pull in its
+`aiohttp` / `jsonnet` dependency closure.
 """
 
 import argparse

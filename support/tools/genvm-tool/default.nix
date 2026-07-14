@@ -1,4 +1,4 @@
-# genvm-tool: the multi-repo git-hook runner, `configure`, `git ls`, and the
+# genvm-tool: the multi-repo `configure` / `git ls` helpers and the
 # `genvm-tool test` runner (under `genvm_tool/tests`, shipped with the package).
 {
   pkgs ? import <nixpkgs> { },

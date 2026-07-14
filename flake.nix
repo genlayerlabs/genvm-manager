@@ -8,6 +8,10 @@
       url = "github:numtide/flake-utils";
       inputs.systems.follows = "systems";
     };
+    git-hooks = {
+      url = "github:cachix/git-hooks.nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -16,6 +20,7 @@
       nixpkgs,
       flake-utils,
       systems,
+      git-hooks,
     }:
     let
       for-systems = flake-utils.lib.eachDefaultSystem (
@@ -148,6 +153,145 @@
             export LUA_INCLUDE="${manager-release-args.lua-src}"
             export CARGO_TARGET_DIR="$(pwd)/build/ya-build/rust-target"
           '';
+
+          # ---- Commit hooks (git-hooks.nix) ------------------------
+          # Formatters/linters + local guards for the MANAGER tree only.
+          # Executor submodules ship their own top-level flake + hooks
+          # (each pinned to its own toolchain), so `^executors/` is dropped
+          # here and every executor's own `nix flake check` covers its
+          # files. Wired into CI by support/ci/pipelines/commit-hooks.sh and
+          # installed into .git/hooks by the `full` dev shell's shellHook.
+          hooks-python = pkgs.python312;
+          # cargo fmt per crate: each Cargo.toml picks up its own edition, so
+          # the manager's independent workspaces all format correctly.
+          cargo-fmt-all = pkgs.writeShellScript "cargo-fmt-all" ''
+            set -euo pipefail
+            export PATH="${pkgs.cargo}/bin:${pkgs.rustfmt}/bin:$PATH"
+            rc=0
+            # git ls-files never descends into the executor submodule gitlinks,
+            # but exclude executors/ explicitly too: their Rust is formatted by
+            # each executor's own flake, against its own pinned toolchain.
+            while IFS= read -r toml; do
+              ( cd "$(dirname -- "$toml")" && cargo fmt ) || rc=1
+            done < <(git ls-files '*Cargo.toml' ':(exclude)executors/')
+            exit $rc
+          '';
+          pre-commit-check = git-hooks.lib.${system}.run {
+            src = ./.;
+            excludes = [
+              "^executors/"
+              "^build/"
+              "^\\.direnv/"
+            ];
+            hooks = {
+              # --- generic checks ---------------------------------------
+              trim-trailing-whitespace = {
+                enable = true;
+                excludes = [
+                  "^\\.git-third-party"
+                  "/fuzz/"
+                ];
+              };
+              end-of-file-fixer = {
+                enable = true;
+                excludes = [
+                  "^\\.git-third-party"
+                  "/fuzz/"
+                ];
+              };
+              check-added-large-files.enable = true;
+              check-json = {
+                enable = true;
+                excludes = [
+                  "^\\.git-third-party"
+                  "/tsconfig\\.json$"
+                ];
+              };
+              check-yaml.enable = true;
+              check-toml.enable = true;
+              check-merge-conflicts.enable = true;
+              taplo.enable = true;
+              editorconfig-checker = {
+                enable = true;
+                # text-only (the built-in defaults to every file): keep binary
+                # blobs out of it, mirroring the old engine's `text` pseudo-type.
+                types = [ "text" ];
+                excludes = [
+                  "git-third-party"
+                  "/fuzz/"
+                ];
+              };
+              # --- manager-owned languages: python, lua, ts, nix --------
+              # git-third-party is a vendored helper tool (late imports by
+              # design); the old engine skipped it (keyed on the `.py` ext),
+              # so keep ruff off it.
+              ruff = {
+                enable = true;
+                excludes = [ "^support/tools/git-third-party/" ];
+              };
+              ruff-format = {
+                enable = true;
+                excludes = [ "^support/tools/git-third-party/" ];
+              };
+              stylua = {
+                enable = true;
+                files = "\\.lua$";
+              };
+              prettier = {
+                enable = true;
+                files = "\\.(ts|tsx)$";
+                excludes = [ "^\\.git-third-party" ];
+              };
+              nixfmt-rfc-style = {
+                enable = true;
+                files = "\\.nix$";
+              };
+              # --- rust (per-crate, edition-aware) ----------------------
+              cargo-fmt = {
+                enable = true;
+                name = "cargo-fmt";
+                entry = toString cargo-fmt-all;
+                files = "\\.rs$";
+                pass_filenames = false;
+              };
+              # --- github workflow / action schemas ---------------------
+              check-github-workflows = {
+                enable = true;
+                name = "check-github-workflows";
+                entry = "${pkgs.check-jsonschema}/bin/check-jsonschema --builtin-schema vendor.github-workflows";
+                files = "^\\.github/workflows/.*\\.ya?ml$";
+              };
+              check-github-actions = {
+                enable = true;
+                name = "check-github-actions";
+                entry = "${pkgs.check-jsonschema}/bin/check-jsonschema --builtin-schema vendor.github-actions";
+                files = "^\\.github/(actions/.+/)?action\\.ya?ml$";
+              };
+              # --- local guards -----------------------------------------
+              # Keep the manager crate's [package] version in lockstep with
+              # .genvm-monorepo-root (executor lines version independently).
+              check-cargo-versions = {
+                enable = true;
+                name = "check-cargo-versions";
+                entry = "${hooks-python}/bin/python3 support/ci/check-versions.py sync";
+                files = "^(implementation/Cargo\\.toml|\\.genvm-monorepo-root)$";
+                pass_filenames = false;
+              };
+              markdown-local-links = {
+                enable = true;
+                name = "markdown-local-links";
+                entry = "${hooks-python}/bin/python3 support/scripts/md-local-links.py";
+                types = [ "markdown" ];
+              };
+              # --- commit-msg -------------------------------------------
+              check-commit-message = {
+                enable = true;
+                name = "check-commit-message";
+                entry = "${hooks-python}/bin/python3 support/scripts/check-commit-message.py --message-file";
+                stages = [ "commit-msg" ];
+              };
+            };
+          };
 
           # ---- Active executor lines -------------------------------
           # `.genvm-monorepo-root` carries two independent versions:
@@ -422,6 +566,12 @@
         in
         {
           runners = runners-list;
+          checks.pre-commit-check = pre-commit-check;
+          # `nix fmt` runs the same generated hook config as `nix flake check`,
+          # in the working tree (manager files only — executors have their own).
+          formatter = pkgs.writeShellScriptBin "pre-commit-run" ''
+            exec ${pre-commit-check.config.package}/bin/pre-commit run --all-files --config ${pre-commit-check.config.configFile}
+          '';
           packages =
             # Combined distribution: all executors + manager + runners.
             genvm-packages
@@ -470,8 +620,14 @@
               ++ packages-py-test
               ++ packages-rust
               ++ packages-gen-docs
-              ++ [ pkgs.nodejs ];
-            shellHook = shell-hook-base;
+              ++ [ pkgs.nodejs ]
+              # pre-commit + the hook tools, so `pre-commit run` works in-shell.
+              # (No rustfmt/cargo here — cargo-fmt is a custom hook — so the
+              # custom-rust toolchain is not shadowed.)
+              ++ pre-commit-check.enabledPackages;
+            # The interactive dev shell (.envrc → `.#full`) also installs the
+            # git-hooks pre-commit/commit-msg stubs into .git/hooks.
+            shellHook = shell-hook-base + pre-commit-check.shellHook;
           };
           devShells.check-qemu = pkgs.mkShell {
             packages = packages-0 ++ [ pkgs.qemu ];

@@ -3,9 +3,10 @@
 """Command-line interface for genvm-tool.
 
 Top-level commands (`configure`, `test`) sit alongside command *groups* (`git`
-with `git ls` / `git list-repo`, `hook` with `hook run` / `hook install`). Each group is a
-sub-package exposing `COMMANDS`; every leaf module exposes `NAME`, `HELP`,
-`configure(parser)` and `main(ctx, args)` (sync or async).
+with `git ls` / `git list-repo`). Each group is a sub-package exposing
+`COMMANDS`; every leaf module exposes `NAME`, `HELP`, `configure(parser)` and
+`main(ctx, args)` (sync or async). Commit hooks are handled by git-hooks.nix
+(each repo's flake), not this tool — see support/ci/pipelines/commit-hooks.sh.
 """
 
 import argparse
@@ -24,11 +25,10 @@ from . import (
 	common,
 	formatter,
 	git,
-	hook,
 )
 
 TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest, cmd_codegen]
-GROUPS = [git, hook]
+GROUPS = [git]
 
 
 def _add_leaf(subparsers, mod) -> None:
@@ -40,7 +40,7 @@ def _add_leaf(subparsers, mod) -> None:
 def _create_parser() -> argparse.ArgumentParser:
 	parser = argparse.ArgumentParser(
 		prog='genvm-tool',
-		description='GenVM monorepo git helper (build, tests, hooks, ls)',
+		description='GenVM monorepo git helper (build, tests, ls)',
 	)
 	# `--print-completion {bash,zsh,tcsh}` emits a shell completion script for the
 	# whole command tree and exits (shtab walks the subparsers below at call time).

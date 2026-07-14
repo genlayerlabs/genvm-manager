@@ -1,9 +1,7 @@
 """Shared primitives: repo discovery and git queries.
 
 A "repo" is the manager root plus every executor submodule
-(`executors/<v>.x/`, discovered from `.genvm-monorepo-root`). The hook-execution
-engine (tool profiles, filtering, runner, builtins) lives in
-`genvm_tool.hook.engine`.
+(`executors/<v>.x/`, discovered from `.genvm-monorepo-root`).
 """
 
 import functools
@@ -19,13 +17,8 @@ from . import formatter
 
 MONOREPO_MARKER = '.genvm-monorepo-root'
 # Per-repo project file (manager + every executor). Exec'd once before any
-# subcommand runs; subcommands ask it for what they need — `hooks(ctx)` (commit
-# hooks for that repo) and, on the manager, `tests(ctx)` (the test suite).
+# subcommand runs; on the manager it also provides `tests(ctx)` (the test suite).
 PROJECT_FILE = '.genvm-tool.py'
-PRECOMMIT_SUBDIR = 'support/nix/precommit'
-# Kept verbatim per the agreed cache location; sits in the gitignored `.direnv`.
-CACHE_SUBDIR = '.direnv/genvm-git-helper'
-DEFAULT_STAGE = 'pre-commit'
 
 
 @functools.lru_cache(maxsize=None)
@@ -118,14 +111,6 @@ class Repo:
 		self.path = path  # absolute working-tree root
 		self.rel = rel  # '' for manager, else the manager-relative prefix
 
-	@property
-	def precommit_dir(self) -> Path:
-		return self.path / PRECOMMIT_SUBDIR
-
-	@property
-	def cache_dir(self) -> Path:
-		return self.path / CACHE_SUBDIR
-
 	def is_checked_out(self) -> bool:
 		# A submodule's `.git` is a gitdir file; the manager's is a directory.
 		return (self.path / '.git').exists()
@@ -180,32 +165,6 @@ def executor_rels(root: Path) -> set[str]:
 
 # --- git -------------------------------------------------------------------
 
-# git scopes itself to one repo through these variables. A pre-commit / commit-msg
-# hook runs with them set to the *parent* repo (GIT_INDEX_FILE points at the
-# in-progress commit's index, GIT_DIR at the parent .git, ...). Because we operate
-# on each repo — and its submodules — by explicit path (`git -C <path>`), those
-# inherited values must be dropped: otherwise a submodule `git` reads the parent's
-# index/objects and dies (e.g. `git diff --cached` -> exit 128, "unable to read
-# <sha>"). See `strip_inherited_git_env`.
-_INHERITED_GIT_ENV_VARS = (
-	'GIT_DIR',
-	'GIT_WORK_TREE',
-	'GIT_INDEX_FILE',
-	'GIT_PREFIX',
-	'GIT_COMMON_DIR',
-	'GIT_OBJECT_DIRECTORY',
-	'GIT_ALTERNATE_OBJECT_DIRECTORIES',
-	'GIT_NAMESPACE',
-)
-
-
-def strip_inherited_git_env() -> None:
-	"""Drop the repo-scoping GIT_* variables inherited from a parent git hook, so
-	our per-repo `git -C <path>` calls discover each repo from its own path
-	instead of being pinned to the invoking repo."""
-	for var in _INHERITED_GIT_ENV_VARS:
-		os.environ.pop(var, None)
-
 
 def _git_z(repo: Repo, *args: str) -> list[str]:
 	out = subprocess.run(
@@ -223,10 +182,3 @@ def ls_files(repo: Repo, drop_rels: set[str] | None = None) -> list[str]:
 	if drop_rels:
 		files = [f for f in files if f not in drop_rels]
 	return files
-
-
-def staged_files(repo: Repo) -> list[str]:
-	"""Staged added/copied/modified files (repo-relative), regular files only."""
-	files = _git_z(repo, 'diff', '--cached', '--name-only', '--diff-filter=ACM')
-	# Drop the executor gitlink (a staged submodule bump is not a file).
-	return [f for f in files if (repo.path / f).is_file()]

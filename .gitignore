@@ -3,6 +3,7 @@
 !**/.vscode/extensions.json
 !**/.vscode/settings.example.json
 
+/.pre-commit-config.yaml
 .claude/hooks
 .idea
 .envrc
