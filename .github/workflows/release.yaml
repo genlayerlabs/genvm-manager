@@ -66,8 +66,6 @@ jobs:
     with:
       target: runners-all-dist
       executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 
   build-linux-amd64:
     needs:
@@ -77,8 +75,6 @@ jobs:
       target: manager-amd64-linux
       secondary_target: executor-amd64-linux
       executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 
   build-linux-arm64:
     needs:
@@ -88,8 +84,6 @@ jobs:
       target: manager-arm64-linux
       secondary_target: executor-arm64-linux
       executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 
   build-macos-arm64:
     needs:
@@ -99,8 +93,6 @@ jobs:
       target: manager-arm64-macos
       secondary_target: executor-arm64-macos
       executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
 
   test-linux-arm64:
     needs:
@@ -111,19 +103,26 @@ jobs:
       - name: Get source
         uses: ./.github/actions/get-src
         with:
-          # Even devShell evaluation reads the executor submodules' manifests.
-          load_submodules: "true"
+          third_party: --all
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download artifact
+      - name: Download manager artifact
+        id: download_manager
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-arm64.outputs.artifact_token }}
+      - name: Download executor artifact
+        id: download_executor
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-arm64.outputs.secondary_artifact_token }}
+      - name: Materialize artifacts
         run: |
           set -euo pipefail
           mkdir -p build/out
           pushd build/out
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64.tar.xz ${{ needs.build-linux-arm64.outputs.artifact_url }}
-          tar -xf genvm-linux-arm64.tar.xz --no-same-owner
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64-executor.tar.xz ${{ needs.build-linux-arm64.outputs.secondary_artifact_url }}
-          tar -xf genvm-linux-arm64-executor.tar.xz --no-same-owner
+          tar -xf "${{ steps.download_manager.outputs.file }}" --no-same-owner
+          tar -xf "${{ steps.download_executor.outputs.file }}" --no-same-owner
           popd
       - name: Run post-install
         run: |
@@ -147,20 +146,32 @@ jobs:
       - name: Get source
         uses: ./.github/actions/get-src
         with:
-          load_submodules: "true"
+          third_party: --all
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download artifact
+      - name: Download manager artifact
+        id: download_manager
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-amd64.outputs.artifact_token }}
+      - name: Download runners artifact
+        id: download_runners
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-runners-all.outputs.artifact_token }}
+      - name: Download executor artifact
+        id: download_executor
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-amd64.outputs.secondary_artifact_token }}
+      - name: Materialize artifacts
         run: |
           set -euo pipefail
           mkdir -p build/out
           pushd build/out
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64.tar.xz ${{ needs.build-linux-amd64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-runners-all.tar.xz ${{ needs.build-runners-all.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64-executor.tar.xz ${{ needs.build-linux-amd64.outputs.secondary_artifact_url }}
-          tar -xf genvm-linux-amd64.tar.xz --no-same-owner
-          tar -xf genvm-runners-all.tar.xz --no-same-owner
-          tar -xf genvm-linux-amd64-executor.tar.xz --no-same-owner
+          tar -xf "${{ steps.download_manager.outputs.file }}" --no-same-owner
+          tar -xf "${{ steps.download_runners.outputs.file }}" --no-same-owner
+          tar -xf "${{ steps.download_executor.outputs.file }}" --no-same-owner
           popd
       - name: Run post-install
         run: |
@@ -191,19 +202,31 @@ jobs:
       - name: Get source
         uses: ./.github/actions/get-src
         with:
-          load_submodules: "true"
+          third_party: --all
           with_nix: "false"
-      - name: Download artifact
+      - name: Download manager artifact
+        id: download_manager
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-macos-arm64.outputs.artifact_token }}
+      - name: Download runners artifact
+        id: download_runners
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-runners-all.outputs.artifact_token }}
+      - name: Download executor artifact
+        id: download_executor
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-macos-arm64.outputs.secondary_artifact_token }}
+      - name: Materialize artifacts
         run: |
           set -euo pipefail
           mkdir -p build/out
           pushd build/out
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64.tar.xz ${{ needs.build-macos-arm64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-runners-all.tar.xz ${{ needs.build-runners-all.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64-executor.tar.xz ${{ needs.build-macos-arm64.outputs.secondary_artifact_url }}
-          tar -xf genvm-macos-arm64.tar.xz --no-same-owner
-          tar -xf genvm-runners-all.tar.xz --no-same-owner
-          tar -xf genvm-macos-arm64-executor.tar.xz --no-same-owner
+          tar -xf "${{ steps.download_manager.outputs.file }}" --no-same-owner
+          tar -xf "${{ steps.download_runners.outputs.file }}" --no-same-owner
+          tar -xf "${{ steps.download_executor.outputs.file }}" --no-same-owner
           popd
       - name: Get wabt
         run: |
@@ -250,15 +273,51 @@ jobs:
           # Full history + tags: the release-notes step diffs against the
           # previous tag via `git describe`.
           fetch-depth: 0
-      - run: |
+      - name: Download runners artifact
+        id: download_runners
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-runners-all.outputs.artifact_token }}
+      - name: Download linux-amd64 manager artifact
+        id: download_linux_amd64_manager
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-amd64.outputs.artifact_token }}
+      - name: Download linux-arm64 manager artifact
+        id: download_linux_arm64_manager
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-arm64.outputs.artifact_token }}
+      - name: Download macos-arm64 manager artifact
+        id: download_macos_arm64_manager
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-macos-arm64.outputs.artifact_token }}
+      - name: Download linux-amd64 executor artifact
+        id: download_linux_amd64_executor
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-amd64.outputs.secondary_artifact_token }}
+      - name: Download linux-arm64 executor artifact
+        id: download_linux_arm64_executor
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-linux-arm64.outputs.secondary_artifact_token }}
+      - name: Download macos-arm64 executor artifact
+        id: download_macos_arm64_executor
+        uses: ./.github/actions/download-pipeline-artifact
+        with:
+          token: ${{ needs.build-macos-arm64.outputs.secondary_artifact_token }}
+      - name: Copy release artifacts
+        run: |
           set -euo pipefail
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-runners-all.tar.xz ${{ needs.build-runners-all.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64.tar.xz ${{ needs.build-linux-amd64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64.tar.xz ${{ needs.build-linux-arm64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64.tar.xz ${{ needs.build-macos-arm64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64-executor.tar.xz ${{ needs.build-linux-amd64.outputs.secondary_artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64-executor.tar.xz ${{ needs.build-linux-arm64.outputs.secondary_artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64-executor.tar.xz ${{ needs.build-macos-arm64.outputs.secondary_artifact_url }}
+          cp "${{ steps.download_runners.outputs.file }}" genvm-runners-all.tar.xz
+          cp "${{ steps.download_linux_amd64_manager.outputs.file }}" genvm-linux-amd64.tar.xz
+          cp "${{ steps.download_linux_arm64_manager.outputs.file }}" genvm-linux-arm64.tar.xz
+          cp "${{ steps.download_macos_arm64_manager.outputs.file }}" genvm-macos-arm64.tar.xz
+          cp "${{ steps.download_linux_amd64_executor.outputs.file }}" genvm-linux-amd64-executor.tar.xz
+          cp "${{ steps.download_linux_arm64_executor.outputs.file }}" genvm-linux-arm64-executor.tar.xz
+          cp "${{ steps.download_macos_arm64_executor.outputs.file }}" genvm-macos-arm64-executor.tar.xz
 
       - run: |
           git tag ${{ needs.gen-tag.outputs.tag }} && \
