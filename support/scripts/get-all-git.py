@@ -225,7 +225,6 @@ def update_submodules_with_cache(root: Path, env: dict[str, str]) -> None:
 				'--recursive',
 				'--reference',
 				str(cache),
-				'--dissociate',
 				'--depth',
 				'1',
 				'--no-fetch',
