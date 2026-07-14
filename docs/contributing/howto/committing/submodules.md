@@ -60,7 +60,9 @@ are committing in.
 ## Pushing
 
 Check first: `genvm-tool git check-for-push` (`--offline` compares against the
-last fetch). Push **submodules before the manager** so gitlinks resolve:
+last fetch). After the repo rows it prints one aggregated
+`suggested_push_command` block; when anything is not ready, that block is
+`none`. Push **submodules before the manager** so gitlinks resolve:
 
 ```bash
 git -C executors/v0.2.x push origin pr/v0.2/feat/<name>

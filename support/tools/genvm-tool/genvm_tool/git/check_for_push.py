@@ -11,6 +11,10 @@ reports, folds into a per-repo `ready` verdict, and suggests the next action:
 	- in_sync_with_origin  — the branch tip vs its branch on `origin`
 	- action               — the next step in the add → commit → push pipeline
 
+After all repo rows, it emits one aggregated `suggested_push_command` block: a
+newline-joined shell snippet that pushes the ready repos in order, or `none`
+when anything is not ready.
+
 By default the origin comparison is a LIVE `git ls-remote` query. The queries are
 launched up front — one per distinct origin URL (the executor submodules share a
 remote, so they batch into a single multi-ref call) and all in parallel — before
@@ -25,13 +29,15 @@ last fetch) with no network.
 `same_branch_as_manager` is shown for submodules as context (the line-namespaced
 mirror convention: `feat/x` on the manager maps to `pr/v0.3/feat/x` in the
 executor — see `common.Repo.feature_branch`) but does not gate `ready`. Exit
-status is non-zero when any repo is not ready, so the command can gate a push.
+status is non-zero when any repo is not ready. An `absent` origin branch is
+still push-ready because `git push` will create it.
 
 This NEVER fetches, resets, switches, or writes anything — `ls-remote` reads the
 remote without updating any local ref.
 """
 
 import os
+import shlex
 import subprocess
 
 from .. import common
@@ -242,6 +248,13 @@ def _suggest(detached: bool, staged: bool, unstaged: bool, origin_kind: str) -> 
 	}.get(origin_kind, 'fetch (cannot compare with origin)')
 
 
+def _suggested_push_command(repo: common.Repo, branch: str, ready: bool) -> str | None:
+	"""A copy-pasteable shell command for pushing the current branch."""
+	if not ready or not branch:
+		return None
+	return f'cd {shlex.quote(str(repo.path))} && git push origin {shlex.quote(branch)}'
+
+
 def main(ctx: common.Context, args) -> int:
 	manager = common.discover_repos(ctx.root, 'manager')[0]
 	manager_branch = _current_branch(manager)
@@ -280,13 +293,22 @@ def main(ctx: common.Context, args) -> int:
 			)
 		local[repo.name] = row
 
+	# Present executor repos first so the manager row naturally comes last, matching
+	# the push order in the submodules guide.
+	entries.sort(key=lambda item: item[0].rel == '')
+
 	lookup = _collect_origin_queries(launched) if launched is not None else {}
 
 	all_ready = True
+	push_commands: list[str] = []
 	for repo, checked_out, branch in entries:
 		if not checked_out:
 			# Not checked out: nothing local to push, and nothing we can verify.
-			ctx.printer.put(repo.name, checked_out='no', action='checkout submodule')
+			ctx.printer.put(
+				repo.name,
+				checked_out='no',
+				action='checkout submodule',
+			)
 			continue
 
 		is_sub = repo.rel != ''
@@ -297,7 +319,7 @@ def main(ctx: common.Context, args) -> int:
 		else:
 			sync_msg, kind = _origin_state_remote(repo, branch, lookup)
 
-		ready = row['changed'] == 0 and not detached and kind == 'synced'
+		ready = row['changed'] == 0 and not detached and kind in {'synced', 'absent'}
 		fields = {
 			'branch': branch or 'DETACHED',
 			'dirty': f'yes ({row["changed"]})' if row['changed'] else 'no',
@@ -321,7 +343,17 @@ def main(ctx: common.Context, args) -> int:
 		fields['in_sync_with_origin'] = sync_msg
 		fields['action'] = _suggest(detached, row['staged'], row['unstaged'], kind)
 		fields['ready'] = 'yes' if ready else 'NO'
+		if ready:
+			push_commands.append(_suggested_push_command(repo, branch, ready))
 		all_ready = all_ready and ready
 		ctx.printer.put(repo.name, **fields)
+
+	if all_ready and push_commands:
+		ctx.printer.put(
+			'suggested_push_command',
+			command='\n'.join(push_commands),
+		)
+	else:
+		ctx.printer.put('suggested_push_command', command='none')
 
 	return 0 if all_ready else 1

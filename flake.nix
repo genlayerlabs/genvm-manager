@@ -242,7 +242,7 @@
                 files = "\\.(ts|tsx)$";
                 excludes = [ "^\\.git-third-party" ];
               };
-              nixfmt-rfc-style = {
+              nixfmt = {
                 enable = true;
                 files = "\\.nix$";
               };

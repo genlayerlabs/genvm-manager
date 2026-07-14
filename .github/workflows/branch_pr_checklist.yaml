@@ -1,7 +1,6 @@
 name: branch / post PR action panel
 
 # When a PR is opened against a dev branch (v<X>-dev) we:
-#   - make sure the action labels exist;
 #   - post the action panel (checklist comment) that replaces the old
 #     /genvm-* slash commands;
 #   - auto-add `ci-safe` if the PR author has write access, so their PR can
