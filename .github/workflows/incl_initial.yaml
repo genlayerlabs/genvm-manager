@@ -23,6 +23,26 @@ jobs:
       - name: Run hooks
         run: bash support/ci/pipelines/commit-hooks.sh
 
+  # `check-commit-message` is a commit-msg-stage hook, so the pre-commit run
+  # above never fires it. Check every commit the PR adds, in the manager and in
+  # each executor submodule that moved.
+  commit-messages:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get source
+        id: src
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "false"
+      - name: Check commit messages
+        env:
+          CHANGES: ${{ steps.src.outputs.changes }}
+        run: bash support/ci/pipelines/commit-messages.sh
+
   # The Merge action only fast-forwards, so the PR head must already
   # contain the base tip (0 commits behind). We assert it here too (as part
   # of the always-on `initial` checks) so the gate goes red the moment the

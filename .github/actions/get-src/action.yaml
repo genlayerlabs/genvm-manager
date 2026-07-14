@@ -12,6 +12,13 @@ inputs:
   github_token:
     description: GitHub token for nix setup
     required: false
+outputs:
+  changes:
+    description: >-
+      JSON object mapping each repo (`.` for the manager, submodule path for
+      each executor) to {base_commit, branch_commit, has_changes}. Outside a
+      pull request base_commit == branch_commit and has_changes is false.
+    value: ${{ steps.changes.outputs.changes }}
 runs:
   using: composite
   steps:
@@ -22,6 +29,14 @@ runs:
         git config --global user.name "CI worker"
         python3 support/scripts/get-all-git.py "--third-party=${{ inputs.third_party }}"
       shell: bash -ex {0}
+    - name: compute per-repo changes
+      id: changes
+      shell: bash
+      env:
+        GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        python3 support/scripts/ci-changes.py --github-output
     - name: setup nix
       if: ${{ inputs.with_nix == 'true' }}
       uses: cachix/install-nix-action@v31.6.2
