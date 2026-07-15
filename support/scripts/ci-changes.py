@@ -66,10 +66,19 @@ def fetch_pr_refs(base_ref: str, pr_number: str) -> tuple[str, str]:
 	branch is usually not fetched at all, so both sides are fetched by explicit
 	refspec (which also works for forks, where the head sha is not fetchable on
 	its own).
+
+	`--no-recurse-submodules` is required: we only read gitlink SHAs out of the
+	superproject trees (`git ls-tree`), never any submodule object. Once the
+	submodules are populated (get-all-git.py runs before us), git's default
+	`fetch.recurseSubmodules=on-demand` would otherwise try to fetch every
+	gitlink the newly-fetched PR range touches — and a historical commit in the
+	range may pin an executor commit that was never pushed (or since deleted)
+	on its remote, which aborts the whole fetch with `upload-pack: not our ref`.
 	"""
 	git(
 		'fetch',
 		'--no-tags',
+		'--no-recurse-submodules',
 		'origin',
 		f'+refs/heads/{base_ref}:{BASE_REF}',
 		f'+refs/pull/{pr_number}/head:{HEAD_REF}',
