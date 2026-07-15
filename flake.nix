@@ -595,6 +595,9 @@
               inherit genvm-tool;
             };
 
+          devShells.minimal = pkgs.mkShell {
+            packages = packages-0 ++ packages-py-test ++ [ pkgs.ruby ];
+          };
           devShells.py-test = pkgs.mkShell {
             packages = packages-py-test ++ [ pkgs.ruby ];
             shellHook = shell-hook-base + ''

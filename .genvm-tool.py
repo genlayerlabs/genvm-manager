@@ -29,6 +29,7 @@ def tests(ctx):
 	import sys
 	from pathlib import Path
 
+	import genvm_tool.cmd_configure
 	import genvm_tool.tests
 
 	_info_path = ctx.shared.root_dir / 'build' / 'info.json'
@@ -42,6 +43,11 @@ def tests(ctx):
 					'coverage_dir': str(_build_dir / 'cov'),
 					'build_dir': str(_build_dir),
 					'rust_target_dir': str(_build_dir / 'ya-build' / 'rust-target'),
+					# executor_versions / primary_executor_version: resolved from
+					# source (.genvm-monorepo-root + committed manifests), so a
+					# build-less test run still knows which out/executor/<real> dir
+					# to reroute to. configure emits the same keys.
+					**genvm_tool.cmd_configure.build_independent_info(ctx.shared.root_dir),
 				},
 				indent=2,
 			)
@@ -108,7 +114,9 @@ def tests(ctx):
 		pytest.pytest(
 			ctx,
 			genvm_tool.tests.test.Description(
-				'runners/genlayer-py-std/test',
+				str(p.relative_to(ctx.shared.root_dir)),
+				console_pool=True,
+				tags=frozenset({'unit'}),
 			),
 			project_root_dir=p,
 		)
@@ -167,7 +175,8 @@ def tests(ctx):
 		# per-request only under debug_mode >= safe (tests run with unsafe).
 		reroute_to = (
 			getattr(ctx.configuration.args, 'genvm_reroute_to', '')
-			or build_info['primary_executor_version']
+			or build_info.get('primary_executor_version')
+			or ctx.shared.config['active-versions'][0]
 		)
 		no_manager = getattr(ctx.configuration.args, 'no_manager', False)
 		no_webdriver = getattr(ctx.configuration.args, 'no_webdriver', False)

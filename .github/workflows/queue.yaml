@@ -6,10 +6,13 @@ name: GenVM full
 # fast-forwards.
 #
 # For every push to a PR targeting a dev branch (v<X>-dev):
-#   - `initial` (cheap pre-commit + 0-behind check) ALWAYS runs;
-#   - the heavy test jobs run only when a run-full-tests marker is set —
-#     the `rtm` (ready-to-merge) label or the `run-full-tests` label (the
-#     "Force run full tests" checkbox sets the latter);
+#   - `initial` (cheap pre-commit + 0-behind) and `check-executor-prs` (the
+#     executor landability precondition) ALWAYS run, in parallel;
+#   - `gate-check` aggregates them and plans the test matrix (plan-queue-matrix);
+#     the heavy `matrix-tests` cells run only when a run-full-tests marker is set
+#     — the `rtm` (ready-to-merge) label or the `run-full-tests` label ("Force run
+#     full tests" sets the latter). Without a marker the plan is empty, so
+#     matrix-tests is skipped;
 #   - without a marker `validate-end` fails, so the CI check stays red
 #     until a full run has happened.
 #
@@ -84,6 +87,8 @@ jobs:
     needs: [initial, check-executor-prs]
     runs-on: ubuntu-latest
     if: ${{ always() }}
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
       - name: Check gate results
         run: |
@@ -99,98 +104,31 @@ jobs:
               exit 1
               ;;
           esac
-
-  module-test-python:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [gate-check]
-    runs-on: ubuntu-latest
-    steps:
       - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          third_party: --all
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: ./support/ci/run.sh pipeline test-python
-
-  module-test-rust-fuzz:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [gate-check]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses:  insightsengineering/disk-space-reclaimer@v1
-        with:
-          tools-cache: false
-          swap-storage: false
-          docker-images: false
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          third_party: --all
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: |
-          echo core | sudo tee /proc/sys/kernel/core_pattern
-          echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-          echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-          ./support/ci/run.sh pipeline test-rust-fuzz
-          ./support/ci/run.sh pipeline cargo-clippy
+      - name: Plan test matrix
+        id: plan
         env:
-          OPENAIKEY: ${{ secrets.OPENAIKEY }}
-          HEURISTKEY: ${{ secrets.HEURISTKEY }}
-          ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
-          XAIKEY: ${{ secrets.XAIKEY }}
-          GEMINIKEY: ${{ secrets.GEMINIKEY }}
+          # Heavy cells run only with a marker; without one the plan is empty and
+          # matrix-tests is skipped.
+          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+        run: ./support/ci/run.sh pipeline plan-queue-matrix
 
-  module-test-rust:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [gate-check]
-    runs-on: ubuntu-latest
-    env:
-      # Only used to upload freshly-built runners to the GCS cache; this is
-      # best-effort (see the `|| true` upload in test-rust.sh). Absent on fork
-      # PRs, so the GCP steps below are skipped and runners come from the public
-      # bucket instead of failing the whole job.
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses:  insightsengineering/disk-space-reclaimer@v1
-        with:
-          tools-cache: false
-          swap-storage: false
-          docker-images: false
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          third_party: --all
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Authenticate to Google Cloud
-        if: ${{ env.GCP_SA_KEY != '' }}
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-      - name: Set up Cloud SDK # needed for gcloud to upload runners to GCS for caching
-        if: ${{ env.GCP_SA_KEY != '' }}
-        uses: google-github-actions/setup-gcloud@v2
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - run: |
-          ./support/ci/run.sh pipeline test-rust
-        env:
-          OPENAIKEY: ${{ secrets.OPENAIKEY }}
-          HEURISTKEY: ${{ secrets.HEURISTKEY }}
-          ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
-          XAIKEY: ${{ secrets.XAIKEY }}
-          GEMINIKEY: ${{ secrets.GEMINIKEY }}
+  matrix-tests:
+    needs: gate-check
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.gate-check.outputs.matrix) }}
+    uses: ./.github/workflows/test_cell.yaml
+    with:
+      name: ${{ matrix.name }}
+      job_json: ${{ matrix.job_json }}
+      runs_on: ${{ matrix.runs_on }}
+      disk_reclaim: ${{ matrix.disk_reclaim }}
+      fuzz_host: ${{ matrix.fuzz_host }}
+      buildx: ${{ matrix.buildx }}
+      gcp: ${{ matrix.gcp }}
+    secrets: inherit
 
   validate-end:
     runs-on: ubuntu-latest
@@ -198,9 +136,7 @@ jobs:
     needs:
       - initial
       - gate-check
-      - module-test-python
-      - module-test-rust
-      - module-test-rust-fuzz
+      - matrix-tests
     env:
       HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
     steps:
@@ -217,7 +153,7 @@ jobs:
             echo "::error::full tests have not run — add the 'rtm' label or check 'Force run full tests' on the action panel"
             exit 1
           fi
-          results="${{ needs.module-test-python.result }} ${{ needs.module-test-rust.result }} ${{ needs.module-test-rust-fuzz.result }}"
+          results="${{ needs.matrix-tests.result }}"
           echo "$results"
           if echo "$results" | grep -qiE '(failure|cancelled|skipped)'; then
             echo "::error::one or more full-test jobs failed/cancelled/skipped"

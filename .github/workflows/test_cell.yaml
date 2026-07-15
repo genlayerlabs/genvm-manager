@@ -1,0 +1,87 @@
+on:
+  workflow_call:
+    inputs:
+      name:
+        required: true
+        type: string
+      job_json:
+        # JSON step list from plan-queue-matrix; passed via env (not interpolated
+        # into the shell) so its quotes/brackets survive.
+        required: true
+        type: string
+      runs_on:
+        required: true
+        type: string
+      disk_reclaim:
+        required: false
+        type: boolean
+        default: false
+      fuzz_host:
+        required: false
+        type: boolean
+        default: false
+      buildx:
+        required: false
+        type: boolean
+        default: false
+      gcp:
+        required: false
+        type: boolean
+        default: false
+
+jobs:
+  test:
+    name: test / ${{ inputs.name }}
+    runs-on: ${{ inputs.runs_on }}
+    env:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      OPENAIKEY: ${{ secrets.OPENAIKEY }}
+      HEURISTKEY: ${{ secrets.HEURISTKEY }}
+      ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
+      XAIKEY: ${{ secrets.XAIKEY }}
+      GEMINIKEY: ${{ secrets.GEMINIKEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      - uses: insightsengineering/disk-space-reclaimer@v1
+        if: ${{ inputs.disk_reclaim }}
+        with:
+          tools-cache: false
+          swap-storage: false
+          docker-images: false
+
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          third_party: --all
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure fuzzing host
+        if: ${{ inputs.fuzz_host }}
+        run: |
+          echo core | sudo tee /proc/sys/kernel/core_pattern || true
+          echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor || true
+          echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope || true
+
+      - name: Authenticate to Google Cloud
+        if: ${{ inputs.gcp && env.GCP_SA_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: ${{ inputs.gcp && env.GCP_SA_KEY != '' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Docker Buildx
+        if: ${{ inputs.buildx }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run test
+        env:
+          JOB_JSON: ${{ inputs.job_json }}
+        run: ./support/ci/run.sh pipeline test-cell --job-json "$JOB_JSON"

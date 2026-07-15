@@ -126,4 +126,16 @@ def main() -> None:
 
 
 if __name__ == '__main__':
-	main()
+	import subprocess
+
+	try:
+		main()
+	except subprocess.CalledProcessError as e:
+		import shlex
+		import traceback
+
+		traceback.print_exc()
+		print(' '.join(shlex.quote(a) for a in e.cmd), file=sys.stderr)
+		print(e.stdout, file=sys.stdout)
+		print(e.stderr, file=sys.stderr)
+		sys.exit(1)
