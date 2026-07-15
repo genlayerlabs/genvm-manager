@@ -31,9 +31,12 @@ name: branch / merge PR into dev
 # dev-branch ruleset bypass list), and to the executor repo with a separate
 # GENVM_EXECUTOR_CI_PRIVATE_KEY deploy key (on the executor's bypass list).
 # Pushes are non-force, so a base that advanced between the checks and the
-# push is safely rejected. This job never runs PR code — only git plumbing
-# and API reads. The caller is responsible for restricting who can trigger a
-# merge (maintainers only).
+# push is safely rejected. The merge scripts are checked out from the PR head,
+# so a PR that changes support/ci/ merges with its own version — which means
+# this job runs PR-authored code WITH the deploy keys in scope. It is gated on
+# the `ci-safe` label: a guard step verifies it (via the plain GITHUB_TOKEN,
+# before any PR code is fetched or run) and fails otherwise. The caller must
+# still restrict who can trigger a merge (maintainers only).
 
 on:
   workflow_call:
@@ -63,12 +66,27 @@ jobs:
   merge:
     runs-on: ubuntu-latest
     steps:
-      # Checkout with the manager deploy key so the (protected) dev branch
-      # push succeeds. Submodules are initialised in the next step with a
-      # SEPARATE executor key — the manager key cannot read/write the
-      # executor repo. The script never runs PR code.
+      # Gate: this job checks out and runs the PR's own CI scripts while the
+      # deploy keys are in scope, so refuse unless the PR is `ci-safe`. Uses the
+      # plain GITHUB_TOKEN and runs BEFORE any PR code is fetched.
+      - name: Require ci-safe label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if ! gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" \
+              --jq '.[].name' | grep -qxF 'ci-safe'; then
+            echo "::error::PR #$PR_NUMBER lacks the 'ci-safe' label; refusing to merge (this job runs PR code)."
+            exit 1
+          fi
+
+      # Check out the PR head (so the merge runs the PR's own scripts) with the
+      # manager deploy key so the (protected) dev branch push succeeds.
+      # Submodules are initialised in the next step with a SEPARATE executor key
+      # — the manager key cannot read/write the executor repo.
       - uses: actions/checkout@v4
         with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
           ssh-key: ${{ secrets.GENVM_CI_PRIVATE_KEY }}
           fetch-depth: 0
           submodules: false

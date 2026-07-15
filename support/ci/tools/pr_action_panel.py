@@ -15,6 +15,9 @@ AND dispatch one run now. We do not untick it — its checked state mirrors the
 label, and an already-set label means no re-dispatch on unrelated edits.
 - "Rerun full tests" is a momentary button: dispatch a fresh queue.yaml run on
 the current head, then untick.
+- "Provision executor PRs" is a momentary button: dispatch
+branch_provision_executor_prs.yaml for this PR (force-push each moved executor
+line's mirror branch and open its PR), then untick.
 - "Merge" is a momentary button: expose `merge=true` so the caller runs the
 reusable merge workflow, then untick.
 4. untick the momentary boxes (not the sticky Force one).
@@ -93,6 +96,22 @@ def dispatch_full_tests():
 	print(f'dispatched queue.yaml on `{branch}`')
 
 
+def dispatch_provision():
+	# Momentary: fire the executor-provisioning workflow for this PR. It runs from
+	# the default branch (trusted YAML) and checks out the PR head for the scripts
+	# behind its own ci-safe guard. A workflow_dispatch from GITHUB_TOKEN runs.
+	gh(
+		'workflow',
+		'run',
+		'branch_provision_executor_prs.yaml',
+		'--repo',
+		REPO,
+		'-f',
+		f'pr={PR}',
+	)
+	print(f'dispatched executor provisioning for PR #{PR}')
+
+
 def ticked_boxes(body):
 	return [
 		m.group(1).strip().lower()
@@ -151,6 +170,10 @@ def main():
 	# Rerun: momentary -> always dispatch a fresh run on the current head.
 	if any('rerun' in b for b in boxes):
 		dispatch_full_tests()
+
+	# Provision: momentary -> force-push executor mirror branches and open their PRs.
+	if any('provision' in b for b in boxes):
+		dispatch_provision()
 
 	if any('merge' in b for b in boxes):
 		set_output('merge', 'true')

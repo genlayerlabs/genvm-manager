@@ -51,6 +51,7 @@ jobs:
 
           - [ ] Force run full tests
           - [ ] Rerun full tests
+          - [ ] Provision executor PRs
           - [ ] Merge into dev
 
           <sub>Full GenVM CI runs only when **`rtm`** or **`run-full-tests`** is set — "Force run full tests" is a sticky toggle for `run-full-tests`. Adding **`rtm`** marks the PR ready-to-merge and also runs full tests. **Merge** requires: `rtm`, green full tests, green E2E, and the branch 0 commits behind.</sub>

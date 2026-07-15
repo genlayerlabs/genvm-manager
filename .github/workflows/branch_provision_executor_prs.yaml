@@ -1,0 +1,64 @@
+name: branch / provision executor mirror PRs
+
+# Triggered by the "Provision executor PRs" box on the PR action panel
+# (pr_action_panel.py fires a workflow_dispatch with the manager PR number). For
+# each executor line the manager PR moved, force-push its mirror branch
+# `pr/<line>/<head>` to the pinned gitlink commit and open (or reuse) its PR into
+# `<line>-dev`. See `support/ci/run.sh tool pr-branches provision`.
+#
+# The provision scripts are checked out from the PR head, so a PR iterating on
+# them runs its own version — which means this job runs PR-authored code WITH the
+# executor write PAT (GENVM_EXECUTOR_PR_TOKEN) in scope. It is gated on the
+# `ci-safe` label: a guard step verifies it (via the plain GITHUB_TOKEN, before
+# any PR code runs) and fails otherwise, exactly like branch_merge_into_dev.yaml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: manager PR number to provision executor mirror PRs for
+        type: string
+        required: true
+
+run-name: 'branch / provision executor mirror PRs (PR #${{ inputs.pr }})'
+
+permissions:
+  contents: read
+  # For the GITHUB_TOKEN only: read the ci-safe label and the manager PR title.
+  # Writes to the executor repo go through GENVM_EXECUTOR_PR_TOKEN, not this token.
+  pull-requests: read
+  issues: read
+
+defaults:
+  run:
+    shell: bash -x {0}
+
+jobs:
+  provision:
+    runs-on: ubuntu-latest
+    steps:
+      # Gate: this job checks out and runs the PR's scripts with the executor
+      # write PAT in scope, so refuse unless the PR is `ci-safe`. Uses the plain
+      # GITHUB_TOKEN and runs BEFORE any PR code is fetched.
+      - name: Require ci-safe label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr }}
+        run: |
+          if ! gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" \
+              --jq '.[].name' | grep -qxF 'ci-safe'; then
+            echo "::error::PR #$PR_NUMBER lacks the 'ci-safe' label; refusing to provision (this job runs PR code with the executor token)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ inputs.pr }}/head
+
+      - name: Provision executor mirror PRs
+        env:
+          PR_NUMBER: ${{ inputs.pr }}
+          MANAGER_REPO: ${{ github.repository }}
+          MANAGER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTOR_TOKEN: ${{ secrets.GENVM_EXECUTOR_PR_TOKEN }}
+        run: ./support/ci/run.sh tool pr-branches provision

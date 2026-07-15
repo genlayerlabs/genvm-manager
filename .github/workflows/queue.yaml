@@ -45,9 +45,64 @@ jobs:
     uses: ./.github/workflows/incl_initial.yaml
     secrets: inherit
 
+  # Precondition (run.sh tool pr-branches check): the PR must be landable via the
+  # panel (Provision then Merge), which lands the manager and its executors almost-
+  # atomically. So every repo (manager + each executor line) must be rebased on its
+  # base, and every executor line present at base must have its pinned commit in the
+  # executor repo (ahead-of-base is fine — that work lands with the PR; a commit
+  # missing from the executor repo is not). Read-only (gh API, no submodule checkout).
+  #
+  # Runs on same-repo PRs AND on workflow_dispatch with a PR number (the panel's
+  # rerun path, whose run the Merge gate consumes — so the precondition must hold
+  # there too; the PR number then comes from inputs.pr). Fork PRs are skipped: they
+  # get no secrets (the executor PAT would be empty) and cannot push executor mirror
+  # branches, so there is nothing to gate. It checks out the PR being validated
+  # (refs/pull/<n>/head) so the scripts and .genvm-monorepo-root match that PR — on
+  # dispatch the base branch is not in the event context, and its default-branch tree
+  # is the wrong commit. (Checking out PR code is not an extra exposure: for
+  # pull_request GitHub already runs this workflow file from the PR, so a same-repo
+  # author controls it regardless.)
+  check-executor-prs:
+    if: >
+      (github.event_name == 'workflow_dispatch' && inputs.pr != '') ||
+      (github.event_name == 'pull_request' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.pull_request.number || inputs.pr }}/head
+      - name: Executor mirror PRs are landed
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          MANAGER_REPO: ${{ github.repository }}
+          MANAGER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTOR_TOKEN: ${{ secrets.GENVM_EXECUTOR_PR_TOKEN }}
+        run: ./support/ci/run.sh tool pr-branches check
+
+  gate-check:
+    needs: [initial, check-executor-prs]
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+    steps:
+      - name: Check gate results
+        run: |
+          if [ "${{ needs.initial.result }}" != "success" ]; then
+            echo "::error::initial checks failed"
+            exit 1
+          fi
+          # Executor precondition: fail on failure/cancelled. Skipped (fork PR or
+          # manual dispatch, where check-executor-prs does not run) is acceptable.
+          case "${{ needs.check-executor-prs.result }}" in
+            failure | cancelled)
+              echo "::error::executor mirror PR precondition failed"
+              exit 1
+              ;;
+          esac
+
   module-test-python:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [initial]
+    needs: [gate-check]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,7 +118,7 @@ jobs:
 
   module-test-rust-fuzz:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [initial]
+    needs: [gate-check]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -95,7 +150,7 @@ jobs:
 
   module-test-rust:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [initial]
+    needs: [gate-check]
     runs-on: ubuntu-latest
     env:
       # Only used to upload freshly-built runners to the GCS cache; this is
@@ -142,6 +197,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - initial
+      - gate-check
       - module-test-python
       - module-test-rust
       - module-test-rust-fuzz

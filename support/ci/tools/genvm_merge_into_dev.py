@@ -47,9 +47,11 @@ redundant.
 flow; on that one the executor's version branch is fast-forwarded and its
 dev/version branches are kept at the same point.)
 
-Talks to GitHub through the `gh` CLI and moves refs through `git`; it
-never executes PR code. The dev branches are protected, so the workflow
-checks out with the GENVM_CI_PRIVATE_KEY deploy key and pushes non-force
+Talks to GitHub through the `gh` CLI and moves refs through `git`; it does
+not exec arbitrary PR code, though the workflow checks out this script itself
+from the PR head (gated on the `ci-safe` label). The dev branches are
+protected, so the workflow checks out with the GENVM_CI_PRIVATE_KEY deploy key
+and pushes non-force
 (a base that advanced is safely rejected). The active executor submodules
 must be checked out with a remote `origin` that can push the executor repo
 (the workflow wires its own deploy key); the active lines come from
