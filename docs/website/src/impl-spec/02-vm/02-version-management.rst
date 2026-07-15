@@ -45,8 +45,9 @@ GenVM could silently mis-interpret an older contract's calldata or storage.
 Runner manifest
 ---------------
 
-The manager maintains an executor version manifest (the JSON document published as
-:doc:`available-runners` and shipped at ``doc/website/src/impl-spec/appendix/runners-versions.json``).
+The manager maintains an executor version manifest (the per-line available-runners
+listing, generated as ``runners-versions.json`` and published on each executor
+line's docs sub-site).
 For every supported runner version it lists the content hashes of every runtime artifact
 (``cpython``, ``py-genlayer``, ``py-lib-genlayer-std``, ``softfloat``, ...). When a contract
 selects a runner version (via its ``runner.json`` or the bundled `StartWasm` action) the

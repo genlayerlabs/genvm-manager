@@ -51,7 +51,7 @@ jobs:
           # branch carries a stale active-versions and would otherwise try
           # to drag main backwards once a newer train exists.
           git show origin/main:.genvm-monorepo-root > /tmp/main-monorepo-root.json
-          LATEST="$(MONOREPO_ROOT=/tmp/main-monorepo-root.json python3 support/ci/branch-versions.py latest)"
+          LATEST="$(MONOREPO_ROOT=/tmp/main-monorepo-root.json ./support/ci/run.sh tool branch-versions latest)"
           if [ "$BRANCH" != "v${LATEST}-dev" ]; then
             echo "Pushed branch ${BRANCH} is not the latest dev branch (v${LATEST}-dev); nothing to do"
             exit 0

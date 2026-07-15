@@ -91,6 +91,13 @@ proc = subprocess.run(
 
 res = json.loads(proc.stdout)
 
+# docs.nix accumulates the runners of EVERY active line, but this page is
+# per-line (it renders into active-versions[0]'s sub-site). Post-split the lines
+# are independent — v0.2 is not "before" v0.3 — so scope to this line's own
+# versions; otherwise the other lines' hashes leak in as bogus history.
+_line = monorepo['active-versions'][0]
+res = {v: r for v, r in res.items() if v.startswith(_line + '.')}
+
 # --- Post-process: sort by semver, enrich with descriptions, diffs, commits ---
 
 SEMVER_RE = re.compile(r'^v?(\d+)\.(\d+)\.(\d+)(.*)$')
@@ -354,17 +361,15 @@ def render_runner_section(rid, rst_parts):
 	rst_parts.append(f'Current hash: ``{current_hash}``')
 	rst_parts.append('')
 
+	# Non-latest hashes: link each to the version it first appeared in
+	# (start_v of its run), not a range \u2014 a small "when did this hash ship" map.
 	prev_groups = format_version_range(rid)
 	if prev_groups:
-		for h, start_v, end_v in prev_groups:
-			if start_v == end_v:
-				anchor = version_to_anchor(start_v)
-				rst_parts.append(f'- ``{h}`` \u2014 `{start_v} <changelog.html#{anchor}>`_')
-			else:
-				anchor = version_to_anchor(end_v)
-				rst_parts.append(
-					f'- ``{h}`` \u2014 {start_v} through `{end_v} <changelog.html#{anchor}>`_'
-				)
+		rst_parts.append('Earlier hashes (first appeared in):')
+		rst_parts.append('')
+		for h, start_v, _end_v in prev_groups:
+			anchor = version_to_anchor(start_v)
+			rst_parts.append(f'- ``{h}`` \u2014 `{start_v} <changelog.html#{anchor}>`_')
 		rst_parts.append('')
 
 
@@ -410,12 +415,13 @@ runners_rst_path.write_text('\n'.join(runners_rst) + '\n')
 
 # --- Generate changelog ---
 
-# Sphinx resolves include paths relative to the top-level source file,
-changelog_notes_dir = docs_src_root_dir / 'python-sdk' / 'changelog-notes'
-changelog_rst_path = docs_src_root_dir / 'python-sdk' / 'changelog.rst'
-changelog_notes_include_prefix = changelog_notes_dir.relative_to(
-	changelog_rst_path.parent
-).as_posix()
+# The Python SDK docs (incl. this changelog) now live in the executor line that
+# ships the SDK, not the manager tree. The changelog is still generated here —
+# it is driven by runner-version data the manager owns — but written into that
+# line's docs sub-site.
+sdk_src_root_dir = executor_dir / 'docs' / 'website' / 'src'
+
+changelog_rst_path = sdk_src_root_dir / 'python-sdk' / 'changelog.rst'
 
 changelog_rst = []
 
@@ -445,18 +451,6 @@ for entry in enriched_versions:
 	changelog_rst.append('')
 	if desc:
 		changelog_rst.append(f'*{desc}*')
-		changelog_rst.append('')
-
-	# Check for hand-written notes — try exact version and base version (e.g. v0.1.8 for v0.1.8-runner-hash)
-	notes_file = changelog_notes_dir / f'{ver}.rst'
-	if not notes_file.exists():
-		base_ver = SEMVER_RE.match(ver)
-		if base_ver:
-			base_name = f'v{base_ver.group(1)}.{base_ver.group(2)}.{base_ver.group(3)}'
-			notes_file = changelog_notes_dir / f'{base_name}.rst'
-	if notes_file.exists():
-		rel_notes = f'{changelog_notes_include_prefix}/{notes_file.name}'
-		changelog_rst.append(f'.. include:: {rel_notes}')
 		changelog_rst.append('')
 
 	if changes:
@@ -499,3 +493,18 @@ for entry in enriched_versions:
 		changelog_rst.append('')
 
 changelog_rst_path.write_text('\n'.join(changelog_rst) + '\n')
+
+# --- Generate the executor sub-site links (included by the overview page) ---
+# Each active executor line ships a standalone docs sub-site, built separately by
+# support/ci/pipelines/docs.py under build/doc/html/executors/<line>/. The
+# overview page lists a link to each; this is generated as an include (kept out
+# of the toctree by the *_generated.rst exclude) so overview/index.rst owns the
+# heading/prose and this file is just the per-line bullets. Links are relative to
+# the overview page (one level under the html root), hence `../executors/`.
+executor_links = [
+	f'- `{line} <../executors/{line}/index.html>`_'
+	for line in monorepo['active-versions']
+]
+(docs_src_root_dir / 'overview' / 'executor-lines_generated.rst').write_text(
+	'\n'.join(executor_links) + '\n'
+)

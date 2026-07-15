@@ -6,7 +6,7 @@ name: branch / open linked executor PRs
 # line (.genvm-monorepo-root): for each, `pr/<line>/<feature>` -> <line>-dev. Each
 # is listed on the manager PR as an `executor: <url>` line. The executor work lives
 # on line-namespaced mirror branches the developer pushed via
-# `genvm-tool git create-branches`. See support/ci/open-executor-prs.py.
+# `genvm-tool git create-branches`. See `support/ci/run.sh tool open-executor-prs`.
 #
 # pull_request_target gives a manager-scoped write token for the comment; the
 # cross-repo executor PR needs a PAT with genvm-executor access
@@ -38,4 +38,4 @@ jobs:
           MANAGER_REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           HEAD_REF: ${{ github.event.pull_request.head.ref }}
-        run: python3 support/ci/open-executor-prs.py
+        run: ./support/ci/run.sh tool open-executor-prs

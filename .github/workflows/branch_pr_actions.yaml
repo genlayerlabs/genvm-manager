@@ -48,7 +48,7 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           SENDER: ${{ github.event.sender.login }}
-        run: python3 support/ci/pr-action-panel.py
+        run: ./support/ci/run.sh tool pr-action-panel
 
   merge:
     needs: dispatch

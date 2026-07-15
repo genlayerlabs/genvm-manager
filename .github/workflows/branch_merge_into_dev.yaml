@@ -91,7 +91,7 @@ jobs:
           # all, binding the executor key per-submodule (core.sshCommand) so the
           # later mirror pushes use it while the manager push keeps the checkout
           # credentials.
-          for v in $(python3 support/ci/branch-versions.py list); do
+          for v in $(./support/ci/run.sh tool branch-versions list); do
             sub="executors/v${v}.x"
             git -c core.sshCommand="$ssh" submodule update --init "$sub"
             git -C "$sub" config core.sshCommand "$ssh"
@@ -101,4 +101,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
-        run: python3 support/ci/genvm-merge-into-dev.py
+        run: ./support/ci/run.sh tool genvm-merge-into-dev

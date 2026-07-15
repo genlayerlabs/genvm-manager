@@ -8,7 +8,7 @@ active executor line, each on its own line-namespaced mirror branch in the share
 genvm-executor repo (`pr/<line>/<feature>`, see genvm_tool.common.Repo.feature_branch).
 
 So we fan out over the active executor lines (.genvm-monorepo-root via
-branch-versions.py) rather than deriving a single line from the manager base. For
+tools.versions) rather than deriving a single line from the manager base. For
 each active line whose mirror branch `pr/<line>/<head>` exists on genvm-executor we
 open (or reuse) a PR `pr/<line>/<head>` -> `<line>-dev` there, then upsert a marked
 comment on the manager PR listing each as an `executor: <url>` line.
@@ -24,8 +24,8 @@ Env: MANAGER_REPO, EXECUTOR_REPO, PR_NUMBER, HEAD_REF, MANAGER_TOKEN, EXECUTOR_T
 import json
 import os
 import subprocess
-import sys
-from pathlib import Path
+
+from tools.versions import active_versions as configured_active_versions
 
 MANAGER_REPO = os.environ['MANAGER_REPO']
 EXECUTOR_REPO = os.environ.get('EXECUTOR_REPO', 'genlayerlabs/genvm-executor')
@@ -34,7 +34,6 @@ HEAD_REF = os.environ['HEAD_REF']
 MANAGER_TOKEN = os.environ['MANAGER_TOKEN']
 EXECUTOR_TOKEN = os.environ['EXECUTOR_TOKEN']
 
-HERE = Path(__file__).resolve().parent
 # Marker so re-runs update the same comment instead of stacking new ones.
 COMMENT_MARKER = '<!-- genvm-executor-prs -->'
 
@@ -52,13 +51,7 @@ def gh(*args, token, check=True):
 
 def active_lines() -> list[str]:
 	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3'])."""
-	out = subprocess.run(
-		[sys.executable, str(HERE / 'branch-versions.py'), 'list'],
-		check=True,
-		text=True,
-		capture_output=True,
-	).stdout
-	return [f'v{v}' for v in out.split()]
+	return [f'v{v}' for v in configured_active_versions()]
 
 
 def executor_branch_exists(branch: str) -> bool:

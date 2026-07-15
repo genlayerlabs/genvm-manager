@@ -6,4 +6,3 @@ Appendix
 
    host-loop
    manager-api
-   available-runners

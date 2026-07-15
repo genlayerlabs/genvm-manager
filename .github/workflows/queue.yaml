@@ -59,7 +59,7 @@ jobs:
           third_party: --all
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: ./support/ci/pipelines/test-python.sh
+      - run: ./support/ci/run.sh pipeline test-python
 
   module-test-rust-fuzz:
     if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
@@ -84,7 +84,8 @@ jobs:
           echo core | sudo tee /proc/sys/kernel/core_pattern
           echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
           echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-          ./support/ci/pipelines/test-rust-fuzz.sh && ./support/ci/cargo-clippy.sh
+          ./support/ci/run.sh pipeline test-rust-fuzz
+          ./support/ci/run.sh pipeline cargo-clippy
         env:
           OPENAIKEY: ${{ secrets.OPENAIKEY }}
           HEURISTKEY: ${{ secrets.HEURISTKEY }}
@@ -128,7 +129,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
       - run: |
-          ./support/ci/pipelines/test-rust.sh
+          ./support/ci/run.sh pipeline test-rust
         env:
           OPENAIKEY: ${{ secrets.OPENAIKEY }}
           HEURISTKEY: ${{ secrets.HEURISTKEY }}

@@ -6,7 +6,7 @@ Top-level commands (`configure`, `test`) sit alongside command *groups* (`git`
 with `git ls` / `git list-repo`). Each group is a sub-package exposing
 `COMMANDS`; every leaf module exposes `NAME`, `HELP`, `configure(parser)` and
 `main(ctx, args)` (sync or async). Commit hooks are handled by git-hooks.nix
-(each repo's flake), not this tool — see support/ci/pipelines/commit-hooks.sh.
+(each repo's flake), not this tool — see `support/ci/run.sh pipeline commit-hooks`.
 """
 
 import argparse

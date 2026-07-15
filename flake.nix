@@ -131,8 +131,22 @@
             pkgs.python312Packages.aiohttp
             wabt
           ];
+          # Docs toolchain from nix instead of a poetry venv: sphinx + the
+          # extensions conf.py loads. mermaid-cli is the `mmdc` the
+          # sphinxcontrib.mermaid svg output shells out to. The Python SDK
+          # autodoc (and its numpy dep) and the text→txt merge (formerly ruby,
+          # now docs/website/merge_txts.py) moved to the executor sub-sites.
+          docs-python = pkgs.python312.withPackages (
+            ps: with ps; [
+              sphinx
+              myst-parser
+              pydata-sphinx-theme
+              sphinxcontrib-mermaid
+              sphinxcontrib-openapi
+            ]
+          );
           packages-gen-docs = with pkgs; [
-            lua-language-server
+            docs-python
             mermaid-cli
           ];
           packages-py-test = with pkgs; [
@@ -273,7 +287,7 @@
               check-cargo-versions = {
                 enable = true;
                 name = "check-cargo-versions";
-                entry = "${hooks-python}/bin/python3 support/ci/check-versions.py sync";
+                entry = "${hooks-python}/bin/python3 -B ./support/ci tool check-versions sync";
                 files = "^(implementation/Cargo\\.toml|\\.genvm-monorepo-root)$";
                 pass_filenames = false;
               };
@@ -362,7 +376,7 @@
               exec-prefix = "executors/${key}.x";
               exec-src = self + "/${exec-prefix}";
               manifest = builtins.fromJSON (builtins.readFile (exec-src + "/manifest.json"));
-              clamped = clamp-version manifest.executor-version;
+              clamped = builtins.replaceStrings [ "." ] [ "_" ] (clamp-version manifest.executor-version);
               release-args = make-release-args exec-src exec-prefix;
               # executors/<key>.x/default.nix reads its own
               # manifest.json for build-config (executor-version).
@@ -588,7 +602,9 @@
             '';
           };
           devShells.gen-docs = pkgs.mkShell {
-            packages = packages-py-test ++ packages-gen-docs ++ [ pkgs.ruby ];
+            # Self-contained docs toolchain (sphinx + extensions via nix, no
+            # poetry). generate.py also runs `nix eval`, so keep the base tools.
+            packages = packages-0 ++ packages-gen-docs;
             shellHook = shell-hook-base;
           };
           devShells.initial-check = pkgs.mkShell {

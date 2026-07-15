@@ -337,7 +337,7 @@ The outcomes, in check order, are:
 -------------------
 
 Maps a file from a runner into the VM filesystem at runtime, behaving the same as
-the ``MapFile`` runner action (see :doc:`../../../python-sdk/index` runners). If
+the ``MapFile`` runner action (see the Python SDK runners documentation). If
 ``path_in_runner`` ends with ``/`` the whole directory subtree is mapped.
 
 Payload

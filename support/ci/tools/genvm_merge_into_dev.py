@@ -53,7 +53,7 @@ checks out with the GENVM_CI_PRIVATE_KEY deploy key and pushes non-force
 (a base that advanced is safely rejected). The active executor submodules
 must be checked out with a remote `origin` that can push the executor repo
 (the workflow wires its own deploy key); the active lines come from
-.genvm-monorepo-root via branch-versions.py.
+.genvm-monorepo-root via tools.versions.
 
 Env: GITHUB_REPOSITORY, PR_NUMBER, GH_TOKEN, E2E_CHECK_PATTERN.
 """
@@ -63,12 +63,12 @@ import os
 import re
 import subprocess
 import sys
-from pathlib import Path
+
+from tools.versions import active_versions as configured_active_versions
 
 REPO = os.environ['GITHUB_REPOSITORY']
 PR = os.environ['PR_NUMBER']
 E2E_PATTERN = os.environ.get('E2E_CHECK_PATTERN', 'e2e')
-HERE = Path(__file__).resolve().parent
 
 
 def run(*args, check=True, env=None):
@@ -158,8 +158,7 @@ def coauthor_trailers(repo, rev_range, exclude):
 def active_lines():
 	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3']). The manager
 	release line is independent of these; a manager PR ships every active line."""
-	out = run(sys.executable, str(HERE / 'branch-versions.py'), 'list').stdout
-	return [f'v{v}' for v in out.split()]
+	return [f'v{v}' for v in configured_active_versions()]
 
 
 def block(msg):
@@ -256,11 +255,12 @@ def executor_gitlink(commit, submodule):
 	out = git('ls-tree', commit, submodule).stdout
 	# "160000 commit <sha>\t<path>"
 	m = re.match(r'\S+\s+commit\s+([0-9a-f]+)\t', out)
-	if not m:
+	if m is None:
 		block(
 			f'could not resolve the executor submodule pointer ({submodule}) at `{commit}`.'
 		)
-	return m.group(1)
+	else:
+		return m.group(1)
 
 
 # Provenance trailer on a squashed executor commit: the PR-side commit whose

@@ -21,7 +21,7 @@ jobs:
       # The formatters fix in place and the run fails if anything changed, so
       # unformatted code turns the build red (the diff is shown on failure).
       - name: Run hooks
-        run: bash support/ci/pipelines/commit-hooks.sh
+        run: ./support/ci/run.sh pipeline commit-hooks
 
   # `check-commit-message` is a commit-msg-stage hook, so the pre-commit run
   # above never fires it. Check every commit the PR adds, in the manager and in
@@ -41,7 +41,7 @@ jobs:
       - name: Check commit messages
         env:
           CHANGES: ${{ steps.src.outputs.changes }}
-        run: bash support/ci/pipelines/commit-messages.sh
+        run: ./support/ci/run.sh pipeline commit-messages
 
   # The Merge action only fast-forwards, so the PR head must already
   # contain the base tip (0 commits behind). We assert it here too (as part

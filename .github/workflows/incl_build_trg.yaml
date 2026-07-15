@@ -57,7 +57,7 @@ jobs:
           # separate jobs would.
           while IFS= read -r target; do
             [ -n "$target" ] || continue
-            ./support/ci/pipelines/build.sh \
+            ./support/ci/run.sh pipeline build \
               --target "$target" \
               --executor-version "$EXECUTOR_VERSION"
           done <<< "$TARGETS"
