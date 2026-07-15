@@ -38,6 +38,8 @@ import dataclasses
 import json
 import os
 import subprocess
+import sys
+import time
 
 from tools.versions import active_versions as configured_active_versions
 
@@ -103,15 +105,66 @@ class RepoInfo:
 		}
 
 
+# Every `gh` call here is an idempotent read (`gh api` GET, `gh pr list`), so a
+# transient failure is safe to retry. The one we actually hit is GitHub handing
+# back a truncated/empty body, which gh reports as `unexpected end of JSON input`
+# and which killed the whole executor-precondition gate on a single hiccup; 5xx,
+# rate-limit and network blips are retried for the same reason. A terminal 4xx
+# (notably the 404 that `allow_missing` callers expect for an absent line) is not
+# retried, so that fast path stays fast.
+_RETRY_ATTEMPTS = 4
+_RETRY_BACKOFF_S = 2.0
+
+_TRANSIENT_MARKERS = (
+	'unexpected end of json input',
+	'http 500',
+	'http 502',
+	'http 503',
+	'http 504',
+	'rate limit',
+	'timeout',
+	'timed out',
+	'connection reset',
+	'connection refused',
+	'eof',
+)
+
+
+def _is_transient(r: subprocess.CompletedProcess) -> bool:
+	blob = f'{r.stdout}\n{r.stderr}'.lower()
+	return any(marker in blob for marker in _TRANSIENT_MARKERS)
+
+
 def gh(*args: str, token: str, check: bool = True) -> subprocess.CompletedProcess:
-	"""`gh` with GH_TOKEN bound to the given token (manager- or executor-scoped)."""
-	return subprocess.run(
-		['gh', *args],
-		env={**os.environ, 'GH_TOKEN': token},
-		check=check,
-		text=True,
-		capture_output=True,
-	)
+	"""`gh` with GH_TOKEN bound to the given token (manager- or executor-scoped).
+
+	Retries transient failures (see `_TRANSIENT_MARKERS`) a few times with linear
+	backoff; a terminal failure is returned as-is (or raised, when `check`),
+	exactly as a single `subprocess.run(check=...)` would.
+	"""
+	for attempt in range(_RETRY_ATTEMPTS):
+		result = subprocess.run(
+			['gh', *args],
+			env={**os.environ, 'GH_TOKEN': token},
+			check=False,
+			text=True,
+			capture_output=True,
+		)
+		if result.returncode == 0 or not _is_transient(result):
+			break
+		if attempt + 1 < _RETRY_ATTEMPTS:
+			delay = _RETRY_BACKOFF_S * (attempt + 1)
+			print(
+				f'gh {" ".join(args)}: transient failure, retrying in {delay:.0f}s '
+				f'(attempt {attempt + 1}/{_RETRY_ATTEMPTS})',
+				file=sys.stderr,
+			)
+			time.sleep(delay)
+	if check and result.returncode != 0:
+		raise subprocess.CalledProcessError(
+			result.returncode, result.args, output=result.stdout, stderr=result.stderr
+		)
+	return result
 
 
 def _api(*args: str, token: str, allow_missing: bool = False):
