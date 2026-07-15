@@ -99,22 +99,60 @@ def is_ancestor(repo, maybe_ancestor, descendant):
 	return egit(repo, *args, check=False).returncode == 0
 
 
-def coauthor_trailers(repo, rev_range, author):
-	"""`Co-authored-by:` for every human author in the range except `author`.
+# Identities the commit-message hook rejects as AI/tool attribution
+# (support/scripts/check-commit-message.py AI_PATTERNS). A squash must not
+# resurrect one as a Co-authored-by trailer — the hook would then reject the
+# message it produced, and nothing re-validates a generated squash message.
+AI_IDENTITY_RE = re.compile(
+	r'claude|gpt|copilot|anthropic|openai|\bai\b|noreply@anthropic', re.IGNORECASE
+)
 
-	A squash keeps only one author, so everyone else who wrote a commit in the
-	range would otherwise lose attribution. Never emit tool/AI attribution — the
-	commit-message hook rejects it.
-	"""
-	args = ('log', '--format=%an <%ae>', rev_range)
+
+def commit_author(repo, sha):
+	"""(name, email, author-date) of `sha`. NUL-separated so a name containing
+	`<` or spaces round-trips."""
+	out = (
+		egit(repo, 'log', '-1', '--format=%an%x00%ae%x00%aI', sha)
+		if repo is not None
+		else git('log', '-1', '--format=%an%x00%ae%x00%aI', sha)
+	).stdout.rstrip('\n')
+	name, email, date = out.split('\x00')
+	return name, email, date
+
+
+def range_authors(repo, rev_range):
+	"""Distinct (name, email) commit authors in `rev_range`, first-seen order."""
+	args = ('log', '--format=%an%x00%ae', rev_range)
 	out = (git(*args) if repo is None else egit(repo, *args)).stdout
 
-	seen = []
-	for line in out.splitlines():
-		line = line.strip()
-		if line and line != author and line not in seen:
-			seen.append(line)
-	return [f'Co-authored-by: {a}' for a in sorted(seen)]
+	authors = []
+	for line in out.split('\n'):
+		if '\x00' not in line:
+			continue
+		name, _, email = line.partition('\x00')
+		if (name, email) not in authors:
+			authors.append((name, email))
+	return authors
+
+
+def coauthor_trailers(repo, rev_range, exclude):
+	"""`Co-authored-by:` for every human author in the range except `exclude`.
+
+	A squash keeps only one author, so everyone else who wrote a commit in the
+	range would otherwise lose attribution. Authors whose identity the
+	commit-message hook rejects as AI/tool attribution are dropped — otherwise the
+	generated message would fail that hook, and nothing re-checks it.
+	"""
+	trailers = []
+	for name, email in range_authors(repo, rev_range):
+		if (name, email) == exclude:
+			continue
+		ident = f'{name} <{email}>'
+		if AI_IDENTITY_RE.search(ident):
+			print(f'dropping AI/tool co-author {ident}')
+			continue
+		trailers.append(f'Co-authored-by: {ident}')
+	return trailers
 
 
 def active_lines():
@@ -235,6 +273,26 @@ def executor_gitlink(commit, submodule):
 SQUASHED_FROM = 'GenVM-Squashed-From'
 
 
+def build_messages(pr):
+	"""Return `(manager_message, executor_message)` for this PR.
+
+	The body is the PR body with CRLF normalized (GitHub returns CRLF, and
+	`commit-tree` — unlike `git commit` — does no cleanup, so without this the
+	executor and manager commits for one PR would differ byte-for-byte) and with
+	any pre-existing provenance-trailer line stripped, so a body that quotes
+	`GenVM-Squashed-From:` (a revert PR quoting what it reverts) cannot poison the
+	re-tick lookup. The executor commit lands in another repo, so its PR reference
+	is fully qualified; the manager's bare `#N` resolves in-repo.
+	"""
+	body = (pr['body'] or '').replace('\r\n', '\n').replace('\r', '\n')
+	body = '\n'.join(
+		ln for ln in body.split('\n') if not ln.strip().startswith(f'{SQUASHED_FROM}:')
+	).strip()
+	title = pr['title']
+	tail = f'\n\n{body}\n' if body else '\n'
+	return f'{title} (#{PR}){tail}', f'{title} ({REPO}#{PR}){tail}'
+
+
 def already_squashed(submodule, exec_base, exec_sha):
 	"""The commit on `<exec_base>` that already carries `exec_sha`'s content, if any."""
 	out = egit(
@@ -293,7 +351,17 @@ def plan_executor_line(submodule, exec_base, exec_sha, message):
 		# Executor moved ahead of what this PR pins; the pinned commit is
 		# already contained, so there is nothing to push.
 		return exec_sha, False
+
+	tree = egit(submodule, 'rev-parse', f'{exec_sha}^{{tree}}').stdout.strip()
 	if not is_ancestor(submodule, tip, exec_sha):
+		# A maintainer may have merged the auto-opened executor PR by hand: the
+		# tree is already on the tip under a different sha and without our trailer.
+		# Same content already landed, so mirror the tip rather than block.
+		if egit(submodule, 'rev-parse', f'{tip}^{{tree}}').stdout.strip() == tree:
+			print(
+				f'Executor {exec_base} already carries {exec_sha[:12]} as its tip {tip[:12]}'
+			)
+			return tip, False
 		block(
 			f'executor `{exec_base}` (`{tip[:12]}`) has diverged from the PR executor '
 			f'commit `{exec_sha[:12]}`; mirror is not a fast-forward.'
@@ -305,18 +373,15 @@ def plan_executor_line(submodule, exec_base, exec_sha, message):
 		# rewrite it into an identical tree under a new sha.
 		return exec_sha, True
 
-	author = egit(submodule, 'log', '-1', '--format=%an <%ae>', exec_sha).stdout.strip()
-	name, _, email = author.partition(' <')
-	email = email.rstrip('>')
+	name, email, date = commit_author(submodule, exec_sha)
 
-	trailers = coauthor_trailers(submodule, f'{tip}..{exec_sha}', author)
+	trailers = coauthor_trailers(submodule, f'{tip}..{exec_sha}', (name, email))
 	# The provenance trailer must be there for a re-tick to recognise this commit.
 	trailers.append(f'{SQUASHED_FROM}: {exec_sha}')
 	full_message = message + '\n' + '\n'.join(trailers) + '\n'
 
 	# A squash is just the PR's tree on top of the tip; commit-tree builds it
 	# without touching the working tree or index.
-	tree = egit(submodule, 'rev-parse', f'{exec_sha}^{{tree}}').stdout.strip()
 	squashed = egit(
 		submodule,
 		'commit-tree',
@@ -328,6 +393,7 @@ def plan_executor_line(submodule, exec_base, exec_sha, message):
 		env={
 			'GIT_AUTHOR_NAME': name,
 			'GIT_AUTHOR_EMAIL': email,
+			'GIT_AUTHOR_DATE': date,
 			'GIT_COMMITTER_NAME': 'genvm-ci',
 			'GIT_COMMITTER_EMAIL': 'genvm-ci@genlayer.com',
 		},
@@ -391,12 +457,7 @@ def merge(pr, base, head_sha):
 		)
 
 	# 5. authoritative 0-commits-behind check at merge time.
-	if (
-		git(
-			'merge-base', '--is-ancestor', f'origin/{base}', 'refs/prhead', check=False
-		).returncode
-		!= 0
-	):
+	if not is_ancestor(None, f'origin/{base}', 'refs/prhead'):
 		behind = git('rev-list', '--count', f'refs/prhead..origin/{base}').stdout.strip()
 		block(
 			f'PR is {behind} commit(s) behind `{base}`; update the branch and re-tick Merge.'
@@ -405,13 +466,27 @@ def merge(pr, base, head_sha):
 	git('config', 'user.name', 'genvm-ci')
 	git('config', 'user.email', 'genvm-ci@genlayer.com')
 
-	message = f'{pr["title"]} (#{PR})\n\n{pr["body"] or ""}\n'
+	manager_message, executor_message = build_messages(pr)
 
 	# Plan every active executor line first: each line's commits are squashed into
 	# one commit on its `<line>-dev`, so a line that was squashed lands under a
 	# NEW sha and the manager commit has to gitlink that one instead of the sha the
 	# PR pinned (which never lands on the dev branch).
-	plans = plan_executor_lines(head_sha, message)
+	plans = plan_executor_lines(head_sha, executor_message)
+
+	# Refuse to move any line's gitlink backward. The 0-behind gate is on manager
+	# commits, not the gitlink, so a PR can be current on commits yet stale on the
+	# pointer (another PR advanced the line after this one branched); landing it
+	# would silently revert that PR's executor work.
+	for submodule, _line, exec_base, _pinned, landed, _push in plans:
+		base_link = executor_gitlink(f'origin/{base}', submodule)
+		if landed != base_link and is_ancestor(submodule, landed, base_link):
+			block(
+				f'merging would move the `{submodule}` gitlink backward on `{base}` '
+				f'(base pins `{base_link[:12]}`, this PR would set `{landed[:12]}`); '
+				f'another change advanced it — update the PR and re-tick Merge.'
+			)
+
 	rewritten = {
 		submodule: landed
 		for submodule, _line, _base, pinned, landed, _push in plans
@@ -427,7 +502,7 @@ def merge(pr, base, head_sha):
 				f'Executor lines were squashed; rewriting the manager gitlinks: {rewritten}'
 			)
 		print(f'Squashing {len(pr["commits"])} commits onto {base}')
-		author = git('log', '-1', '--format=%an <%ae>', head_sha).stdout.strip()
+		name, email, date = commit_author(None, head_sha)
 		git('checkout', '-B', '_merge', f'origin/{base}')
 		git('merge', '--squash', head_sha)
 
@@ -437,12 +512,20 @@ def merge(pr, base, head_sha):
 		for submodule, landed in rewritten.items():
 			git('update-index', '--cacheinfo', f'160000,{landed},{submodule}')
 
-		trailers = coauthor_trailers(None, f'origin/{base}..{head_sha}', author)
-		full_message = message
+		trailers = coauthor_trailers(None, f'origin/{base}..{head_sha}', (name, email))
+		full_message = manager_message
 		if trailers:
 			full_message += '\n' + '\n'.join(trailers) + '\n'
 
-		git('commit', '--author', author, '-m', full_message)
+		git(
+			'commit',
+			'--author',
+			f'{name} <{email}>',
+			'--date',
+			date,
+			'-m',
+			full_message,
+		)
 		push_sha = git('rev-parse', 'HEAD').stdout.strip()
 
 	# Push the executors first: the manager commit gitlinks into them, so the

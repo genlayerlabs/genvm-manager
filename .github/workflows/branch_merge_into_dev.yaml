@@ -14,16 +14,17 @@ name: branch / merge PR into dev
 #   4. the cross-repo E2E check concluded success on the head commit
 #   5. the PR is 0 commits behind base (head already contains base tip)
 #
-# Merge strategy:
-#   - 1 commit            -> fast-forward the original commit (SHA preserved)
-#   - more than 1 commit  -> squash into a single commit on top of base,
-#                            then fast-forward
-# Either way the PR is closed afterwards.
+# Merge strategy: one commit per merged PR in every repo. A manager PR that is
+#   a single commit and rewrites no gitlink is fast-forwarded as-is (SHA
+#   preserved); otherwise its commits are squashed onto base. Each executor line
+#   is squashed onto its own <line>-dev, which gives it a NEW commit, so the
+#   manager commit is rewritten to gitlink that squashed commit. The PR is closed
+#   afterwards.
 #
-# Executor mirror: the landed manager commit gitlinks into the executor
-# submodule; the script fast-forwards the executor's SAME-NAMED branch to
-# that gitlink commit. It fast-forward-checks both repos up front, then
-# pushes the executor first (the dependency) and the manager second.
+# Executor mirror: the landed manager commit gitlinks into each active executor
+# line; the script squashes each line onto its SAME-NAMED <line>-dev branch. It
+# plans and fast-forward-checks every side up front, then pushes the executors
+# first (the dependencies) and the manager second.
 #
 # The dev branches are protected; the default GITHUB_TOKEN cannot push to
 # them. We push over SSH with the GENVM_CI_PRIVATE_KEY deploy key (on the
