@@ -425,6 +425,9 @@ def run(
 
 	conf_env = asyncio.run(foo())
 
+	# --ci is a `run`-subcommand flag; absent for other subcommands (default False).
+	shared_context.ci = getattr(conf_env.args, 'ci', False)
+
 	if 'func' not in conf_env.args:
 		logger.error('subcommand not given')
 		parser_result.parser.print_help()

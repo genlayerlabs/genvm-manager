@@ -182,7 +182,7 @@ TEST_MOCK_BUILD_BINS = DefaultStepInfo(
 
 TEST_MOCK_BUILD_RUNNERS = DefaultStepInfo(
 	configure_step=Stage(None),
-	build_step=Stage(data=frozenset(['all/runners'])),
+	build_step=Stage(data=frozenset(['all/runners', 'all/data'])),
 )
 
 TEST_MOCK_BUILD_ALL = TEST_MOCK_BUILD_BINS.merge(TEST_MOCK_BUILD_RUNNERS)

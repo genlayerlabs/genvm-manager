@@ -180,7 +180,7 @@ def tests(ctx):
 		)
 		no_manager = getattr(ctx.configuration.args, 'no_manager', False)
 		no_webdriver = getattr(ctx.configuration.args, 'no_webdriver', False)
-		ci = getattr(ctx.configuration.args, 'ci', False)
+		ci = ctx.shared.ci
 
 		manager_port = genvm.get_manager_port(ctx.configuration)
 

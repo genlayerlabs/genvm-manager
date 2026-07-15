@@ -18,7 +18,9 @@ vendored-lua = ["mlua/vendored"]
 [dependencies]
 genlayer_calldata = { path = "../executors/v0.3.x/executor/crates/calldata" }
 genvm-common = { path = "../executors/v0.3.x/executor/crates/common" }
-genvm-modules-interfaces = { path = "../crates/modules-interfaces" }
+genvm_modules_interfaces = { path = "../executors/v0.3.x/executor/crates/modules-interfaces" }
+# linked through common
+# genvm_modules_interfaces = { path = "../crates/modules-interfaces" }
 
 anyhow = { version = "1.0.98", features = [] }
 async-trait = "0.1.88"

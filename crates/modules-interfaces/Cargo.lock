@@ -277,7 +277,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "genvm-modules-interfaces"
+name = "genvm_modules_interfaces"
 version = "0.1.0"
 dependencies = [
  "anyhow",
