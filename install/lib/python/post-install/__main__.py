@@ -116,8 +116,24 @@ parser.add_argument(
 	default=None,
 	help='Enable/disable precompile step (default: use --default-steps)',
 )
+parser.add_argument(
+	'--install-root',
+	type=str,
+	default=None,
+	help=(
+		'Absolute path of the FINAL install root whose lib/libc.so is baked into '
+		'the ELF interpreter (PT_INTERP). Use for staged installs that are moved '
+		'to this path after post-install runs. Defaults to the tree being patched.'
+	),
+)
 
 args = parser.parse_args()
+
+if args.install_root is not None and not Path(args.install_root).is_absolute():
+	raise SystemExit(
+		f'--install-root must be an absolute path (PT_INTERP requires one), '
+		f'got: {args.install_root}'
+	)
 
 # Apply default to None values
 if args.default_download is None:
@@ -196,14 +212,27 @@ def get_interpreter_path():
 	global _interpreter_path
 	if _interpreter_path is not None:
 		return _interpreter_path
-	interpreter_path = genvm_root_dir.joinpath('lib', 'libc.so').absolute()
-	logger.info(f'Interpreter path: {interpreter_path}')
 
-	if not interpreter_path.exists():
+	# The loader must physically exist in the tree we are patching, regardless of
+	# what absolute path we end up baking.
+	staged = genvm_root_dir.joinpath('lib', 'libc.so').absolute()
+	if not staged.exists():
 		logger.error(
-			f'Interpreter path {interpreter_path} does not exist, cannot patch executables'
+			f'Interpreter path {staged} does not exist, cannot patch executables'
 		)
 		exit(1)
+
+	# PT_INTERP must be absolute (the kernel does not honor $ORIGIN/relative
+	# interpreters), so it is fixed at post-install time. By default we bake the
+	# current tree location; --install-root lets a staged install bake the FINAL
+	# location's loader in one pass so the tree can be moved there afterwards.
+	if args.install_root is not None:
+		interpreter_path = Path(args.install_root).joinpath('lib', 'libc.so')
+		logger.info(f'Interpreter path (install-root override): {interpreter_path}')
+	else:
+		interpreter_path = staged
+		logger.info(f'Interpreter path: {interpreter_path}')
+
 	_interpreter_path = interpreter_path
 	return interpreter_path
 
@@ -226,14 +255,20 @@ def patch_executable(path: Path):
 		return
 
 	logger.info(f'Current interpreter: {binary.interpreter}')
-	if Path(binary.interpreter).exists():
+	wanted = str(get_interpreter_path())
+	# Re-point whenever the interpreter is not already the wanted absolute path.
+	# Checking equality (not just existence) makes post-install idempotent and
+	# recovers a stale PT_INTERP when the tree is moved/copied after a previous
+	# run: re-running in the final location always corrects it, even if the old
+	# interpreter path still happens to exist.
+	if binary.interpreter == wanted:
 		logger.info(
-			f'Interpreter {binary.interpreter} exists, skipping interpreter patching'
+			f'Interpreter already {wanted}, skipping interpreter patching'
 		)
 		return
 
 	old_interpreter = binary.interpreter
-	binary.interpreter = str(get_interpreter_path())
+	binary.interpreter = wanted
 	logger.info(f'Updated interpreter from {old_interpreter} to: {binary.interpreter}')
 
 	binary.write(str(path))
