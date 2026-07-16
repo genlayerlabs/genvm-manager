@@ -104,3 +104,14 @@ jobs:
         with:
           job_json: ${{ inputs.job_json }}
           key: tool
+
+      # Postmortem on the same runner the cell just used; see the action for
+      # what it probes and why it is not an `incl_*` reusable workflow.
+      # `failure()` covers any earlier step failing and is already false on a
+      # cancel, so it needs no !cancelled() guard.
+      # `continue-on-error` is belt-and-braces: the action already exits 0.
+      - name: Postmortem
+        if: ${{ failure() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: ./.github/actions/postmortem

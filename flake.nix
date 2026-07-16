@@ -557,7 +557,7 @@
           # one release per line in the executor repo), so this merged bundle has
           # no CI consumer; it stays as the convenient "give me every line"
           # target for local use. Runners are NOT included; they ship
-          # platform-independently via runners-all-dist.
+          # platform-independently via artifact-prepack-genvm-universal.
           combine-executors =
             suffix:
             pkgs.runCommand "genvm-executor${suffix}"
@@ -573,25 +573,6 @@
               suffix: pkgs.lib.nameValuePair "executor${suffix}" (combine-executors suffix)
             ) platform-suffixes
           );
-
-          # The release asset genvm-universal.tar.xz: consumers extract it at
-          # the install root, so the shared runners sit under runners/ and the
-          # legacy lines' runners at their executor/<version>/legacy-runners
-          # destination (the same overlay combine-genvm applies).
-          runners-all-dist = pkgs.stdenvNoCC.mkDerivation {
-            name = "genvm-runners-all-dist";
-            runnersAll = runners-all;
-            legacyRunnersAll = legacy-runners-all;
-            dontUnpack = true;
-            dontConfigure = true;
-            dontBuild = true;
-            dontFixup = true;
-            installPhase = ''
-              mkdir -p $out/runners
-              cp -rsf "$runnersAll"/. $out/runners/
-              cp -rsf "$legacyRunnersAll"/. $out/
-            '';
-          };
 
           # Trees consumed by the artifact packer. Platform artifacts contain
           # the manager and every active executor line for that platform. The
@@ -660,7 +641,7 @@
             # Manager: manager[-<platform>].
             // manager-packages
             // {
-              inherit runners-all legacy-runners-all runners-all-dist;
+              inherit runners-all legacy-runners-all;
             }
             # Inputs for producing the three platform artifacts and the
             # platform-independent universal artifact.

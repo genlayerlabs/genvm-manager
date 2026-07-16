@@ -297,8 +297,8 @@ def _cell(
 
 QUEUE_CELLS = [
 	_cell('python', TEST_PYTHON),
-	_cell('rust-executors', TEST_RUST_EXECUTORS, fuzz_host=True),
-	_cell('rust-manager', TEST_RUST_MANAGER, fuzz_host=True),
+	_cell('rust-executors', TEST_RUST_EXECUTORS, fuzz_host=True, disk_reclaim=True),
+	_cell('rust-manager', TEST_RUST_MANAGER, fuzz_host=True, disk_reclaim=True),
 	_cell(
 		'mock-pr',
 		TEST_MOCK_BUILD_ALL.merge(TEST_MOCK_PR),
