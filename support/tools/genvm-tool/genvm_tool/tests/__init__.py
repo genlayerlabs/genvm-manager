@@ -60,6 +60,8 @@ class SharedContext:
 	# collectors / CLI args.
 	suite: Any = None
 
+	ci: bool = False
+
 	_git_files: list[Path] | None = None
 	_interrupted: threading.Event = field(default_factory=threading.Event)
 	_config: dict[str, Any] | None = None
@@ -107,8 +109,14 @@ class SharedContext:
 		if self._git_files is not None:
 			return self._git_files
 
+		# --recurse-submodules so executor crates (each `executors/<line>.x` is a
+		# submodule since the monorepo split) are listed too: the umbrella's
+		# collect_rust is the only path that discovers Cargo.toml/fuzz targets, and
+		# executors carry no tests() hook of their own. Without it only the two
+		# manager crates are seen and every executor rust crate goes untested.
+		# Uninitialized submodules are simply skipped (not an error).
 		r = subprocess.run(
-			['git', 'ls-files'],
+			['git', 'ls-files', '--recurse-submodules'],
 			check=True,
 			capture_output=True,
 			text=True,

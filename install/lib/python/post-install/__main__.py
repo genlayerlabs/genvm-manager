@@ -1,12 +1,16 @@
 import argparse
 import hashlib
+import io
 import json
 import logging
 import os
 import platform
 import shlex
+import shutil
 import subprocess
+import tarfile
 import traceback
+import typing
 from pathlib import Path
 
 target_os = platform.system().lower()
@@ -60,6 +64,12 @@ parser.add_argument(
 	help='Whether to error on missing executor',
 )
 parser.add_argument(
+	'--use-patchelf',
+	type=str_to_bool,
+	default=False,
+	help='Set the ELF interpreter with patchelf instead of lief',
+)
+parser.add_argument(
 	'--log-level',
 	type=str,
 	default='INFO',
@@ -74,6 +84,7 @@ parser.add_argument(
 )
 
 step_names = [
+	'executor-download',
 	'runners-download',
 	'bin-patch',
 	'bin-check',
@@ -91,6 +102,12 @@ parser.add_argument(
 	type=str_to_bool_or_none,
 	default=None,
 	help='Default value for download steps (default: use --default-steps)',
+)
+parser.add_argument(
+	'--executor-download',
+	type=str_to_bool_or_none,
+	default=None,
+	help='Enable/disable executor download step (default: use --default-download)',
 )
 parser.add_argument(
 	'--runners-download',
@@ -123,6 +140,8 @@ args = parser.parse_args()
 if args.default_download is None:
 	args.default_download = args.default_steps
 
+if args.executor_download is None:
+	args.executor_download = args.default_download
 if args.runners_download is None:
 	args.runners_download = args.default_download
 if args.bin_patch is None:
@@ -150,10 +169,13 @@ logging.info('Starting actual post-install script')
 # Interpreter patching rewrites the ELF interpreter (dynamic loader) to the
 # bundled one, whose path is only known at install time. It applies to ELF
 # binaries (Linux) only; on other targets the loader is fixed and rpath/needed
-# entries are already set correctly at build time, so lief is not needed.
+# entries are already set correctly at build time, so nothing is needed.
 patch_interpreter = args.bin_patch and args.os == 'linux'
 
-if patch_interpreter:
+# `--use-patchelf` shells out to patchelf instead, so lief — a heavy binary
+# wheel pulled in for this one job — is never imported (nor installed into the
+# venv; see the wrapper).
+if patch_interpreter and not args.use_patchelf:
 	import lief
 
 	lief.logging.set_level(lief.logging.LEVEL.ERROR)
@@ -208,12 +230,7 @@ def get_interpreter_path():
 	return interpreter_path
 
 
-def patch_executable(path: Path):
-	logger.info(f'Patching interpreter for {path}')
-	if not path.exists():
-		logger.warning(f'Path {path} does not exist, skipping patching')
-		return
-
+def _patch_executable_lief(path: Path):
 	binary = lief.parse(path)
 	if not binary:
 		logger.error(f'Failed to parse binary at {path}')
@@ -240,6 +257,103 @@ def patch_executable(path: Path):
 	logger.info(f'Successfully patched interpreter: {path}')
 
 
+def _patch_executable_patchelf(path: Path):
+	patchelf = shutil.which('patchelf')
+	if patchelf is None:
+		raise RuntimeError('--use-patchelf was given but patchelf is not on PATH')
+
+	if detect_executable_platform(path) != 'linux':
+		logger.info(f'{path} is not ELF, nothing to patch')
+		return
+
+	current = subprocess.run(
+		[patchelf, '--print-interpreter', str(path)],
+		capture_output=True,
+		text=True,
+	)
+	if current.returncode == 0:
+		current_interpreter = current.stdout.strip()
+		logger.info(f'Current interpreter: {current_interpreter}')
+		if current_interpreter and Path(current_interpreter).exists():
+			logger.info(
+				f'Interpreter {current_interpreter} exists, skipping interpreter patching'
+			)
+			return
+	else:
+		# A static binary has no interpreter to print; there is nothing to patch.
+		logger.info(f'{path} has no interpreter, nothing to patch')
+		return
+
+	interpreter = get_interpreter_path()
+	subprocess.run(
+		[patchelf, '--set-interpreter', str(interpreter), str(path)],
+		check=True,
+		text=True,
+	)
+	logger.info(f'Successfully patched interpreter: {path} -> {interpreter}')
+
+
+def patch_executable(path: Path):
+	logger.info(f'Patching interpreter for {path}')
+	if not path.exists():
+		logger.warning(f'Path {path} does not exist, skipping patching')
+		return
+
+	if args.use_patchelf:
+		_patch_executable_patchelf(path)
+	else:
+		_patch_executable_lief(path)
+
+
+# linux ships ELF, macos ships Mach-O; these are the only OSes we target.
+BinaryOS = typing.Literal['linux', 'macos']
+
+# Mach-O magics (thin 32/64-bit and universal/fat), in both stored byte orders.
+_MACHO_MAGICS = frozenset(
+	{
+		b'\xfe\xed\xfa\xce',
+		b'\xce\xfa\xed\xfe',
+		b'\xfe\xed\xfa\xcf',
+		b'\xcf\xfa\xed\xfe',
+		b'\xca\xfe\xba\xbe',
+		b'\xbe\xba\xfe\xca',
+		b'\xca\xfe\xba\xbf',
+		b'\xbf\xba\xfe\xca',
+	}
+)
+
+
+def detect_executable_platform(path: Path) -> BinaryOS | None:
+	"""Sniff a binary's header to identify its target OS: ELF -> linux, Mach-O
+	(any variant/byte order) -> macos. Returns None for anything unrecognized
+	(wrapper scripts, truncated/empty files, unknown formats)."""
+	try:
+		with open(path, 'rb') as f:
+			magic = f.read(4)
+	except OSError:
+		return None
+	if magic == b'\x7fELF':
+		return 'linux'
+	if magic in _MACHO_MAGICS:
+		return 'macos'
+	return None
+
+
+def check_executable_platform(path: Path):
+	"""Refuse a wrong-OS binary before we trust it. A bad release once shipped a
+	macOS (Mach-O) executor inside a linux tarball; the missing-only download
+	guard accepted it and it surfaced as an opaque `Exec format error` at
+	runtime. Here we error on a clear OS mismatch instead. Unrecognized formats
+	(None) are left alone rather than guessed at."""
+	detected = detect_executable_platform(path)
+	if detected is not None and detected != args.os:
+		logger.error(
+			f'{path} is a {detected} binary but target OS is {args.os}; '
+			'wrong-platform executor shipped'
+		)
+		raise RuntimeError(f'{path} is a {detected} binary but target OS is {args.os}')
+
+
 def run_check_command(command: list[str | Path]):
 	env = os.environ.copy()
 	env['LLVM_PROFILE_FILE'] = '/dev/null'
@@ -251,6 +365,7 @@ def run_check_command(command: list[str | Path]):
 
 
 modules_executable = genvm_root_dir.joinpath('bin', 'genvm-modules')
+check_executable_platform(modules_executable)
 if patch_interpreter:
 	patch_executable(modules_executable)
 
@@ -370,6 +485,35 @@ def download_runners_from_json(
 			cur_dst.write_bytes(data)
 
 
+def download_executor(executor_version: str):
+	"""Fetch an executor line from its own release and unpack it at the install root.
+
+	Since the repo split the manager release carries no executors: each line is
+	released separately, under its own executor-version. The tarball is laid out
+	as `executor/<version>/...`, i.e. relative to the install root, so it is
+	unpacked there.
+	"""
+	templates = manifest.get('executor_download_urls', [])
+	if not templates:
+		raise RuntimeError('manifest has no executor_download_urls')
+
+	data = _download_template(
+		f'executor {executor_version}',
+		templates,
+		{
+			'version': executor_version,
+			'platform': f'{args.arch}-{args.os}',
+			'arch': args.arch,
+			'os': args.os,
+		},
+	)
+
+	with tarfile.open(fileobj=io.BytesIO(data), mode='r:xz') as tar:
+		tar.extractall(genvm_root_dir, filter='data')
+
+	logger.info(f'Unpacked executor {executor_version} into {genvm_root_dir}')
+
+
 all_executor_versions = list(manifest.get('executor_versions', {}).keys())
 all_executor_versions.sort()
 
@@ -398,6 +542,23 @@ def process_executor_version(executor_version: str):
 
 	executor_root_dir = genvm_root_dir.joinpath('executor', executor_version)
 	executor_executable = executor_root_dir.joinpath('bin', 'genvm')
+
+	# The manager bundle no longer ships the executors, so fetch what is missing
+	# before anything below expects it on disk. A failure here is only fatal if a
+	# missing executor is (--error-on-missing-executor).
+	if args.executor_download and not executor_executable.exists():
+		logger.info(f'Executor {executor_version} is not installed, downloading it')
+		try:
+			download_executor(executor_version)
+		except Exception as e:
+			if args.error_on_missing_executor:
+				raise
+			logger.warning(f'Could not download executor {executor_version}: {e}')
+
+	# Refuse a wrong-OS executor before anything trusts it, regardless of which
+	# steps run (a missing file is a no-op here; missing-file policy is handled
+	# per-step below). Mirrors the unconditional modules_executable check.
+	check_executable_platform(executor_executable)
 
 	if patch_interpreter or args.bin_check:
 		if not executor_executable.exists():

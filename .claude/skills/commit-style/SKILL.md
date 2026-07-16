@@ -136,7 +136,7 @@ the diff and not a bullet list of squashed sub-commits.
 A change that touches an executor submodule spans repos: commit inside the
 submodule first, then bump the manager's gitlink (`git add executors/<line>.x`)
 in a manager commit. Keep each commit's files coherent and don't let a
-submodule's linter reformat leak an unrelated file into a commit. The cross-repo
-pre-commit hook (`genvm-tool hook run`) fans out to all repos; use `--no-verify`
-for pure gitlink bumps. Full workflow (order, pushing, `--force-with-lease` after
-a rebase): `/submodules`.
+submodule's linter reformat leak an unrelated file into a commit. Each repo's
+per-repo pre-commit hook (git-hooks.nix, in its flake) runs on the repo you
+commit in. Do not `--no-verify` (even for gitlink bumps — let the hooks run).
+Full workflow (order, pushing, `--force-with-lease` after a rebase): `/submodules`.

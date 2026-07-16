@@ -1021,6 +1021,7 @@ dependencies = [
  "dashmap",
  "genlayer_calldata",
  "genlayer_sdk",
+ "genvm_modules_interfaces",
  "hex",
  "libc",
  "num-bigint",
@@ -1055,7 +1056,7 @@ dependencies = [
  "futures-util",
  "genlayer_calldata",
  "genvm-common",
- "genvm-modules-interfaces",
+ "genvm_modules_interfaces",
  "hex",
  "hickory-resolver",
  "hyper 0.14.32",
@@ -1090,7 +1091,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "genvm-modules-interfaces"
+name = "genvm_modules_interfaces"
 version = "0.1.0"
 dependencies = [
  "anyhow",

@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import re
 import sys
 import typing
 import urllib.parse
@@ -268,6 +269,25 @@ def run_merge(args):
 	print(json.dumps(all_regs_list, sort_keys=True))
 
 
+EXECUTOR_LINE_TARGET_RE = re.compile(r'^executor-v\d+\.\d+-(?P<platform>.+)$')
+
+
+def _expand_targets(targets: set[str]) -> set[str]:
+	"""Add the per-platform alias of every per-line executor target.
+
+	Every executor line builds against the same dependency set, so the registry
+	keys them by platform (`executor-amd64-linux`), while the build targets name
+	a line too (`executor-v0.3-amd64-linux`). Without this, a per-line target
+	matches no dependency and the prefetch is a silent no-op.
+	"""
+	expanded = set(targets)
+	for target in targets:
+		match = EXECUTOR_LINE_TARGET_RE.match(target)
+		if match:
+			expanded.add(f'executor-{match.group("platform")}')
+	return expanded
+
+
 def _iter_needed_deps(targets: set[str] | None, all_deps: bool):
 	deps_file = (
 		Path(__file__).resolve().parent.parent / 'libs' / 'deps' / 'dependency-urls.json'
@@ -275,6 +295,9 @@ def _iter_needed_deps(targets: set[str] | None, all_deps: bool):
 
 	with open(deps_file, 'r') as f:
 		deps = json.load(f)
+
+	if targets is not None:
+		targets = _expand_targets(targets)
 
 	for dep in deps:
 		if not all_deps and not dep.get('must_preload', False):

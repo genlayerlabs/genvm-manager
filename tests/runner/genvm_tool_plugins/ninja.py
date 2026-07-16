@@ -214,7 +214,14 @@ class Ninja:
 		return str(value)
 
 	def _scalar(self, value) -> None:
-		if isinstance(value, RawStr):
+		if isinstance(value, Build):
+			# A Build used as an output/dependency reference means "this edge's
+			# output" — depend on its primary output (which for a multi-output edge
+			# is enough to force the whole edge; aggregator phony edges have one).
+			# Without this a Build passed to add_dependency would leak its repr.
+			assert value.outputs, 'cannot reference a Build that has no output'
+			self._scalar(value.outputs[0])
+		elif isinstance(value, RawStr):
 			self.buf.append(str(value))
 		elif isinstance(value, Path):
 			self.buf.append(_escape(self._resolve_path(value)))

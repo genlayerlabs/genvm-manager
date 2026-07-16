@@ -5,10 +5,6 @@ inputs:
     description: if should setup nix
     required: false
     default: "false"
-  load_submodules:
-    description: if should update submodules
-    required: false
-    default: "true"
   third_party:
     description: third-party modules to install
     required: false
@@ -16,6 +12,13 @@ inputs:
   github_token:
     description: GitHub token for nix setup
     required: false
+outputs:
+  changes:
+    description: >-
+      JSON object mapping each repo (`.` for the manager, submodule path for
+      each executor) to {base_commit, branch_commit, has_changes}. Outside a
+      pull request base_commit == branch_commit and has_changes is false.
+    value: ${{ steps.changes.outputs.changes }}
 runs:
   using: composite
   steps:
@@ -24,26 +27,16 @@ runs:
         cd "$GITHUB_WORKSPACE"
         git config --global user.email "ci@genlayerlabs.com"
         git config --global user.name "CI worker"
-        if [ "${{ inputs.load_submodules }}" == "true" ]
-        then
-          git submodule update --init --recursive --depth 1
-          if [ "${{ inputs.third_party }}" != "none" ]
-          then
-            source env.sh
-            # Vendored third-party trees are registered per executor submodule:
-            # `.git-third-party/config.json` lives inside each executor, which is
-            # its own git repo. `git third-party` resolves its config from the
-            # current git toplevel, so it must run *inside* each executor —
-            # running it once at the manager root finds no config and
-            # materializes nothing (which then breaks the cargo build).
-            for cfg in executors/*/.git-third-party/config.json
-            do
-              [ -e "$cfg" ] || continue
-              ( cd "$(dirname "$(dirname "$cfg")")" && git third-party update ${{ inputs.third_party }} )
-            done
-          fi
-        fi
+        python3 support/scripts/get-all-git.py "--third-party=${{ inputs.third_party }}"
       shell: bash -ex {0}
+    - name: compute per-repo changes
+      id: changes
+      shell: bash
+      env:
+        GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        python3 support/scripts/ci-changes.py --github-output
     - name: setup nix
       if: ${{ inputs.with_nix == 'true' }}
       uses: cachix/install-nix-action@v31.6.2
@@ -52,5 +45,9 @@ runs:
           experimental-features = nix-command flakes recursive-nix
           substituters = https://cache.nixos.org/ https://nix-community.cachix.org https://cache.nix.kp2pml30.moe
           trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= cache.nix.kp2pml30.moe:9izVvysdKza7+bjw2gI/etkDVfEQy+kne2aU/TZpA5o=
+          download-attempts = 10
+          connect-timeout = 15
+          stalled-download-timeout = 60
+          fallback = true
         github_access_token: ${{ inputs.github_token }}
         install_url: https://releases.nixos.org/nix/nix-2.24.14/install

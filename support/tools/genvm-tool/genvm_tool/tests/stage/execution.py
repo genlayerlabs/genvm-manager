@@ -380,10 +380,17 @@ async def _run_case_locked(ctx: _ExecutionContext, case: genvm_tool.tests.test.C
 		# Mirror the full result (with context) into the per-test log file
 		if file_fmt is not None:
 			sign = 'PASS' if success else 'FAIL'
+			retract_without_ci_flag = [] if ctx.shared.ci else ['raw_result']
+			retracted = {}
+			for k in retract_without_ci_flag:
+				if k in context:
+					retracted[k] = context.pop(k)
 			file_fmt.put(
 				f'{sign} {case.description.name} in {elapsed:.3f}s',
 				**context,
 			)
+			for k, v in retracted.items():
+				context[k] = v
 		if log_file is not None:
 			log_file.close()
 

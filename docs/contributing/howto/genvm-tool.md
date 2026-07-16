@@ -12,7 +12,6 @@ outside it, call `support/tools/genvm-tool/genvm-tool`).
 | `codegen` | generate language bindings from data JSON (below) |
 | `build-manifest` | generate the manager's `data/manifest.yaml` |
 | `git ls` / `list-repo` / `create-branches` / `check-for-push` | git helpers across manager + submodules — [submodules.md](committing/submodules.md) |
-| `hook run` / `hook install` | cross-repo pre-commit fan-out / stub installer — [submodules.md](committing/submodules.md) |
 
 Command registration: `genvm_tool/__main__.py` (`TOPLEVEL`, `GROUPS`); each
 command module has `NAME`/`HELP` — look there for details.

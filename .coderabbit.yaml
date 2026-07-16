@@ -1,9 +1,12 @@
 reviews:
-  # Review PRs targeting the long-lived version branches (e.g. v0.6, v0.6-dev)
-  # and main; feature/topic branches are reviewed via their target base.
+  # Auto-review PRs targeting any long-lived branch: main, a release branch
+  # (v0.6) or its dev branch (v0.6-dev). Feature/topic branches are reviewed
+  # through the base they target. Patterns are regexes; keep them free of
+  # optional groups, an `(-dev)?` suffix here did not match `v0.6-dev`.
   base_branches:
     - "main"
-    - "v\\d+\\.\\d+(-dev)?"
+    - "v\\d+\\.\\d+"
+    - "v\\d+\\.\\d+-dev"
   path_filters:
     - "!**/*.onnx"
     - "!**/*.txt"

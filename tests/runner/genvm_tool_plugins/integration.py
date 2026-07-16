@@ -163,6 +163,15 @@ def _short_failure_context(
 	return short
 
 
+def _emit_ci_error_annotation(jsonnet_path: Path, reason: str) -> None:
+	"""Write a GitHub Actions error annotation directly to stdout."""
+	# GitHub Actions command parsing uses percent-encoded newlines and carriage
+	# returns inside the annotation body.
+	reason = reason.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+	sys.stdout.write(f'::error file={jsonnet_path}::Test failed {reason}\n')
+	sys.stdout.flush()
+
+
 def _make_log_adapter(formatter: genvm_tool.tests.Formatter) -> 'origin_logger.Logger':
 	class _FormatterLoggerAdapter(origin_logger.Logger):
 		"""Adapts genvm_tool.formatter.Formatter to base_host.Logger interface."""
@@ -365,6 +374,11 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 					tmp_dir,
 					ci=self._case.ci,
 				)
+				if self._case.ci:
+					_emit_ci_error_annotation(
+						self._case.jsonnet_path,
+						str(context.get('reason', 'prepare script failed')),
+					)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
@@ -471,6 +485,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		self, previous_results: list[typing.Any]
 	) -> genvm_tool.tests.test.Result:
 		empty_storage = self._tmp_dir.joinpath('empty-storage.pickle')
+		jsonnet_path = self._test_case.jsonnet_path
 
 		for attempt in range(self._max_attempts):
 			sub_logger = _make_log_adapter(local_ctx.shared.logger)
@@ -491,6 +506,11 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					self._tmp_dir.joinpath(self._tree_path),
 					ci=self._ci,
 				)
+				if self._ci:
+					_emit_ci_error_annotation(
+						jsonnet_path,
+						str(context.get('reason', 'unknown error')),
+					)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
@@ -765,6 +785,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					'passed': False,
 					'context': {
 						'exception': e,
+						'reason': f'{e.__class__.__name__}: {e}',
 						'tree_path': tree_path,
 					},
 				}

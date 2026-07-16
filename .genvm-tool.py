@@ -3,9 +3,6 @@
 Loaded once by genvm-tool (``common.load_project``) before any subcommand runs;
 subcommands ask it for what they need:
 
-- ``hooks(ctx)`` — the manager's commit-hook definitions (was
-	``support/nix/precommit/hooks.toml``), returned in the same shape the hook
-	engine already understands.
 - ``tests(ctx)`` — the umbrella test suite (was the top-level ``.ya-test.py``):
 	imports the plugins it needs and registers collectors + CLI args on the
 	runner's configuration ``Context``. This is the plugins' "initial run" hook;
@@ -17,188 +14,9 @@ subcommands ask it for what they need:
 	applies before calling us.
 
 General runner config (``artifacts_dir`` / ``extra_python_paths``) lives in
-``.genvm-monorepo-root``. Each executor carries its own ``.genvm-tool.py`` with
-its own ``hooks``.
+``.genvm-monorepo-root``. Each executor carries its own ``.genvm-tool.py``.
+Commit hooks live in each repo's flake (git-hooks.nix), not here.
 """
-
-import genvm_tool
-
-
-def hooks(ctx: 'genvm_tool.common.Context'):
-	"""Manager commit-hook definitions (was support/nix/precommit/hooks.toml).
-
-	Tools resolve from the sibling flake's buildEnv (``nix = "<flake output>"``);
-	``local`` hooks run a repo-owned script and ``builtin`` hooks run logic baked
-	into genvm-tool. A hook's ``args`` are its check-mode invocation; an optional
-	``fix_args`` is the rewrite-in-place invocation used when ``hook run`` fixes
-	(the default — CI passes ``--check``). ``files``/``exclude`` are repo-relative
-	regexes.
-	"""
-	return [
-		# --- generic checks (mirror the executor's) ------------------------
-		{
-			'id': 'trailing-whitespace',
-			'nix': 'pre-commit-hooks',
-			'entry': 'trailing-whitespace-fixer',
-			'types_or': ['text'],
-			'exclude': r'^\.git-third-party|/fuzz/',
-		},
-		{
-			'id': 'end-of-file-fixer',
-			'nix': 'pre-commit-hooks',
-			'entry': 'end-of-file-fixer',
-			'types_or': ['text'],
-			'exclude': r'^\.git-third-party|/fuzz/',
-		},
-		{
-			'id': 'check-added-large-files',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-added-large-files',
-		},
-		{
-			'id': 'check-json',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-json',
-			'types_or': ['json'],
-			'exclude': r'(^\.git-third-party)|(/tsconfig\.json$)',
-		},
-		{
-			'id': 'check-yaml',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-yaml',
-			'types_or': ['yaml'],
-		},
-		{
-			'id': 'check-toml',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-toml',
-			'types_or': ['toml'],
-		},
-		{
-			'id': 'toml-format',
-			'nix': 'taplo',
-			'entry': 'taplo',
-			'args': ['format', '--check'],
-			'fix_args': ['format'],
-			'types_or': ['toml'],
-			'pass_filenames': True,
-		},
-		{
-			'id': 'check-merge-conflict',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-merge-conflict',
-			'types_or': ['text'],
-		},
-		{
-			# Matches both the hidden vendored `.git-third-party` trees and the
-			# `support/tools/git-third-party` tool dir (vendored LICENSE etc.).
-			'id': 'editorconfig-checker',
-			'nix': 'editorconfig-checker',
-			'entry': 'editorconfig-checker',
-			# text-only: the engine's `text` pseudo-type filters out binaries
-			# (e.g. model/onnx blobs) that editorconfig-checker should not see.
-			'types_or': ['text'],
-			'exclude': r'git-third-party|/fuzz/',
-		},
-		# --- python / lua / ts (manager-owned languages) -------------------
-		{
-			'id': 'ruff-format',
-			'nix': 'ruff',
-			'entry': 'ruff',
-			'args': ['format', '--check'],
-			'fix_args': ['format'],
-			'types_or': ['python'],
-		},
-		{
-			'id': 'ruff-check',
-			'nix': 'ruff',
-			'entry': 'ruff',
-			'args': ['check'],
-			'fix_args': ['check', '--fix'],
-			'types_or': ['python'],
-		},
-		{
-			'id': 'stylua',
-			'nix': 'stylua',
-			'entry': 'stylua',
-			'args': ['--check'],
-			'fix_args': [],
-			'files': r'\.lua$',
-		},
-		{
-			'id': 'prettier',
-			'nix': 'prettier',
-			'entry': 'prettier',
-			'args': ['--check'],
-			'fix_args': ['--write'],
-			'types_or': ['ts', 'tsx'],
-			'exclude': r'^\.git-third-party',
-		},
-		{
-			'id': 'nixfmt',
-			'nix': 'nixfmt',
-			'entry': 'nixfmt',
-			'args': ['--check'],
-			'fix_args': [],
-			'files': r'\.nix$',
-		},
-		# --- github workflow/action schemas -------------------------------
-		{
-			'id': 'check-github-workflows',
-			'nix': 'check-jsonschema',
-			'entry': 'check-jsonschema',
-			'args': ['--builtin-schema', 'vendor.github-workflows'],
-			'files': r'^\.github/workflows/.*\.ya?ml$',
-		},
-		{
-			'id': 'check-github-actions',
-			'nix': 'check-jsonschema',
-			'entry': 'check-jsonschema',
-			'args': ['--builtin-schema', 'vendor.github-actions'],
-			'files': r'^\.github/(actions/.+/)?action\.ya?ml$',
-		},
-		# --- local scripts -------------------------------------------------
-		{
-			'id': 'cargo-fmt',
-			'nix': 'cargo',
-			'builtin': 'cargo-fmt',
-			'files': r'\.rs$',
-			'pass_filenames': False,
-		},
-		{
-			# Keep the manager crate's [package] version in lockstep with
-			# .genvm-monorepo-root. The executor submodule is versioned
-			# independently (its own repo/hooks own that); we never touch it.
-			'id': 'check-cargo-versions',
-			'local': True,
-			'entry': ctx.python_command[0],
-			'args': [
-				*ctx.python_command[1:],
-				str(ctx.root / 'support/ci/check-versions.py'),
-				'sync',
-			],
-			'pass_filenames': False,
-			'files': r'^(implementation/Cargo\.toml|\.genvm-monorepo-root)$',
-		},
-		{
-			'id': 'markdown-local-links',
-			'builtin': 'md-local-links',
-			'types_or': ['markdown'],
-		},
-		# --- commit-msg ----------------------------------------------------
-		{
-			'id': 'check-commit-message',
-			'local': True,
-			'entry': ctx.python_command[0],
-			'args': [
-				*ctx.python_command[1:],
-				str(ctx.root / 'support/scripts/check-commit-message.py'),
-				'--message-file',
-			],
-			'stages': ['commit-msg'],
-			'pass_filenames': False,
-		},
-	]
 
 
 def tests(ctx):
@@ -211,6 +29,7 @@ def tests(ctx):
 	import sys
 	from pathlib import Path
 
+	import genvm_tool.cmd_configure
 	import genvm_tool.tests
 
 	_info_path = ctx.shared.root_dir / 'build' / 'info.json'
@@ -224,6 +43,11 @@ def tests(ctx):
 					'coverage_dir': str(_build_dir / 'cov'),
 					'build_dir': str(_build_dir),
 					'rust_target_dir': str(_build_dir / 'ya-build' / 'rust-target'),
+					# executor_versions / primary_executor_version: resolved from
+					# source (.genvm-monorepo-root + committed manifests), so a
+					# build-less test run still knows which out/executor/<real> dir
+					# to reroute to. configure emits the same keys.
+					**genvm_tool.cmd_configure.build_independent_info(ctx.shared.root_dir),
 				},
 				indent=2,
 			)
@@ -290,7 +114,9 @@ def tests(ctx):
 		pytest.pytest(
 			ctx,
 			genvm_tool.tests.test.Description(
-				'runners/genlayer-py-std/test',
+				str(p.relative_to(ctx.shared.root_dir)),
+				console_pool=True,
+				tags=frozenset({'unit'}),
 			),
 			project_root_dir=p,
 		)
@@ -349,11 +175,12 @@ def tests(ctx):
 		# per-request only under debug_mode >= safe (tests run with unsafe).
 		reroute_to = (
 			getattr(ctx.configuration.args, 'genvm_reroute_to', '')
-			or build_info['primary_executor_version']
+			or build_info.get('primary_executor_version')
+			or ctx.shared.config['active-versions'][0]
 		)
 		no_manager = getattr(ctx.configuration.args, 'no_manager', False)
 		no_webdriver = getattr(ctx.configuration.args, 'no_webdriver', False)
-		ci = getattr(ctx.configuration.args, 'ci', False)
+		ci = ctx.shared.ci
 
 		manager_port = genvm.get_manager_port(ctx.configuration)
 

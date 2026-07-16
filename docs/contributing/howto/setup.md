@@ -1,10 +1,16 @@
 # First-time setup
 
-1. Init the executor submodules **before** entering the dev shell (the nix flake reads them):
+1. Get the executor submodules and vendored third-party trees **before** entering
+   the dev shell (the nix flake reads them):
 
    ```bash
-   git submodule update --init --recursive --depth 1
+   python3 support/scripts/get-all-git.py
    ```
+
+   The default options are sufficient for normal setup: the command resolves
+   duplicate submodule remotes, fetches each unique remote once into a local
+   cache, initializes submodules from that cache, and materializes all
+   third-party trees.
 
 2. Enter the dev shell:
 
@@ -17,19 +23,9 @@
    direnv (`.envrc` is `use flake '.?submodules=1#full'`).
 
 3. `source env.sh` — adds `support/tools/git-third-party` to PATH and sources
-   `.env` if present. Only needed outside the dev shell.
+   `.env` if present. Only needed outside the dev shell for manual
+   `git third-party` use.
 
-4. Materialize the vendored third-party trees (wasmtime, wasm-tools). These are
-   registered per executor submodule, and `git third-party` reads its config
-   from the current git toplevel — so run it *inside each executor*, not at the
-   manager root (which has no config and would materialize nothing):
-
-   ```bash
-   for cfg in executors/*/.git-third-party/config.json; do
-     ( cd "$(dirname "$(dirname "$cfg")")" && git third-party update --all )
-   done
-   ```
-
-   See [git-third-party.md](committing/git-third-party.md) for how vendoring works.
+See [git-third-party.md](committing/git-third-party.md) for how vendoring works.
 
 Next: [build.md](building/build.md).

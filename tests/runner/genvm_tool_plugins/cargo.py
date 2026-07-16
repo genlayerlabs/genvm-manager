@@ -278,6 +278,7 @@ def cargo_test(
 	base_cmd = [
 		'cargo',
 		'test',
+		'--message-format=short',
 		'--color=always',
 		'--target-dir',
 		str(TARGET_DIR),

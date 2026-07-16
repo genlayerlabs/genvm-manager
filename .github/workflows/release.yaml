@@ -1,16 +1,21 @@
 name: GenVM release
 
-# Builds and publishes the release artifacts consumed by other projects
-# (node's download_genvm.sh and friends):
-#   genvm-<os>-<arch>.tar.xz           — manager bundle (bin/, lib/, config/, data/)
-#   genvm-<os>-<arch>-executor.tar.xz  — every active executor line (executor/<version>/...)
-#   genvm-runners-all.tar.xz           — shared runners under runners/ + legacy
-#                                        lines' runners at executor/<version>/legacy-runners
-# All three extract at the same install root.
+# incl_release_build_test.yaml plus a publisher: it plans, builds every artifact
+# and tests every platform; this workflow attaches what it produced to a
+# genvm-manager release tagged with `version` from .genvm-monorepo-root.
+# `queue.yaml` runs the same pipeline on a PR (label `test-release-pipeline`),
+# so everything below is the only release-only part.
 #
-# The release tag is the manager version from .genvm-monorepo-root (also baked
-# into the binaries as GENVM_PROFILE), so tagging is derived from the source
-# tree instead of bumping the previous git tag.
+#   genvm-<arch>-<os>.tar.xz  — manager + every active executor line for that
+#                               platform (bin/, lib/, config/, data/, executor/)
+#   genvm-universal.tar.xz    — shared runners under runners/ + legacy lines'
+#                               runners at executor/<version>/legacy-runners
+#
+# All four extract at the same install root: a full install is one platform
+# asset plus genvm-universal.
+#
+# Platforms are named the way nix names them (amd64-linux, arm64-linux,
+# arm64-macos) everywhere: flake attrs, cells and published assets.
 
 on:
   workflow_dispatch:
@@ -28,219 +33,38 @@ permissions:
   actions: read
   contents: read
 
-env:
-  GCS_BUCKET: "gh-af"
-
 jobs:
-  gen-tag:
+  # Publishing is the only thing that cares whether the tag is free, so the
+  # check lives here rather than in the shared pipeline (which a PR runs at the
+  # same tag on every push). Guards the build so a doomed release fails in
+  # seconds instead of after three platform builds.
+  check-tag:
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.determine-version.outputs.new_version }}
     steps:
       - uses: actions/checkout@v4
-
-      - name: Determine final version
-        id: determine-version
+      - name: Ensure tag is free
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
         run: |
           set -euo pipefail
-          if [ -n "${{ github.event.inputs.version_override }}" ]; then
-            tag="${{ github.event.inputs.version_override }}"
-            echo "Using override version: $tag"
-          else
-            tag=$(jq -r .version .genvm-monorepo-root)
-            echo "Using .genvm-monorepo-root version: $tag"
-          fi
-          echo "$tag" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+' || {
-            echo "::error::invalid version '$tag'"
-            exit 1
-          }
+          tag="${VERSION_OVERRIDE:-$(jq -r .version .genvm-monorepo-root)}"
           if git ls-remote --exit-code origin "refs/tags/$tag" > /dev/null; then
             echo "::error::tag $tag already exists on origin"
             exit 1
           fi
-          echo "new_version=$tag" >> $GITHUB_OUTPUT
+          echo "tag $tag is free"
 
-  build-runners-all:
-    needs: [gen-tag]
-    uses: ./.github/workflows/incl_build_trg.yaml
+  # Plan -> build every artifact -> test every platform. Its matrices are an
+  # implementation detail; all we consume are the four artifact names.
+  build-and-test:
+    needs: [check-tag]
+    uses: ./.github/workflows/incl_release_build_test.yaml
     with:
-      target: runners-all-dist
-      executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-
-  build-linux-amd64:
-    needs:
-      - gen-tag
-    uses: ./.github/workflows/incl_build_trg.yaml
-    with:
-      target: manager-amd64-linux
-      secondary_target: executor-amd64-linux
-      executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-
-  build-linux-arm64:
-    needs:
-      - gen-tag
-    uses: ./.github/workflows/incl_build_trg.yaml
-    with:
-      target: manager-arm64-linux
-      secondary_target: executor-arm64-linux
-      executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-
-  build-macos-arm64:
-    needs:
-      - gen-tag
-    uses: ./.github/workflows/incl_build_trg.yaml
-    with:
-      target: manager-arm64-macos
-      secondary_target: executor-arm64-macos
-      executor_version: ${{ needs.gen-tag.outputs.tag }}
-    secrets:
-      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-
-  test-linux-arm64:
-    needs:
-      - build-linux-arm64
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          # Even devShell evaluation reads the executor submodules' manifests.
-          load_submodules: "true"
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download artifact
-        run: |
-          set -euo pipefail
-          mkdir -p build/out
-          pushd build/out
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64.tar.xz ${{ needs.build-linux-arm64.outputs.artifact_url }}
-          tar -xf genvm-linux-arm64.tar.xz --no-same-owner
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64-executor.tar.xz ${{ needs.build-linux-arm64.outputs.secondary_artifact_url }}
-          tar -xf genvm-linux-arm64-executor.tar.xz --no-same-owner
-          popd
-      - name: Run post-install
-        run: |
-          ./build/out/bin/post-install.py \
-            --error-on-missing-executor=false \
-            --default-download=false || true
-          nix develop '.?submodules=1#check-qemu' --command bash -c 'qemu-aarch64 ./build/out/bin/genvm-modules --version'
-      - name: Smoke test modules startup
-        run: |
-          nix develop '.?submodules=1#check-qemu' --command bash -c '
-            timeout 5 qemu-aarch64 ./build/out/bin/genvm-modules llm --allow-empty-backends --config ./build/out/config/genvm-module-llm.yaml || test $? -eq 124
-          '
-
-  test-linux-amd64:
-    needs:
-      - build-linux-amd64
-      - build-runners-all
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          load_submodules: "true"
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Download artifact
-        run: |
-          set -euo pipefail
-          mkdir -p build/out
-          pushd build/out
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64.tar.xz ${{ needs.build-linux-amd64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-runners-all.tar.xz ${{ needs.build-runners-all.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64-executor.tar.xz ${{ needs.build-linux-amd64.outputs.secondary_artifact_url }}
-          tar -xf genvm-linux-amd64.tar.xz --no-same-owner
-          tar -xf genvm-runners-all.tar.xz --no-same-owner
-          tar -xf genvm-linux-amd64-executor.tar.xz --no-same-owner
-          popd
-      - name: Run post-install
-        run: |
-          ./build/out/bin/post-install.py \
-            --default-download=false
-      - name: Smoke test modules startup
-        run: |
-          timeout 5 ./build/out/bin/genvm-modules llm --allow-empty-backends --config ./build/out/config/genvm-module-llm.yaml || test $? -eq 124
-      - name: Run stable tests
-        run: |
-          # `configure` only writes build/info.json + the ninja files; the test
-          # runner itself never builds, so it exercises the downloaded
-          # artifacts in build/out. Rerouting each line to its concrete built
-          # version comes from build/info.json (no CLI flag anymore).
-          nix develop '.?submodules=1#mock-tests' --command bash -c '
-            set -euo pipefail
-            genvm-tool configure
-            genvm-tool test run --ci --filter-tag "$(cat tests/presets/release.txt)"
-          '
-
-  test-macos-arm64:
-    needs:
-      - build-macos-arm64
-      - build-runners-all
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          load_submodules: "true"
-          with_nix: "false"
-      - name: Download artifact
-        run: |
-          set -euo pipefail
-          mkdir -p build/out
-          pushd build/out
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64.tar.xz ${{ needs.build-macos-arm64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-runners-all.tar.xz ${{ needs.build-runners-all.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64-executor.tar.xz ${{ needs.build-macos-arm64.outputs.secondary_artifact_url }}
-          tar -xf genvm-macos-arm64.tar.xz --no-same-owner
-          tar -xf genvm-runners-all.tar.xz --no-same-owner
-          tar -xf genvm-macos-arm64-executor.tar.xz --no-same-owner
-          popd
-      - name: Get wabt
-        run: |
-          brew install wabt coreutils
-      - name: Setup Rust
-        run: |
-          rustup target add wasm32-wasip1
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      - name: Run post-install
-        run: |
-          ./build/out/bin/post-install.py \
-            --default-download=false
-      - name: Smoke test modules startup
-        run: |
-          gtimeout 5 ./build/out/bin/genvm-modules llm --allow-empty-backends --config ./build/out/config/genvm-module-llm.yaml || test $? -eq 124
-      - name: Run stable tests
-        run: |
-          set -euo pipefail
-          python3 -m venv .venv
-          source .venv/bin/activate
-          pip install ./support/tools/genvm-tool
-          genvm-tool configure
-          genvm-tool test run --ci --filter-tag "$(cat tests/presets/release.txt)"
+      version_override: ${{ inputs.version_override }}
+    secrets: inherit
 
   release-publish:
-    needs:
-      - gen-tag
-      - build-linux-amd64
-      - build-linux-arm64
-      - build-macos-arm64
-      - build-runners-all
-      - test-linux-amd64
-      - test-linux-arm64
-      - test-macos-arm64
+    needs: [build-and-test]
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Needed for creating releases
@@ -250,45 +74,60 @@ jobs:
           # Full history + tags: the release-notes step diffs against the
           # previous tag via `git describe`.
           fetch-depth: 0
-      - run: |
-          set -euo pipefail
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-runners-all.tar.xz ${{ needs.build-runners-all.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64.tar.xz ${{ needs.build-linux-amd64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64.tar.xz ${{ needs.build-linux-arm64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64.tar.xz ${{ needs.build-macos-arm64.outputs.artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-amd64-executor.tar.xz ${{ needs.build-linux-amd64.outputs.secondary_artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-linux-arm64-executor.tar.xz ${{ needs.build-linux-arm64.outputs.secondary_artifact_url }}
-          curl -L --fail-with-body -H 'Accept: application/octet-stream' -o genvm-macos-arm64-executor.tar.xz ${{ needs.build-macos-arm64.outputs.secondary_artifact_url }}
 
-      - run: |
-          git tag ${{ needs.gen-tag.outputs.tag }} && \
-          git push origin ${{ needs.gen-tag.outputs.tag }}
+      - name: Download release notes
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-and-test.outputs.artifact_notes }}
+          path: artifacts/notes
+      # Each artifact holds exactly one tarball, already named as the asset it
+      # is published as, so they all land in one dir and need no renaming.
+      - name: Download universal artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-and-test.outputs.artifact_universal }}
+          path: release-assets
+      - name: Download amd64-linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-and-test.outputs.artifact_amd64_linux }}
+          path: release-assets
+      - name: Download arm64-linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-and-test.outputs.artifact_arm64_linux }}
+          path: release-assets
+      - name: Download arm64-macos artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.build-and-test.outputs.artifact_arm64_macos }}
+          path: release-assets
 
-      - name: Generate release notes
-        id: release_notes
+      - name: Check release assets
         run: |
-          prev_tag=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
-          new_tag="${{ needs.gen-tag.outputs.tag }}"
-          if [ -n "$prev_tag" ]; then
-            python3 support/ci/make-relase-notes.py "${prev_tag}..${new_tag}" > release-notes.md
-          else
-            echo "Initial release" > release-notes.md
-          fi
+          set -euo pipefail
+          ls -l release-assets
+          for asset in genvm-universal genvm-amd64-linux genvm-arm64-linux genvm-arm64-macos; do
+            test -f "release-assets/$asset.tar.xz" || {
+              echo "::error::missing release asset $asset.tar.xz"
+              exit 1
+            }
+          done
+
+      - name: Tag the release
+        env:
+          TAG: ${{ needs.build-and-test.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag "$TAG"
+          git push origin "$TAG"
 
       - name: Create Release
-        id: create_release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            genvm-runners-all.tar.xz
-            genvm-linux-amd64.tar.xz
-            genvm-linux-arm64.tar.xz
-            genvm-macos-arm64.tar.xz
-            genvm-linux-amd64-executor.tar.xz
-            genvm-linux-arm64-executor.tar.xz
-            genvm-macos-arm64-executor.tar.xz
-          name: Release ${{ needs.gen-tag.outputs.tag }}
-          tag_name: ${{ needs.gen-tag.outputs.tag }}
-          body_path: release-notes.md
+          files: release-assets/*.tar.xz
+          name: Release ${{ needs.build-and-test.outputs.tag }}
+          tag_name: ${{ needs.build-and-test.outputs.tag }}
+          body_path: artifacts/notes/${{ needs.build-and-test.outputs.notes_file }}
           draft: false
-          prerelease: ${{ contains(needs.gen-tag.outputs.tag, '-') }}
+          prerelease: ${{ contains(needs.build-and-test.outputs.tag, '-') }}

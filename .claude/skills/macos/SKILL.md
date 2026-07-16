@@ -91,7 +91,7 @@ You usually do not need to build runners at all. Download them instead (works on
 any platform):
 
 ```bash
-nix develop '.?submodules=1#full' --command python3 build/out/bin/post-install.py \
+nix develop '.?submodules=1#full' --command python3 build/out/bin/genvm-post-install \
   --create-venv false --default-step false \
   --runners-download true --error-on-missing-executor false
 ```

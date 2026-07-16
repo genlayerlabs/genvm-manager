@@ -15,13 +15,33 @@ jobs:
         with:
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
-      # genvm-tool runs every repo's hooks with tools from each repo's pinned
-      # support/nix/precommit flake (rustfmt included), so no separate toolchain
-      # setup is needed.
-      # --check: CI verifies formatting and fails on drift instead of fixing
-      # in place (fixing is the default for local/git-hook runs).
+      # Each repo (manager + every executor submodule) supplies its own
+      # pre-commit binary + generated config from its flake (git-hooks.nix),
+      # with tools pinned per repo — so no separate toolchain setup is needed.
+      # The formatters fix in place and the run fails if anything changed, so
+      # unformatted code turns the build red (the diff is shown on failure).
       - name: Run hooks
-        run: nix develop '.?submodules=1#initial-check' --command genvm-tool hook run --all-files --check
+        run: ./support/ci/run.sh pipeline commit-hooks
+
+  # `check-commit-message` is a commit-msg-stage hook, so the pre-commit run
+  # above never fires it. Check every commit the PR adds, in the manager and in
+  # each executor submodule that moved.
+  commit-messages:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Get source
+        id: src
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "false"
+      - name: Check commit messages
+        env:
+          CHANGES: ${{ steps.src.outputs.changes }}
+        run: ./support/ci/run.sh pipeline commit-messages
 
   # The Merge action only fast-forwards, so the PR head must already
   # contain the base tip (0 commits behind). We assert it here too (as part

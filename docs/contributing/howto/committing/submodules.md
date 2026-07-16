@@ -37,24 +37,32 @@ git -C executors/v0.3.x rev-parse HEAD               # must match
 To reshape unpushed history: `git reset --mixed <base>`, re-stage per commit,
 re-bump the gitlink to the new submodule HEAD.
 
-## Pre-commit hook (cross-repo)
+## Pre-commit hook (per repo)
 
-`git commit` triggers `genvm-tool hook run`, which fans linters/formatters out
-to the manager **and** submodules.
+Each repo — the manager and every executor submodule — carries its own
+[git-hooks.nix](https://github.com/cachix/git-hooks.nix) config in its
+`flake.nix`, pinned to that repo's own toolchain. Entering the dev shell
+(`.envrc` → `nix develop .#full` for the manager; `nix develop` for a
+standalone executor checkout) installs the `pre-commit` / `commit-msg` stubs
+into that repo's `.git/hooks`, so `git commit` runs the hooks for the repo you
+are committing in.
 
-- Everything at once: `genvm-tool hook run --all-files` (default `--fix`
-  rewrites; `--check` only verifies — what CI uses).
-- `git commit --no-verify` skips the hook — fine for pure gitlink bumps or
-  already-formatted content.
-- After changing genvm-tool itself: `genvm-tool hook install` rebuilds the tool
-  and rewrites the hook stubs. A hook crash referencing an old
-  `/nix/store/...genvm-tool` means a stale dev-shell `PYTHONPATH` — refresh the
-  dev env or re-run `hook install` with `PYTHONPATH` unset.
+- Run everything by hand: `nix develop -c pre-commit run --all-files` in the
+  repo (or `bash support/ci/pipelines/commit-hooks.sh` from the manager root to
+  check the manager + every executor at once, as CI does).
+- Do not `git commit --no-verify` — let the hooks run, even for a pure gitlink
+  bump (they are cheap when nothing needs formatting).
+- The executor crates reach the manager's shared `crates/` via relative paths,
+  so executor hooks must run against the **nested working tree** (submodule
+  checked out under the manager), not an isolated flake sandbox — this is why
+  CI uses `commit-hooks.sh` (in-tree) instead of `nix flake check`.
 
 ## Pushing
 
 Check first: `genvm-tool git check-for-push` (`--offline` compares against the
-last fetch). Push **submodules before the manager** so gitlinks resolve:
+last fetch). After the repo rows it prints one aggregated
+`suggested_push_command` block; when anything is not ready, that block is
+`none`. Push **submodules before the manager** so gitlinks resolve:
 
 ```bash
 git -C executors/v0.2.x push origin pr/v0.2/feat/<name>

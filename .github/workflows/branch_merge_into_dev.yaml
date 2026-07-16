@@ -14,25 +14,29 @@ name: branch / merge PR into dev
 #   4. the cross-repo E2E check concluded success on the head commit
 #   5. the PR is 0 commits behind base (head already contains base tip)
 #
-# Merge strategy:
-#   - 1 commit            -> fast-forward the original commit (SHA preserved)
-#   - more than 1 commit  -> squash into a single commit on top of base,
-#                            then fast-forward
-# Either way the PR is closed afterwards.
+# Merge strategy: one commit per merged PR in every repo. A manager PR that is
+#   a single commit and rewrites no gitlink is fast-forwarded as-is (SHA
+#   preserved); otherwise its commits are squashed onto base. Each executor line
+#   is squashed onto its own <line>-dev, which gives it a NEW commit, so the
+#   manager commit is rewritten to gitlink that squashed commit. The PR is closed
+#   afterwards.
 #
-# Executor mirror: the landed manager commit gitlinks into the executor
-# submodule; the script fast-forwards the executor's SAME-NAMED branch to
-# that gitlink commit. It fast-forward-checks both repos up front, then
-# pushes the executor first (the dependency) and the manager second.
+# Executor mirror: the landed manager commit gitlinks into each active executor
+# line; the script squashes each line onto its SAME-NAMED <line>-dev branch. It
+# plans and fast-forward-checks every side up front, then pushes the executors
+# first (the dependencies) and the manager second.
 #
 # The dev branches are protected; the default GITHUB_TOKEN cannot push to
 # them. We push over SSH with the GENVM_CI_PRIVATE_KEY deploy key (on the
 # dev-branch ruleset bypass list), and to the executor repo with a separate
 # GENVM_EXECUTOR_CI_PRIVATE_KEY deploy key (on the executor's bypass list).
 # Pushes are non-force, so a base that advanced between the checks and the
-# push is safely rejected. This job never runs PR code — only git plumbing
-# and API reads. The caller is responsible for restricting who can trigger a
-# merge (maintainers only).
+# push is safely rejected. The merge scripts are checked out from the PR head,
+# so a PR that changes support/ci/ merges with its own version — which means
+# this job runs PR-authored code WITH the deploy keys in scope. It is gated on
+# the `ci-safe` label: a guard step verifies it (via the plain GITHUB_TOKEN,
+# before any PR code is fetched or run) and fails otherwise. The caller must
+# still restrict who can trigger a merge (maintainers only).
 
 on:
   workflow_call:
@@ -62,12 +66,27 @@ jobs:
   merge:
     runs-on: ubuntu-latest
     steps:
-      # Checkout with the manager deploy key so the (protected) dev branch
-      # push succeeds. Submodules are initialised in the next step with a
-      # SEPARATE executor key — the manager key cannot read/write the
-      # executor repo. The script never runs PR code.
+      # Gate: this job checks out and runs the PR's own CI scripts while the
+      # deploy keys are in scope, so refuse unless the PR is `ci-safe`. Uses the
+      # plain GITHUB_TOKEN and runs BEFORE any PR code is fetched.
+      - name: Require ci-safe label
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+        run: |
+          if ! gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" \
+              --jq '.[].name' | grep -qxF 'ci-safe'; then
+            echo "::error::PR #$PR_NUMBER lacks the 'ci-safe' label; refusing to merge (this job runs PR code)."
+            exit 1
+          fi
+
+      # Check out the PR head (so the merge runs the PR's own scripts) with the
+      # manager deploy key so the (protected) dev branch push succeeds.
+      # Submodules are initialised in the next step with a SEPARATE executor key
+      # — the manager key cannot read/write the executor repo.
       - uses: actions/checkout@v4
         with:
+          ref: refs/pull/${{ inputs.pr_number }}/head
           ssh-key: ${{ secrets.GENVM_CI_PRIVATE_KEY }}
           fetch-depth: 0
           submodules: false
@@ -90,7 +109,7 @@ jobs:
           # all, binding the executor key per-submodule (core.sshCommand) so the
           # later mirror pushes use it while the manager push keeps the checkout
           # credentials.
-          for v in $(python3 support/ci/branch-versions.py list); do
+          for v in $(./support/ci/run.sh tool branch-versions list); do
             sub="executors/v${v}.x"
             git -c core.sshCommand="$ssh" submodule update --init "$sub"
             git -C "$sub" config core.sshCommand "$ssh"
@@ -100,4 +119,4 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
-        run: python3 support/ci/genvm-merge-into-dev.py
+        run: ./support/ci/run.sh tool genvm-merge-into-dev

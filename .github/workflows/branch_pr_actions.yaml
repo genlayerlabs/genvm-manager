@@ -6,6 +6,12 @@ name: branch / PR action panel handler
 # tests), unticks the boxes, and reports whether Merge was requested. If so
 # the `merge` job calls the reusable merge workflow.
 #
+# The handler runs the CI scripts checked out from the PR head branch, not
+# from the default branch, so a PR that changes support/ci/ exercises its own
+# version. That means this workflow DOES run PR-authored code, so it is gated
+# on the `ci-safe` label (added only for vetted / write-access PRs) — the
+# `dispatch` job does not even start without it.
+#
 # Resetting the panel re-fires issue_comment:edited, but that re-run finds
 # no ticked box (and is sent by the bot), so it is a no-op — no loop.
 
@@ -30,17 +36,22 @@ defaults:
 
 jobs:
   dispatch:
-    # Only the panel comment, only on a PR.
+    # Only the panel comment, only on a PR, only when the PR is `ci-safe`
+    # (we check out and run its scripts, so an unvetted PR must not reach here).
     if: >
       github.event.issue.pull_request &&
-      contains(github.event.comment.body, '<!-- genvm-actions -->')
+      contains(github.event.comment.body, '<!-- genvm-actions -->') &&
+      contains(github.event.issue.labels.*.name, 'ci-safe')
     runs-on: ubuntu-latest
     outputs:
       merge: ${{ steps.act.outputs.merge }}
     steps:
-      # Checkout of the default branch only — to run the handler script. No
-      # PR code is executed.
+      # Check out the PR head so the handler runs the PR's own CI scripts.
+      # This runs PR-authored code — the `ci-safe` gate on the job above is
+      # what makes that safe.
       - uses: actions/checkout@v4
+        with:
+          ref: refs/pull/${{ github.event.issue.number }}/head
       - name: Handle ticked boxes
         id: act
         env:
@@ -48,7 +59,7 @@ jobs:
           PR_NUMBER: ${{ github.event.issue.number }}
           COMMENT_ID: ${{ github.event.comment.id }}
           SENDER: ${{ github.event.sender.login }}
-        run: python3 support/ci/pr-action-panel.py
+        run: ./support/ci/run.sh tool pr-action-panel
 
   merge:
     needs: dispatch

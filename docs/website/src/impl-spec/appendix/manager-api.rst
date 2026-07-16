@@ -3,8 +3,9 @@ Manager API
 
 The GenVM Manager is an HTTP server that provides an API for managing GenVM instances, modules, and related operations.
 
-Two endpoints below are tightly coupled with the runner manifest published as
-:doc:`available-runners` (generated from ``runners-versions.json``):
+Two endpoints below are tightly coupled with the runner manifest (the per-line
+available-runners listing, generated from ``runners-versions.json``, published on
+each executor line's docs sub-site):
 
 - ``POST /contract/detect-version`` returns the public-ABI ``specified_major`` that the
   node MUST persist into the contract's root-slot ``major`` field (see
