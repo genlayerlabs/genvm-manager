@@ -8,6 +8,7 @@ import sys
 import unicodedata
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 
 
 def strip_trailing_emoji(text: str) -> str:
@@ -58,7 +59,7 @@ class CommitEntry:
 	email: str
 
 
-def parse_git_log(rev_range: str) -> list[CommitEntry]:
+def parse_git_log(rev_range: str, *, dir: Path | None = None) -> list[CommitEntry]:
 	"""Run git log and return parsed commit entries.
 
 	Body lines that look like ``* type: description`` are promoted to top-level
@@ -67,11 +68,14 @@ def parse_git_log(rev_range: str) -> list[CommitEntry]:
 	squash/PR umbrella title and dropped — the bullets already carry the real
 	changes, so keeping the subject would double-count them.
 	"""
+	if dir is None:
+		dir = Path('.')
 	result = subprocess.run(
 		['git', 'log', '--pretty=format:%ae%x01%B%x00', rev_range],
 		capture_output=True,
 		text=True,
 		check=True,
+		cwd=dir,
 	)
 	entries: list[CommitEntry] = []
 	for raw_commit in result.stdout.split('\0'):
@@ -159,7 +163,14 @@ def main() -> None:
 		sys.exit(1)
 
 	categories = categorize(entries)
-	print(format_notes(categories, args.rev_range))
+
+	all_notes = []
+
+	all_notes.append('# GenVM Manager Release Notes\n')
+
+	all_notes.append(format_notes(categories, args.rev_range))
+
+	print(''.join(all_notes))
 
 
 if __name__ == '__main__':

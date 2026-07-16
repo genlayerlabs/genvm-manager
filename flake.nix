@@ -395,15 +395,28 @@
 
           # The manager is a single binary tagged with its own `version`
           # (independent of the executor lines it ships against).
-          manager-packages = import ./implementation (
-            manager-release-args
-            // {
-              inherit compiled-libs genvm-tool;
-              build-config = {
-                executor-version = manager-version;
-              };
-            }
-          );
+          manager-packages =
+            pkgs.lib.mapAttrs
+              (
+                _: package:
+                package.overrideAttrs (_: {
+                  # These are portable release trees, not Nix-only executables.
+                  # Keep install/bin/genvm-manager's `#!/bin/sh` instead of
+                  # rewriting it to a host Nix store path during fixup.
+                  dontPatchShebangs = true;
+                })
+              )
+              (
+                import ./implementation (
+                  manager-release-args
+                  // {
+                    inherit compiled-libs genvm-tool;
+                    build-config = {
+                      executor-version = manager-version;
+                    };
+                  }
+                )
+              );
 
           # ---- Runners ---------------------------------------------
           # The executor lines only export their own current runner
@@ -430,17 +443,27 @@
 
           universal-of = import ./runners/views/universal.nix runners-args;
 
-          # `cp -rsf src/. $out/` lays out a shadow tree: real directories, but
-          # every leaf is a symlink to the source file. It merges the top-level
-          # trees WITHOUT copying — each output is just symlinks into the store,
-          # and the referenced store paths stay as runtime deps (gc-roots). `-f`
-          # keeps the old last-one-wins overwrite semantics on any path that
-          # appears in more than one source (unlike lndir/symlinkJoin, which
-          # would error). Real files are materialised only later, at the upload
-          # tar (build.sh runs `tar --dereference`).
+          # `cp -rsf src/. $out/` lays out a shadow tree: real directories and
+          # store-backed symlinks for regular files. Existing relative file
+          # symlinks are then restored verbatim so links such as
+          # `bin/post-install -> genvm-post-install` remain portable. It merges
+          # the top-level trees WITHOUT copying, and `-f` keeps the old
+          # last-one-wins overwrite semantics. Real files are materialised only
+          # later by the artifact packer.
           symlink-merge-srcs = ''
             for src in $srcs; do
-              cp -rsf "$src"/. $out/
+              cp -rsf --no-preserve=mode,ownership "$src"/. $out/
+              while IFS= read -r -d "" link; do
+                if [ -d "$link" ]; then
+                  echo "refusing to create directory symlink: $link" >&2
+                  exit 1
+                fi
+                target="$(readlink "$link")"
+                if [[ "$target" != /* ]]; then
+                  rel="''${link#"$src"/}"
+                  ln -sfn "$target" "$out/$rel"
+                fi
+              done < <(find "$src" -type l -print0)
             done
           '';
 
@@ -569,6 +592,55 @@
               cp -rsf "$legacyRunnersAll"/. $out/
             '';
           };
+
+          # Trees consumed by the artifact packer. Platform artifacts contain
+          # the manager and every active executor line for that platform. The
+          # universal artifact contains the platform-independent runners at
+          # their final `runners/` destination, plus the legacy lines' runners at
+          # theirs. Keep every leaf as a symlink to its component derivation so
+          # prepacking does not duplicate outputs.
+          artifact-prepack-platforms = [
+            "amd64-linux"
+            "arm64-linux"
+            "arm64-macos"
+          ];
+          artifact-prepack-platform-packages = builtins.listToAttrs (
+            builtins.map (
+              platform:
+              let
+                suffix = "-${platform}";
+              in
+              pkgs.lib.nameValuePair "artifact-prepack-genvm-${platform}" (
+                pkgs.runCommand "artifact-prepack-genvm-${platform}"
+                  {
+                    srcs =
+                      builtins.map (line: executor-packages."executor-${line.clamped}${suffix}") executor-lines
+                      ++ [ manager-packages."manager${suffix}" ];
+                  }
+                  ''
+                    mkdir -p $out
+                    ${symlink-merge-srcs}
+                  ''
+              )
+            ) artifact-prepack-platforms
+          );
+          artifact-prepack-genvm-universal =
+            pkgs.runCommand "artifact-prepack-genvm-universal"
+              {
+                runnersAll = runners-all;
+                legacyRunnersAll = legacy-runners-all;
+              }
+              ''
+                mkdir -p $out/runners
+                cp -rsf "$runnersAll"/. $out/runners/
+                # Legacy lines carry their runners under their own executor root
+                # (executor/<version>/legacy-runners), already laid out at that
+                # destination — overlay the tree as-is.
+                cp -rsf "$legacyRunnersAll"/. $out/
+              '';
+          artifact-prepack-packages = artifact-prepack-platform-packages // {
+            inherit artifact-prepack-genvm-universal;
+          };
         in
         {
           runners = runners-list;
@@ -590,6 +662,9 @@
             // {
               inherit runners-all legacy-runners-all runners-all-dist;
             }
+            # Inputs for producing the three platform artifacts and the
+            # platform-independent universal artifact.
+            // artifact-prepack-packages
             # Utility packages (grouped separately).
             // {
               inherit genvm-tool;

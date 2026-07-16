@@ -119,7 +119,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.gate-check.outputs.matrix) }}
-    uses: ./.github/workflows/test_cell.yaml
+    uses: ./.github/workflows/queue_test_cell.yaml
     with:
       name: ${{ matrix.name }}
       job_json: ${{ matrix.job_json }}
@@ -129,6 +129,18 @@ jobs:
       buildx: ${{ matrix.buildx }}
       gcp: ${{ matrix.gcp }}
     secrets: inherit
+
+
+  # Opt-in: exercises the release pipeline itself (plan -> build every artifact
+  # -> test every platform) without publishing anything. Not part of
+  # validate-end's gate — it is skipped by default, and `skipped` there is a
+  # failure.
+  release-pipeline-test:
+    needs: [initial, gate-check]
+    if: ${{ contains(github.event.pull_request.labels.*.name, 'test-release-pipeline') }}
+    uses: ./.github/workflows/incl_release_build_test.yaml
+    secrets: inherit
+
 
   validate-end:
     runs-on: ubuntu-latest

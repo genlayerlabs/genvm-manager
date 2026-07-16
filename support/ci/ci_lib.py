@@ -43,13 +43,22 @@ if not (ROOT_DIR / '.genvm-monorepo-root').exists():
 		f'Could not find .genvm-monorepo-root in {ROOT_DIR} or any parent directory'
 	)
 
+_group_stack: list[str] = []
+
 
 def github_group_start(name: str):
+	if len(_group_stack) > 0:
+		print('::endgroup::')
+	_group_stack.append(name)
 	print(f'::group::{name}', flush=True)
 
 
 def github_group_end():
+	if len(_group_stack) > 0:
+		_group_stack.pop()
 	print('::endgroup::', flush=True)
+	if len(_group_stack) > 0:
+		print(f'::group::{_group_stack[-1]} (continue)', flush=True)
 
 
 @contextlib.contextmanager
@@ -59,6 +68,17 @@ def github_group(name: str):
 		yield
 	finally:
 		github_group_end()
+
+
+@contextlib.contextmanager
+def github_group_opt(name: str | None):
+	if name is not None:
+		github_group_start(name)
+	try:
+		yield
+	finally:
+		if name is not None:
+			github_group_end()
 
 
 def github_error(
@@ -122,6 +142,24 @@ def output(command: list[str | Path], *, cwd: Path | None = None) -> str:
 _nix_develop_cache: set[str] = set()
 
 
+def nix_develop_pre_cache(installable: str, add_group: bool = True) -> Path:
+	cache_path = ROOT_DIR / '.direnv' / 'profile-cache'
+	if not cache_path.exists():
+		cache_path.mkdir(parents=True, exist_ok=True)
+	digest = hashlib.sha3_256(installable.encode()).hexdigest()[:8]
+	profile_path = cache_path / f'{digest}'
+	if installable in _nix_develop_cache and profile_path.exists():
+		return profile_path
+
+	with github_group_opt(f'nix-develop pre-cache: {installable}' if add_group else None):
+		run(
+			['nix', 'develop', installable, '--profile', profile_path, '--command', 'true'],
+		)
+	_nix_develop_cache.add(installable)
+
+	return profile_path
+
+
 def nix_develop(
 	installable: str,
 	cmd: typing.Sequence[str | Path],
@@ -129,18 +167,9 @@ def nix_develop(
 	check: bool = True,
 	fresh_env: bool = False,
 	subcommand_group: str | None = None,
+	add_group: bool = True,
 ):
-	cache_path = ROOT_DIR / '.direnv' / 'profile-cache'
-	if not cache_path.exists():
-		cache_path.mkdir(parents=True, exist_ok=True)
-	digest = hashlib.sha3_256(installable.encode()).hexdigest()[:8]
-	profile_path = cache_path / f'{digest}'
-	if installable not in _nix_develop_cache or not profile_path.exists():
-		with github_group(f'nix-develop pre-cache: {installable}'):
-			run(
-				['nix', 'develop', installable, '--profile', profile_path, '--command', 'true'],
-			)
-		_nix_develop_cache.add(installable)
+	profile_path = nix_develop_pre_cache(installable, add_group=add_group)
 	if not profile_path.exists():
 		raise RuntimeError(f'nix-develop profile cache {profile_path} does not exist')
 
@@ -153,13 +182,16 @@ def nix_develop(
 	if subcommand_group is not None:
 		github_group_start(subcommand_group)
 	try:
-		run(
+		return run(
 			['nix', 'develop', profile_path, *fresh_env_args, '--command', *cmd],
 			check=check,
 		)
 	finally:
 		if subcommand_group is not None:
 			github_group_end()
+
+
+ARTIFACTS_DIR = ROOT_DIR / 'build' / 'artifacts'
 
 
 def bundle_artifact(

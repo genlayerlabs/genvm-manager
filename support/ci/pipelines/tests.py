@@ -1,10 +1,18 @@
 import argparse
 import json
 import os
+import subprocess
 import typing
 from dataclasses import dataclass, field
 
 import ci_lib
+from pipelines.build import build_and_pack
+
+type SubStep = dict[str, typing.Any]
+
+type GithubStep = list[SubStep]
+
+type MultiGithubStep = dict[str, GithubStep]
 
 
 def merge_with_none[T](
@@ -27,8 +35,13 @@ def merge_str_bar(l: str, r: str) -> str:
 # TestMatrixCell.handler.
 
 
-def step_run(command: list[str], *, check: bool = True) -> dict:
-	return {'type': 'run', 'command': command, 'check': check}
+def step_run(
+	command: list[str], *, check: bool = True, expect_exit_codes: list[int] | None = None
+) -> SubStep:
+	ret = {'type': 'run', 'command': command, 'check': check}
+	if expect_exit_codes is not None:
+		ret['expect_exit_codes'] = expect_exit_codes
+	return ret
 
 
 def step_nix_develop(
@@ -37,14 +50,43 @@ def step_nix_develop(
 	*,
 	check: bool = True,
 	subcommand_group: str | None = None,
-) -> dict:
-	return {
+	expect_exit_codes: list[int] | None = None,
+) -> SubStep:
+	ret = {
 		'type': 'nix-develop',
 		'installable': installable,
 		'command': command,
 		'check': check,
-		'subcommand_group': subcommand_group,
 	}
+	if subcommand_group is not None:
+		ret['subcommand_group'] = subcommand_group
+	if expect_exit_codes is not None:
+		ret['expect_exit_codes'] = expect_exit_codes
+	return ret
+
+
+def _check_of(step: SubStep) -> bool:
+	# A step asserting exact exit codes must survive a non-zero one to assert on
+	# it, so `expect_exit_codes` implies check=False and _finish does the judging.
+	if step.get('expect_exit_codes') is not None:
+		return False
+	return step.get('check', True)
+
+
+def _finish(step: SubStep, result: subprocess.CompletedProcess) -> None:
+	"""Enforce a step's `expect_exit_codes`, if it declared any.
+
+	Lets a step assert an exact non-zero exit — e.g. a daemon smoke test killed by
+	`timeout` must exit 124 — without a shell to write `|| test $? -eq 124` in.
+	`check` is what tolerates *any* failure; this tolerates a named set.
+	"""
+	expected = step.get('expect_exit_codes')
+	if expected is None:
+		return
+	if result.returncode not in expected:
+		raise ValueError(
+			f'{step["command"]} exited {result.returncode}, expected one of {expected}'
+		)
 
 
 @dataclass
@@ -66,8 +108,8 @@ class ToolTest:
 @dataclass
 class Stage[T]:
 	data: T
-	commands_pre: list[dict] = field(default_factory=list)
-	commands_post: list[dict] = field(default_factory=list)
+	commands_pre: GithubStep = field(default_factory=list)
+	commands_post: GithubStep = field(default_factory=list)
 
 	def merge(self, r: 'Stage[T]', fn: typing.Callable[[T, T], T]) -> 'Stage[T]':
 		return Stage(
@@ -98,34 +140,48 @@ class DefaultStepInfo:
 			),
 		)
 
-	def into_commands(self) -> list[dict]:
-		steps: list[dict] = []
+	def into_commands(self) -> MultiGithubStep:
+		multi_step: MultiGithubStep = {
+			'configure': [],
+			'build': [],
+			'tool': [],
+		}
 
-		def group(name: str, stage: Stage, body: list[dict]) -> None:
-			steps.append({'type': 'group-start', 'name': name})
-			steps.extend(stage.commands_pre)
-			steps.extend(body)
-			steps.extend(stage.commands_post)
-			steps.append({'type': 'group-end'})
+		def extend_step(gh_step: str, stage: Stage, body: GithubStep) -> None:
+			multi_step[gh_step].extend(stage.commands_pre)
+			multi_step[gh_step].extend(body)
+			multi_step[gh_step].extend(stage.commands_post)
+
+		def group(gh_step: str, name: str, stage: Stage, body: GithubStep) -> None:
+			multi_step[gh_step].append({'type': 'group-start', 'name': name})
+			extend_step(gh_step, stage, body)
+			multi_step[gh_step].append({'type': 'group-end'})
 
 		if (stage := self.configure_step) is not None:
-			group(
+			extend_step(
 				'configure',
-				stage,
-				[step_nix_develop('.?submodules=1#minimal', ['genvm-tool', 'configure'])],
-			)
-
-		if (stage := self.build_step) is not None:
-			group(
-				'build',
 				stage,
 				[
 					step_nix_develop(
-						'.?submodules=1#rust-test',
-						['ninja', '--verbose', '-C', 'build', *sorted(stage.data)],
+						'.?submodules=1#minimal', ['genvm-tool', 'configure', '--ci']
 					)
 				],
 			)
+
+		if (stage := self.build_step) is not None:
+			multi_step['build'].extend(stage.commands_pre)
+			for subtarget in list(sorted(stage.data)):
+				multi_step['build'].append(
+					{'type': 'group-start', 'name': f'build {subtarget}'}
+				)
+				multi_step['build'].append(
+					step_nix_develop(
+						'.?submodules=1#rust-test',
+						['ninja', '--verbose', '-C', 'build', subtarget],
+					)
+				)
+				multi_step['build'].append({'type': 'group-end'})
+			multi_step['build'].extend(stage.commands_post)
 
 		if (stage := self.tool_step) is not None:
 			filters: list[str] = []
@@ -134,7 +190,8 @@ class DefaultStepInfo:
 			if stage.data.tests_tags_filter_for_or is not None:
 				filters += ['--filter-tag', stage.data.tests_tags_filter_for_or]
 			group(
-				'test',
+				'tool',
+				f'tool {stage.data.tests_name_filter_for_or or ""}',
 				stage,
 				[
 					step_nix_develop(
@@ -143,7 +200,7 @@ class DefaultStepInfo:
 				],
 			)
 
-		return steps
+		return multi_step
 
 
 # in future we can shard it
@@ -278,10 +335,12 @@ class PlanQueueMatrix(ci_lib.Pipeline):
 
 
 class TestMatrixCell(ci_lib.Pipeline):
-	"""Replay one matrix cell's step list (from plan-queue-matrix / into_commands).
+	"""Replay one step list of a matrix cell (from plan-queue-matrix / into_commands).
 
-	The runner-side setup (disk reclaim, fuzz host, buildx, gcp) is done by
-	test_cell.yaml before this runs; here we just execute the steps.
+	into_commands emits a list per key ('configure', 'build', 'tool'); test_cell.yaml
+	slices it with fromJSON and hands us one of those lists, so --job-json here is a
+	flat step list, not the whole mapping. The runner-side setup (disk reclaim, fuzz
+	host, buildx, gcp) is done by test_cell.yaml before this runs.
 	"""
 
 	def name(self) -> str:
@@ -291,27 +350,95 @@ class TestMatrixCell(ci_lib.Pipeline):
 		parser.add_argument('--job-json', required=True, type=str)
 
 	def handler(self, args: argparse.Namespace) -> int:
-		for step in json.loads(args.job_json):
+		all_steps: GithubStep = json.loads(args.job_json)
+
+		nix_develop_installables = set()
+		for step in all_steps:
+			if step['type'] == 'nix-develop':
+				nix_develop_installables.add(step['installable'])
+
+		if len(nix_develop_installables) > 1:
+			all_installables = list(sorted(nix_develop_installables))
+			with ci_lib.github_group('nix-develop installables pre-cache'):
+				for inst in all_installables:
+					ci_lib.nix_develop_pre_cache(inst, add_group=False)
+		for step in all_steps:
 			match step['type']:
 				case 'group-start':
 					ci_lib.github_group_start(step['name'])
 				case 'group-end':
 					ci_lib.github_group_end()
 				case 'run':
-					ci_lib.run(step['command'], check=step.get('check', True))
+					_finish(
+						step,
+						ci_lib.run(step['command'], check=_check_of(step)),
+					)
 				case 'nix-develop':
-					ci_lib.nix_develop(
-						step['installable'],
-						step['command'],
-						check=step.get('check', True),
-						subcommand_group=step.get('subcommand_group'),
+					_finish(
+						step,
+						ci_lib.nix_develop(
+							step['installable'],
+							step['command'],
+							check=_check_of(step),
+							subcommand_group=step.get('subcommand_group'),
+						),
+					)
+				case 'build-and-pack':
+					build_and_pack(
+						installable=step['installable'],
+						artifact_name=step['artifact_name'],
+						globs=step.get('globs'),
+						compression_level=step.get('compression_level', 9),
+						show_trace=step.get('show_trace', False),
 					)
 				case other:
 					raise ValueError(f'unknown step type: {other!r}')
 		return 0
 
 
+class CheckCellKeys(ci_lib.Pipeline):
+	"""Fail unless a cell's step mapping holds exactly the keys the caller replays.
+
+	into_commands' keys and test_cell.yaml's "Job:" steps must stay in sync in both
+	directions: a key nobody replays would silently drop its steps, and a step whose
+	key is gone would silently do nothing. Neither fails on its own, so the workflow
+	passes the keys it handles and we require an exact match.
+	"""
+
+	def name(self) -> str:
+		return 'check-cell-keys'
+
+	def add_to(self, parser: argparse.ArgumentParser) -> None:
+		parser.add_argument('--job-json', required=True, type=str)
+		parser.add_argument('keys', nargs='+', help='keys the caller replays')
+
+	def handler(self, args: argparse.Namespace) -> int:
+		multi_step = json.loads(args.job_json)
+		if not isinstance(multi_step, dict):
+			ci_lib.github_error(
+				f'job_json must be a mapping of key to step list, got {type(multi_step).__name__}'
+			)
+			return 1
+
+		expected = set(args.keys)
+		actual = set(multi_step.keys())
+		for key in sorted(actual - expected):
+			ci_lib.github_error(
+				f'job_json key {key!r} is replayed by no step: add one to test_cell.yaml or drop the key from into_commands'
+			)
+		for key in sorted(expected - actual):
+			ci_lib.github_error(
+				f'no job_json key {key!r}: drop its step from test_cell.yaml or emit the key from into_commands'
+			)
+		if actual != expected:
+			return 1
+
+		print(f'cell keys are in sync: {sorted(actual)}')
+		return 0
+
+
 COMMANDS = [
 	PlanQueueMatrix(),
 	TestMatrixCell(),
+	CheckCellKeys(),
 ]

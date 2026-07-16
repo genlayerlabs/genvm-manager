@@ -1,0 +1,128 @@
+name: Build and test release artifacts
+
+# The whole release pipeline except publishing: plan -> build every artifact ->
+# test every platform against what was built.
+#
+# Callers see four artifacts, a tag and the executor lines; the matrices that
+# produce them are an implementation detail. `release.yaml` is this plus a
+# publisher; `queue.yaml` runs it on a PR (label `test-release-pipeline`) to
+# exercise the pipeline itself without releasing anything.
+
+on:
+  workflow_call:
+    inputs:
+      version_override:
+        description: "Release tag. Defaults to `version` from .genvm-monorepo-root"
+        required: false
+        type: string
+        default: ""
+    outputs:
+      tag:
+        description: the tag the artifacts were planned at
+        value: ${{ jobs.plan.outputs.tag }}
+      artifact_universal:
+        description: artifact holding the platform-independent runners
+        value: ${{ jobs.plan.outputs.artifact_universal }}
+      artifact_amd64_linux:
+        description: artifact holding amd64-linux's manager + executor tarballs
+        value: ${{ jobs.plan.outputs.artifact_amd64_linux }}
+      artifact_arm64_linux:
+        description: artifact holding arm64-linux's manager + executor tarballs
+        value: ${{ jobs.plan.outputs.artifact_arm64_linux }}
+      artifact_arm64_macos:
+        description: artifact holding arm64-macos's manager + executor tarballs
+        value: ${{ jobs.plan.outputs.artifact_arm64_macos }}
+      artifact_notes:
+        description: artifact holding the generated release notes
+        value: ${{ jobs.plan.outputs.artifact_notes }}
+      notes_file:
+        description: the notes file's name inside artifact_notes
+        value: ${{ jobs.plan.outputs.notes_file }}
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.plan.outputs.tag }}
+      build_matrix: ${{ steps.plan.outputs.build_matrix }}
+      test_matrix: ${{ steps.plan.outputs.test_matrix }}
+      artifact_universal: ${{ steps.plan.outputs.artifact_universal }}
+      artifact_amd64_linux: ${{ steps.plan.outputs.artifact_amd64_linux }}
+      artifact_arm64_linux: ${{ steps.plan.outputs.artifact_arm64_linux }}
+      artifact_arm64_macos: ${{ steps.plan.outputs.artifact_arm64_macos }}
+      artifact_notes: ${{ steps.plan.outputs.artifact_notes }}
+      notes_file: ${{ steps.plan.outputs.notes_file }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Each line's manifest.json (its executor-version) lives in the
+          # submodule, so the gitlinks must be materialized.
+          submodules: true
+      - name: Plan release matrix
+        id: plan
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
+        run: ./support/ci/run.sh pipeline plan-release-matrix --version-override "$VERSION_OVERRIDE"
+
+  # Generated here rather than in the publisher so a PR-label run produces them
+  # too: they are worth reading before the release, not after. The range ends at
+  # HEAD, not at the tag — the tag will point here, but does not exist yet.
+  notes:
+    needs: plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # make-release-notes diffs against the previous tag via `git describe`.
+          fetch-depth: 0
+      - name: Generate release notes
+        env:
+          TAG: ${{ needs.plan.outputs.tag }}
+          NOTES_FILE: ${{ needs.plan.outputs.notes_file }}
+        run: |
+          set -euo pipefail
+          prev_tag=$(git describe --tags --abbrev=0 HEAD~1 2>/dev/null || echo "")
+          if [ -n "$prev_tag" ]; then
+            echo "notes for $TAG: ${prev_tag}..HEAD"
+            ./support/ci/run.sh tool make-release-notes "${prev_tag}..HEAD" > "$NOTES_FILE"
+          else
+            echo "Initial release" > "$NOTES_FILE"
+          fi
+          # Echoed so a debug run needs no artifact download.
+          cat "$NOTES_FILE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ needs.plan.outputs.artifact_notes }}
+          path: ${{ needs.plan.outputs.notes_file }}
+          if-no-files-found: error
+
+  build:
+    needs: plan
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.build_matrix) }}
+    uses: ./.github/workflows/incl_release_build_test_cell_build.yaml
+    with:
+      name: ${{ matrix.name }}
+      runs_on: ${{ matrix.runs_on }}
+      artifact_name: ${{ matrix.artifact_name }}
+      job_json: ${{ matrix.job_json }}
+    secrets: inherit
+
+  test:
+    needs: [plan, build]
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.test_matrix) }}
+    uses: ./.github/workflows/incl_release_build_test_cell_test.yaml
+    with:
+      name: ${{ matrix.name }}
+      runs_on: ${{ matrix.runs_on }}
+      platform_artifact: ${{ matrix.platform_artifact }}
+      runners_artifact: ${{ matrix.runners_artifact }}
+      with_nix: ${{ matrix.with_nix }}
+      setup_python: ${{ matrix.setup_python }}
+      job_json: ${{ matrix.job_json }}
+    secrets: inherit

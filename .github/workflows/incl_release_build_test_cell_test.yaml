@@ -1,0 +1,102 @@
+name: Test one release platform cell
+
+# One cell of plan-release-matrix's test matrix. Materializes the built tarballs
+# into build/out and replays the cell's `test` steps against them: `genvm-tool
+# configure` writes build/info.json pointing at that tree, so the runner
+# exercises the downloaded artifacts and never builds.
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        required: true
+        type: string
+      runs_on:
+        required: true
+        type: string
+      platform_artifact:
+        description: artifact holding this platform's manager + executor tarballs
+        required: true
+        type: string
+      runners_artifact:
+        description: artifact holding the universal runners; empty to skip
+        required: false
+        type: string
+        default: ""
+      with_nix:
+        required: false
+        type: boolean
+        default: true
+      setup_python:
+        required: false
+        type: boolean
+        default: false
+      job_json:
+        required: true
+        type: string
+
+jobs:
+  test:
+    name: release-test / ${{ inputs.name }}
+    runs-on: ${{ inputs.runs_on }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check job keys
+        env:
+          JOB_JSON: ${{ inputs.job_json }}
+        run: ./support/ci/run.sh pipeline check-cell-keys --job-json "$JOB_JSON" test
+
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          third_party: --all
+          with_nix: ${{ inputs.with_nix && 'true' || 'false' }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Python
+        if: ${{ inputs.setup_python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Download platform artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.platform_artifact }}
+          path: ${{ runner.temp }}/release-artifacts
+
+      # Skipped for cells that cannot use them: a foreign-arch tree has nothing
+      # to run the runners with.
+      - name: Download runners artifact
+        if: ${{ inputs.runners_artifact != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.runners_artifact }}
+          path: ${{ runner.temp }}/release-artifacts
+
+      - name: Materialize artifacts
+        env:
+          ARTIFACTS_DIR: ${{ runner.temp }}/release-artifacts
+        run: |
+          set -euo pipefail
+          # Every tarball — manager, each executor line, and the runners —
+          # overlays onto the same install root.
+          mkdir -p build/out
+          shopt -s nullglob
+          archives=("$ARTIFACTS_DIR"/*.tar.xz)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "::error::no tarballs in $ARTIFACTS_DIR"
+            exit 1
+          fi
+          printf 'extracting:\n'
+          printf '  %s\n' "${archives[@]}"
+          for archive in "${archives[@]}"; do
+            tar -xf "$archive" -C build/out --no-same-owner
+          done
+
+      - name: "Job: test"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: test

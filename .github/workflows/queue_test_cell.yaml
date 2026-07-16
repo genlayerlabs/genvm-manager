@@ -5,8 +5,8 @@ on:
         required: true
         type: string
       job_json:
-        # JSON step list from plan-queue-matrix; passed via env (not interpolated
-        # into the shell) so its quotes/brackets survive.
+        # JSON {key: step list} from plan-queue-matrix, one key per "Job:" step
+        # below; matrix-cell-step slices out the list for its key.
         required: true
         type: string
       runs_on:
@@ -46,6 +46,12 @@ jobs:
         with:
           lfs: true
 
+      # Guards the "Job:" steps below: every key must have a step, every step a key.
+      - name: Check job keys
+        env:
+          JOB_JSON: ${{ inputs.job_json }}
+        run: ./support/ci/run.sh pipeline check-cell-keys --job-json "$JOB_JSON" configure build tool
+
       - uses: insightsengineering/disk-space-reclaimer@v1
         if: ${{ inputs.disk_reclaim }}
         with:
@@ -81,7 +87,20 @@ jobs:
         if: ${{ inputs.buildx }}
         uses: docker/setup-buildx-action@v3
 
-      - name: Run test
-        env:
-          JOB_JSON: ${{ inputs.job_json }}
-        run: ./support/ci/run.sh pipeline test-cell --job-json "$JOB_JSON"
+      - name: "Job: configure"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: configure
+
+      - name: "Job: build"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: build
+
+      - name: "Job: tool"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: tool

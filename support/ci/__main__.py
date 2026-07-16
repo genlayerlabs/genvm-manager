@@ -4,7 +4,7 @@ import sys
 import typing
 
 import ci_lib
-from pipelines import build, checks, docs, tests
+from pipelines import build, checks, docs, release, tests
 from tools import branches, pr_branches, script_adapters, versions
 
 PIPELINES: list[ci_lib.Pipeline] = [
@@ -12,6 +12,7 @@ PIPELINES: list[ci_lib.Pipeline] = [
 	*docs.COMMANDS,
 	*tests.COMMANDS,
 	*checks.COMMANDS,
+	*release.COMMANDS,
 ]
 TOOLS: list[ci_lib.Tool] = [
 	*versions.COMMANDS,
