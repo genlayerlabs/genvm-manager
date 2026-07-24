@@ -1,10 +1,13 @@
 # Contributing to GenVM development
 
 ## Sub pages
+- [first-contribution tutorial](./tutorial/first-contribution.md) — end-to-end walkthrough: patch an executor, branch, commit, push, open the PR.
 - [how-to guides](./howto/README.md) — setup, build, test, submodules, versioning, extension recipes, …
 
 ## PR requirements
-Main requirement is that all tests must pass. It includes [pre-commit](https://pre-commit.com) and test suites. PRs are merged via a queue, that executes all tests and merges *iff* they all pass. It is done to ensure that `HEAD` of `main` branch is always stable
+All checks must pass: [pre-commit](https://pre-commit.com) hooks and the test
+suites. PRs land through a merge queue that runs the full test set and merges
+*iff* everything passes — this keeps `HEAD` of `main` always stable.
 
 ## Security
 GenVM is consensus-critical. Do not open public issues for vulnerabilities —

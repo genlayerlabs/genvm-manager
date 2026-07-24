@@ -35,8 +35,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          LATEST="$(./support/ci/run.sh tool branch-versions latest)"
-          DEV="v${LATEST}-dev"
+          MANAGER="$(./support/ci/run.sh tool branch-versions manager)"
+          DEV="v${MANAGER}-dev"
           PR="${{ github.event.pull_request.number }}"
 
           gh pr edit "$PR" --repo "$GITHUB_REPOSITORY" --base "$DEV"
@@ -44,6 +44,6 @@ jobs:
           gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$(cat <<EOF
           👋 This PR targeted \`main\`, so I've retargeted it to the latest dev branch \`${DEV}\`.
 
-          \`main\` is protected and is only an alias of the latest release branch (\`v${LATEST}-dev\`), kept in lockstep automatically. Active v${LATEST} work lands on \`${DEV}\`, which reaches \`v${LATEST}.x\` through the standing release-gate PR once the cross-repo E2E matrix is green.
+          \`main\` is protected and is only an alias of the latest release branch (\`v${MANAGER}-dev\`), kept in lockstep automatically. Active v${MANAGER} work lands on \`${DEV}\`, which reaches \`v${MANAGER}.x\` through the standing release-gate PR once the cross-repo E2E matrix is green.
           EOF
           )"

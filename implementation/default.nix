@@ -17,6 +17,10 @@
 let
   lib = pkgs.lib;
 
+  # The shipped LLM dispatch script requires the `llm_policy` package, which
+  # lives in the unhardcoded-engine submodule instead of under install/.
+  llm-policy-src = root-src + "/libs/unhardcoded-engine";
+
   make-for-target =
     target:
     let
@@ -81,6 +85,18 @@ let
         chmod -R u+w "$out"
         fi
         done
+        # compiled-libs doubles as the link input and as a copy source, so its
+        # static archives land here too; they are already inside the binary.
+        rm -f "$out"/lib/*.a
+
+        if [ ! -f "${llm-policy-src}/llm_policy.lua" ]; then
+          echo "${llm-policy-src} is missing or incomplete; run \`git submodule update --init libs/unhardcoded-engine\`" >&2
+          exit 1
+        fi
+        cp --no-preserve=ownership "${llm-policy-src}/llm_policy.lua" "$out/lib/genvm-lua/llm_policy.lua"
+        cp --no-preserve=ownership -r "${llm-policy-src}/llm_policy" "$out/lib/genvm-lua/llm_policy"
+        chmod -R u+w "$out/lib/genvm-lua"
+
         patch-yaml-schema --tag ${build-config.executor-version} "$out"
         patch-llm-config --tag ${build-config.executor-version} "$out/config/genvm-module-llm.yaml"
         patch-web-config --tag ${build-config.executor-version} "$out/config/genvm-module-web.yaml"

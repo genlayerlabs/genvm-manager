@@ -1,9 +1,8 @@
 """`genvm-tool build-manifest` — generate the manager's `data/manifest.yaml`.
 
-Assembles `executor_versions` (from the active executor submodules) plus the
-static base fields into the YAML manifest the manager loads at runtime. The
-inputs are documented in `genvm_tool.manifest`; this is the release-packaging
-entry point (dev builds call the same logic in-process from `configure`).
+Writes the runtime manifest (executor versions from the active submodules plus
+the static base fields) to `--output`. Used by release packaging; dev builds get
+the same file from `configure`, so you rarely run this by hand.
 """
 
 from pathlib import Path

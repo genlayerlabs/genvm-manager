@@ -1,22 +1,9 @@
-"""`genvm-tool configure` — generate build/build.ninja and build/info.json.
+"""`genvm-tool configure` — generate the build graph.
 
-Generates the ninja build graph that drives cargo (build / clippy / clippy-fix /
-fmt), the `genvm-tool codegen` outputs, the nix runner build, and the install `cp`
-steps. (This was historically the manager-root `configure.rb` Ruby script.)
-
-The ninja DSL and the *per-line* build registrations live in the importable
-``genvm_tool_plugins.ninja`` plugin. This command owns only the manager-global
-graph (manager crates, shared codegen, the runner build, info.json/manifest); for
-each active executor line it builds a :class:`~genvm_tool_plugins.ninja.LineContext`
-and hands it to that line's ``.genvm-tool.py:configure(line)`` hook. The lines
-already diverge on how they resolve their runner registry (a frozen line copies a
-committed manifest, a live line derives it through nix), so each line owns its own
-configuration rather than this command branching on the version.
-
-Every path is resolved relative to the manager root (`ctx.root`), so the graph is
-identical regardless of the directory the tool is invoked from — the original
-script assumed it was run from the source root, which is the same thing once the
-root is located.
+Writes `build/build.ninja` and `build/info.json`, from which `ninja -C build`
+drives the cargo builds, `genvm-tool codegen` outputs, the runner build, and the
+install step. Run it once after cloning, and again whenever the set of active
+executor lines or their manifests changes. Works from any directory in the repo.
 """
 
 import json
@@ -54,25 +41,24 @@ class ExecVersion(NamedTuple):
 	real: str
 
 
-def _load_versions(source_dir: Path) -> tuple[str, list[ExecVersion]]:
+def _load_versions(monorepo_cfg, source_dir: Path) -> tuple[str, list[ExecVersion]]:
 	"""Resolve every active executor line from ``.genvm-monorepo-root``.
 
 	Each active line is mounted at ``executors/<line>.x`` and its
 	``manifest.json`` pins the concrete ``executor-version`` that becomes the
 	built ``out/executor/<real>`` directory. There may be several active lines.
 	"""
-	cfg = json.loads((source_dir / MONOREPO_ROOT_FILE).read_text())
 	versions = []
-	for key in cfg['active-versions']:
+	for key in monorepo_cfg['active-versions']:
 		exec_rel = f'executors/{key}.x'
 		manifest = json.loads((source_dir / exec_rel / 'manifest.json').read_text())
 		versions.append(
 			ExecVersion(key=key, exec_rel=exec_rel, real=manifest['executor-version'])
 		)
-	return cfg['version'], versions
+	return monorepo_cfg['version'], versions
 
 
-def build_independent_info(source_dir: Path) -> dict:
+def build_independent_info(monorepo_cfg, source_dir: Path) -> dict:
 	"""The parts of ``info.json`` derivable from source alone — no build needed.
 
 	``executor_versions`` maps each active line (e.g. ``v0.3``) to its built
@@ -82,11 +68,31 @@ def build_independent_info(source_dir: Path) -> dict:
 	``info.json`` (see the manager-root ``.genvm-tool.py``) without first running
 	``configure``. ``configure`` merges this into the full, build-dependent info.
 	"""
-	primary_key, versions = _load_versions(source_dir)
+	primary_key, versions = _load_versions(monorepo_cfg, source_dir)
 	primary = next((v for v in versions if v.key == primary_key), versions[0])
 	return {
 		'executor_versions': {v.key: v.real for v in versions},
 		'primary_executor_version': primary.real,
+	}
+
+
+def rust_target_dirs_info(
+	monorepo_cfg, source_dir: Path, rust_target_dir: Path
+) -> dict:
+	"""``rust_target_dirs``: line checkout (``executors/v0.3.x``) → its cargo target dir.
+
+	Keyed by mount so a consumer only has to ask which one contains its crate;
+	crates under none of them use ``rust_target_dir`` itself. Why lines cannot
+	share a dir: :func:`genvm_tool_plugins.ninja.target_dir_for_line`.
+	"""
+	from genvm_tool_plugins import ninja
+
+	_, versions = _load_versions(monorepo_cfg, source_dir)
+	return {
+		'rust_target_dirs': {
+			v.exec_rel: str(ninja.target_dir_for_line(rust_target_dir, v.key))
+			for v in versions
+		}
 	}
 
 
@@ -103,7 +109,7 @@ def configure(parser):
 	)
 
 
-def _detect_rust_target() -> str:
+def detect_rust_target() -> str:
 	out = subprocess.run(
 		['rustc', '-vV'], capture_output=True, text=True, check=True
 	).stdout
@@ -132,6 +138,8 @@ def _line_configurator(ctx: common.Context, source_dir: Path, exec_rel: str):
 def main(ctx: common.Context, args) -> int:
 	source_dir = ctx.root
 
+	monorepo_cfg = json.loads(ctx.root.joinpath(MONOREPO_ROOT_FILE).read_text())
+
 	# The ninja DSL + per-line helpers live in the importable plugin; put the
 	# plugin search path on sys.path before importing it (and before any line's
 	# `.genvm-tool.py:configure` hook, which may import it too).
@@ -142,13 +150,13 @@ def main(ctx: common.Context, args) -> int:
 
 	build_dir = source_dir / ninja.BUILD_DIR_REL
 
-	primary_key, versions = _load_versions(source_dir)
+	primary_key, versions = _load_versions(monorepo_cfg, source_dir)
 	# Manager-global generated files (test fixtures, docs) have a single output,
 	# so they are derived from the primary line's codegen data.
 	primary = next((v for v in versions if v.key == primary_key), versions[0])
 	primary_exec_root = source_dir / primary.exec_rel
 
-	rust_target = _detect_rust_target()
+	rust_target = detect_rust_target()
 	rust_target_dir = build_dir / 'ya-build' / 'rust-target'
 	rust_target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -221,7 +229,10 @@ def main(ctx: common.Context, args) -> int:
 	tool_src = source_dir / 'support' / 'tools' / 'genvm-tool'
 	genvm_tool_sh = build_dir / 'genvm_tool.sh'
 	build_dir.mkdir(parents=True, exist_ok=True)
-	pp = ':'.join(sys.path + [str(tool_src)])
+	# The in-tree source must come *first*: `sys.path` carries the installed
+	# genvm-tool (this process was launched from it), which would otherwise shadow
+	# the working tree and make codegen edits silently no-ops.
+	pp = ':'.join([str(tool_src)] + sys.path)
 	genvm_tool_sh.write_text(
 		'#!/bin/sh\n'
 		'# Generated by `genvm-tool configure`, DO NOT EDIT MANUALLY.\n'
@@ -264,6 +275,7 @@ def main(ctx: common.Context, args) -> int:
 			ninja.VAR_IN,
 			'--out',
 			ninja.VAR_OUT,
+			ninja.RawStr('$extra_flags'),
 		],
 		description='Codegen $out',
 	)
@@ -290,7 +302,12 @@ def main(ctx: common.Context, args) -> int:
 	n.codegen(host_fns_py, 'python', p_data / 'host-fns.json')
 	n.codegen(public_abi_py, 'python', p_data / 'public-abi.json')
 	n.codegen(constants_rst, 'rst', p_data / 'public-abi.json')
-	n.codegen(constants_pending_rst, 'rst', p_data / 'public-abi-pending.json')
+	n.codegen(
+		constants_pending_rst,
+		'rst',
+		p_data / 'public-abi-pending.json',
+		['--rst-anchor-ns=pending'],
+	)
 	for out in (host_fns_py, public_abi_py, constants_rst, constants_pending_rst):
 		codegen_phony.add_dependency(out)
 
@@ -402,6 +419,7 @@ def main(ctx: common.Context, args) -> int:
 			codegen_phony=codegen_phony,
 			data_phony=data_phony,
 			all_bin=all_exec_line,
+			is_support_only=v.key in monorepo_cfg.get('support-only-versions', []),
 		)
 		configurator = _line_configurator(ctx, source_dir, v.exec_rel)
 		configurator(line)
@@ -487,6 +505,26 @@ def main(ctx: common.Context, args) -> int:
 	n.build('phony', 'cargo/clippy/fix').add_dependency(n.all_clippy_fix).finish()
 
 	n.install('install', 'out', all_manager)
+
+	# The LLM dispatch script requires the `llm_policy` package from the
+	# unhardcoded-engine submodule; fail loudly if it was not checked out.
+	llm_policy_dir = source_dir / 'libs' / 'unhardcoded-engine'
+	if not (llm_policy_dir / 'llm_policy.lua').is_file():
+		raise FileNotFoundError(
+			f'{llm_policy_dir} is missing or incomplete; '
+			'run `git submodule update --init libs/unhardcoded-engine`'
+		)
+	n.install(
+		'libs/unhardcoded-engine/llm_policy',
+		'out/lib/genvm-lua/llm_policy',
+		all_manager,
+	)
+	llm_policy_entry = 'out/lib/genvm-lua/llm_policy.lua'
+	all_manager.add_dependency(llm_policy_entry)
+	n.build('cp', llm_policy_entry).add_dependency(
+		llm_policy_dir / 'llm_policy.lua'
+	).finish()
+
 	all_manager.finish()
 	all_bin.finish()
 
@@ -504,10 +542,14 @@ def main(ctx: common.Context, args) -> int:
 		'coverage_dir': str(build_dir / 'cov'),
 		'build_dir': str(build_dir),
 		'rust_target_dir': str(rust_target_dir),
+		# The build passes `--target` explicitly; the test harness must pass the
+		# same one or it gets a second, unshared unit graph in the same dir.
+		'rust_target': rust_target,
 		# executor_versions / primary_executor_version — derivable without a build;
 		# the test harness synthesizes the same keys from source when info.json is
 		# absent (see build_independent_info).
-		**build_independent_info(source_dir),
+		**build_independent_info(monorepo_cfg, source_dir),
+		**rust_target_dirs_info(monorepo_cfg, source_dir, rust_target_dir),
 	}
 	(build_dir / 'info.json').write_text(json.dumps(info, indent=2))
 

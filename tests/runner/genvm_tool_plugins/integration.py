@@ -8,6 +8,7 @@ It uses the same MockHost/base_host infrastructure as the old runner.
 import base64
 import difflib
 import gzip
+import hashlib
 import io
 import itertools
 import json
@@ -20,6 +21,7 @@ import typing
 from dataclasses import dataclass
 from pathlib import Path
 
+import genvm_tool.gvm32
 import genvm_tool.tests
 import origin.base_host as base_host
 import origin.calldata as gvm_calldata
@@ -41,7 +43,6 @@ build_info = json.loads(
 )
 
 BUILD_DIR = Path(build_info['build_dir'])
-TARGET_DIR = Path(build_info['rust_target_dir'])
 
 local_ctx.run_parser.add_argument(
 	'--ignore-hash',
@@ -1014,7 +1015,9 @@ def integration_test_single_executor(
 	)
 	ignore_hash = executor_integration_conf.get('ignore-hash', False)
 
-	jsonnet_files = list(CASES_DIR.glob('**/*.jsonnet'))
+	jsonnet_files = list(
+		x for x in CASES_DIR.glob('**/*.jsonnet') if not x.name.startswith('_')
+	)
 	jsonnet_files.sort()
 
 	# pre-import
@@ -1039,6 +1042,11 @@ def integration_test_single_executor(
 		}
 		for future in as_completed(futures):
 			future.result()
+
+
+def _gvm32_of_str(text: str) -> str:
+	"""Hash `text` the way the executor names content: gvm32(sha3_256(utf-8))."""
+	return genvm_tool.gvm32.encode(hashlib.sha3_256(text.encode('utf-8')).digest())
 
 
 def _single_integration_test(
@@ -1089,9 +1097,20 @@ def _single_integration_test(
 		)
 		return
 
-	# Parse jsonnet at collection time
+	# Parse jsonnet at collection time.
+	#
+	# `native_callbacks` exposes helpers to jsonnet as `std.native('<name>')`.
+	# Note the binding only marshals *primitives* — passing an array or object
+	# to a native function is a jsonnet runtime error, so anything structured
+	# has to cross as a JSON string.
 	jsonnet_result = _jsonnet.evaluate_file(
-		str(jsonnet_file), jpathdir=[str(TEMPLATES_DIR.parent)]
+		str(jsonnet_file),
+		jpathdir=[str(TEMPLATES_DIR.parent)],
+		native_callbacks={
+			# std.native('gvm32')('...') -> gvm32(sha3_256(utf8(s))), the id form
+			# used by content-addressed names such as `custom:<hash>`.
+			'gvm32': (('text',), _gvm32_of_str),
+		},
 	)
 	jsonnet_parsed = json.loads(jsonnet_result)
 	extra_tags = jsonnet_parsed.get('tags', [])

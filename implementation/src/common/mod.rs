@@ -740,7 +740,7 @@ pub fn is_no_routable_address(err: &reqwest::Error) -> bool {
 /// Resolver that resolves via hickory and drops every address that is not
 /// globally routable. This is the SSRF guard for the web module: it prevents a
 /// contract from steering the node into the operator's internal network (e.g.
-/// link-local, loopback, RFC1918) — including via a DNS-rebinding attack, since
+/// link-local, loopback, RFC1918) -- including via a DNS-rebinding attack, since
 /// the filtering happens in the very resolver reqwest connects through, leaving
 /// no second, unfiltered lookup. The hostname stays in the URL, so TLS SNI,
 /// certificate verification and the `Host` header keep working over HTTPS.
@@ -1062,6 +1062,19 @@ pub mod tests {
     /// vanilla client.
     pub fn create_client() -> anyhow::Result<reqwest::Client> {
         super::base_client_builder().build().map_err(Into::into)
+    }
+
+    /// A `package.path` fragment for the `llm_policy` package, which the shipped
+    /// llm dispatch script requires. It ships from the unhardcoded-engine
+    /// submodule; a clone without submodules gets told what to run.
+    pub fn llm_policy_lua_path() -> String {
+        let root = std::path::PathBuf::from("../libs/unhardcoded-engine")
+            .canonicalize()
+            .expect(
+                "libs/unhardcoded-engine is missing; \
+                 run `git submodule update --init libs/unhardcoded-engine`",
+            );
+        format!("{}/?.lua", root.to_str().unwrap())
     }
 
     pub fn get_hello() -> Arc<genvm_modules_interfaces::GenVMHello> {

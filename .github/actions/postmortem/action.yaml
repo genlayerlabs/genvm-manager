@@ -10,9 +10,11 @@ description: >-
   workflow is a separate job on a fresh runner: it would report a pristine
   machine instead of the one that just failed.
 
-  Callers should add `if: ${{ !cancelled() }}` (the grace window on a cancel is
-  too short to spend here) and `continue-on-error: true`. Linux-only, matching
-  every cell that calls it.
+  Callers gate on `failure()` — a cancel's grace window is too short to spend
+  here — and add `continue-on-error: true`. Linux-only, matching every cell
+  that calls it. Keep double-brace expression syntax out of this file entirely:
+  the runner templates the whole manifest, description included, and rejects
+  workflow-only functions such as `failure()` there.
 runs:
   using: composite
   steps:

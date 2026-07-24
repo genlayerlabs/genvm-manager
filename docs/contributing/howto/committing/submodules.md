@@ -48,14 +48,14 @@ into that repo's `.git/hooks`, so `git commit` runs the hooks for the repo you
 are committing in.
 
 - Run everything by hand: `nix develop -c pre-commit run --all-files` in the
-  repo (or `bash support/ci/pipelines/commit-hooks.sh` from the manager root to
+  repo (or `./support/ci/run.sh pipeline commit-hooks` from the manager root to
   check the manager + every executor at once, as CI does).
 - Do not `git commit --no-verify` — let the hooks run, even for a pure gitlink
   bump (they are cheap when nothing needs formatting).
 - The executor crates reach the manager's shared `crates/` via relative paths,
   so executor hooks must run against the **nested working tree** (submodule
   checked out under the manager), not an isolated flake sandbox — this is why
-  CI uses `commit-hooks.sh` (in-tree) instead of `nix flake check`.
+  CI uses the `commit-hooks` pipeline (in-tree) instead of `nix flake check`.
 
 ## Pushing
 

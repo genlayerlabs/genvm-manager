@@ -157,3 +157,18 @@ small hash is a SHA3-256 digest over a :ref:`gvm-def-calldata-encoding` encoded 
 Non-deterministic sub-calls do not contribute. A run with no deterministic sub-calls
 finalizes its accumulator to a fixed digest, so that error and edge results hash
 uniformly.
+
+Post-Execution Result Validation
+--------------------------------
+
+A consumer in :ref:`gvm-def-sync-mode` or :ref:`gvm-def-validator-mode`
+consumes one leader-proposed result per non-deterministic block it runs. If the
+leader supplied **more** results than the run consumed, the surplus blocks were
+never reached: the run's result is replaced by
+:ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-extra`, whose
+parameter is the first 6 characters of the :ref:`gvm-def-gvm32` encoding of the
+``sha3_256`` digest of the complete ``[result_code][data]``
+:ref:`sub-VM result buffer <gvm-def-subvm-result-encoding>` the run would
+otherwise have returned — the whole wire buffer as emitted, not a decoded
+payload or alternate representation. No non-deterministic disagreement is caused
+by this.

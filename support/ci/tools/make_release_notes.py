@@ -10,6 +10,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
+import ci_lib
+
 
 def strip_trailing_emoji(text: str) -> str:
 	"""Drop the trailing gitmoji suffix (and its variation selectors/ZWJ).
@@ -146,32 +148,35 @@ def format_notes(categories: dict[str, list[str]], rev_range: str) -> str:
 	return '\n'.join(parts).strip() + '\n'
 
 
-def main() -> None:
-	parser = argparse.ArgumentParser(
-		description='Generate categorized release notes from conventional commits.',
-	)
-	parser.add_argument(
-		'rev_range',
-		metavar='rev-range',
-		help='git revision range, e.g. v0.2.7..v0.2.8',
-	)
-	args = parser.parse_args()
+class MakeReleaseNotes(ci_lib.Tool):
+	"""Generate categorized release notes from conventional commits."""
 
-	entries = parse_git_log(args.rev_range)
-	if not entries:
-		print('No commits found.', file=sys.stderr)
-		sys.exit(1)
+	def name(self) -> str:
+		return 'make-release-notes'
 
-	categories = categorize(entries)
+	def add_to(self, parser: argparse.ArgumentParser) -> None:
+		parser.add_argument(
+			'rev_range',
+			metavar='rev-range',
+			help='git revision range, e.g. v0.2.7..v0.2.8',
+		)
 
-	all_notes = []
+	def handler(self, args: argparse.Namespace) -> int:
+		entries = parse_git_log(args.rev_range)
+		if not entries:
+			print('No commits found.', file=sys.stderr)
+			return 1
 
-	all_notes.append('# GenVM Manager Release Notes\n')
+		categories = categorize(entries)
 
-	all_notes.append(format_notes(categories, args.rev_range))
+		all_notes = []
 
-	print(''.join(all_notes))
+		all_notes.append('# GenVM Manager Release Notes\n')
+
+		all_notes.append(format_notes(categories, args.rev_range))
+
+		print(''.join(all_notes))
+		return 0
 
 
-if __name__ == '__main__':
-	main()
+COMMANDS = [MakeReleaseNotes()]

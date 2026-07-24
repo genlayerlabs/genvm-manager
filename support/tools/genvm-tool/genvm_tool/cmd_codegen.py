@@ -1,10 +1,9 @@
 """`genvm-tool codegen` — generate language bindings from genvm data JSON.
 
-Replaces the per-executor ruby templates (``rs.rb`` / ``py.rb`` / ``rst.rb`` and
-the standalone go generator). One typed front-end parses the data JSON; the
-``--lang`` backend renders it. The build invokes this for the rust/python/rst
-outputs; ``--lang go`` is a manual/external entry point (the generated ``.go``
-lands in a separate Go module), with the package name set by ``--go-package``.
+Renders a data JSON file (`-i`) to a `--lang` backend (rust/python/rst/go) at
+`-o`. The build runs this for the rust/python/rst outputs; `--lang go` is a
+manual entry point (its output lands in a separate Go module — set the package
+name with `--go-package`).
 """
 
 from pathlib import Path
@@ -43,6 +42,12 @@ def configure(parser):
 		default='genvm',
 		help="package name for the go backend (default: 'genvm')",
 	)
+	parser.add_argument(
+		'--rst-anchor-ns',
+		default='',
+		help="namespace inserted into the rst backend's `gvm-def-*` anchors, so "
+		'two data files rendering into the same appendix do not collide',
+	)
 
 
 def main(ctx: common.Context, args) -> int:
@@ -53,6 +58,7 @@ def main(ctx: common.Context, args) -> int:
 		Path(args.input),
 		Path(args.output),
 		go_package=args.go_package,
+		rst_anchor_ns=args.rst_anchor_ns,
 	)
 	ctx.printer.put(
 		'codegen', lang=args.lang, input=str(args.input), output=str(args.output)

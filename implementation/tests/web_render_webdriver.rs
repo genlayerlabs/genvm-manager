@@ -2,7 +2,7 @@
 //! connection. `Render` talks to the operator-configured `webdriver_host`, which
 //! in Docker resolves to a private (RFC1918 / loopback) address the SSRF filter
 //! would otherwise drop. That connection must therefore go through the unfiltered
-//! client — while contract-driven `Request` traffic stays filtered.
+//! client -- while contract-driven `Request` traffic stays filtered.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -134,7 +134,7 @@ async fn test_render_webdriver_bypasses_dns_filter() {
     let addr = serve_webdriver(body).await;
 
     // `localhost.direct` resolves publicly to loopback, where our stub is bound.
-    // With `filter_dns = true` the SSRF resolver would drop it — so this only
+    // With `filter_dns = true` the SSRF resolver would drop it -- so this only
     // succeeds because `Render` sends the webdriver request `unfiltered`.
     let webdriver_host = format!("http://localhost.direct:{}", addr.port());
     let uvm = create_web_vm(webdriver_host).await;

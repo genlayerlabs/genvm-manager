@@ -183,7 +183,7 @@ const BIG_PROMPT: &str = r#"
     🌆 Poem Prompt: The Shadow Citizen
     Task: Write a poem, approximately 16-20 lines, about the urban rat. Your goal is to move beyond the simple idea of "pest" and explore the rat as a complex, parallel inhabitant of the city.
 
-    Core Theme: Focus on the rat as a secret-keeper or a historian of the discarded. It moves through the spaces we ignore—the subway tunnels, the forgotten foundations, the labyrinth of pipes. It thrives on what we throw away.
+    Core Theme: Focus on the rat as a secret-keeper or a historian of the discarded. It moves through the spaces we ignore--the subway tunnels, the forgotten foundations, the labyrinth of pipes. It thrives on what we throw away.
 
     Guiding Questions & Imagery:
 

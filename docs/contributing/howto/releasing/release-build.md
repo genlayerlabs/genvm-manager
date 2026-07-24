@@ -14,7 +14,6 @@ Platform suffixes: none (native), `-amd64-linux`, `-arm64-linux`, `-arm64-macos`
 | `executor-<version>[-<platform>]` | one executor line |
 | `artifact-prepack-genvm-<platform>` | a platform's release asset: manager + every active executor line |
 | `artifact-prepack-genvm-universal` | the universal release asset: runners (`runners/` prefix + legacy-line overlay) |
-| `genvm-tool` | the tool itself |
 
 ```bash
 nix build -v -L '.?submodules=1#genvm-amd64-linux'

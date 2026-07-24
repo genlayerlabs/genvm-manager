@@ -36,6 +36,17 @@ on:
 run-name: >-
   GenVM full${{ github.event_name == 'workflow_dispatch' && format(' (manual, PR #{0})', inputs.pr) || '' }}
 
+# One in-flight full run per PR head branch; a newer push cancels the stale run.
+# `github.head_ref` is the PR head branch on pull_request events. Cancelling a
+# superseded head's run is safe: the Merge gate only consumes CI that is green on
+# the exact head it fast-forwards, which is always the newest one. The panel's
+# workflow_dispatch has no head_ref (its `github.ref_name` is `<n>/merge` on PRs,
+# not a branch), so fall back to the unique run id — a manual rerun then gets its
+# own group and never cancels (or is cancelled by) another PR's run.
+concurrency:
+  group: genvm-full-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
 defaults:
   run:
     shell: bash -x {0}

@@ -30,21 +30,21 @@ Two shas that differ but cannot be compared (the executor head commit was not
 pushed to the executor repo, or the line is brand new / removed at one side)
 leave ahead_by/behind_by as None — `.moved` is still meaningful.
 
-Env (for `from_env`): PR_NUMBER, MANAGER_REPO (or GITHUB_REPOSITORY),
-EXECUTOR_REPO, MANAGER_TOKEN, EXECUTOR_TOKEN.
+Inputs (repo slugs, PR number, tokens) are resolved through `gh_common`
+(arg > env > default); tokens are optional and fall back to ambient `gh` auth.
+Use `from_ctx(gh_common.Ctx.from_args(args))` from a tool.
 """
 
 import dataclasses
 import json
-import os
-import subprocess
-import sys
-import time
 
+import gh_common
+from gh_common import (  # re-exported: callers use pr_branches_info.gh / *_DEFAULT
+	EXECUTOR_REPO_DEFAULT,
+	MANAGER_REPO_DEFAULT,
+	gh,
+)
 from tools.versions import active_versions as configured_active_versions
-
-MANAGER_REPO_DEFAULT = 'genlayerlabs/genvm-manager'
-EXECUTOR_REPO_DEFAULT = 'genlayerlabs/genvm-executor'
 
 MANAGER_PATH = '.'
 
@@ -105,69 +105,7 @@ class RepoInfo:
 		}
 
 
-# Every `gh` call here is an idempotent read (`gh api` GET, `gh pr list`), so a
-# transient failure is safe to retry. The one we actually hit is GitHub handing
-# back a truncated/empty body, which gh reports as `unexpected end of JSON input`
-# and which killed the whole executor-precondition gate on a single hiccup; 5xx,
-# rate-limit and network blips are retried for the same reason. A terminal 4xx
-# (notably the 404 that `allow_missing` callers expect for an absent line) is not
-# retried, so that fast path stays fast.
-_RETRY_ATTEMPTS = 4
-_RETRY_BACKOFF_S = 2.0
-
-_TRANSIENT_MARKERS = (
-	'unexpected end of json input',
-	'http 500',
-	'http 502',
-	'http 503',
-	'http 504',
-	'rate limit',
-	'timeout',
-	'timed out',
-	'connection reset',
-	'connection refused',
-	'eof',
-)
-
-
-def _is_transient(r: subprocess.CompletedProcess) -> bool:
-	blob = f'{r.stdout}\n{r.stderr}'.lower()
-	return any(marker in blob for marker in _TRANSIENT_MARKERS)
-
-
-def gh(*args: str, token: str, check: bool = True) -> subprocess.CompletedProcess:
-	"""`gh` with GH_TOKEN bound to the given token (manager- or executor-scoped).
-
-	Retries transient failures (see `_TRANSIENT_MARKERS`) a few times with linear
-	backoff; a terminal failure is returned as-is (or raised, when `check`),
-	exactly as a single `subprocess.run(check=...)` would.
-	"""
-	for attempt in range(_RETRY_ATTEMPTS):
-		result = subprocess.run(
-			['gh', *args],
-			env={**os.environ, 'GH_TOKEN': token},
-			check=False,
-			text=True,
-			capture_output=True,
-		)
-		if result.returncode == 0 or not _is_transient(result):
-			break
-		if attempt + 1 < _RETRY_ATTEMPTS:
-			delay = _RETRY_BACKOFF_S * (attempt + 1)
-			print(
-				f'gh {" ".join(args)}: transient failure, retrying in {delay:.0f}s '
-				f'(attempt {attempt + 1}/{_RETRY_ATTEMPTS})',
-				file=sys.stderr,
-			)
-			time.sleep(delay)
-	if check and result.returncode != 0:
-		raise subprocess.CalledProcessError(
-			result.returncode, result.args, output=result.stdout, stderr=result.stderr
-		)
-	return result
-
-
-def _api(*args: str, token: str, allow_missing: bool = False):
+def _api(*args: str, token: str | None = None, allow_missing: bool = False):
 	"""`gh api` returning parsed JSON, or None on a 404 when allow_missing."""
 	r = gh('api', *args, token=token, check=not allow_missing)
 	if r.returncode != 0:
@@ -316,8 +254,8 @@ def collect(
 	*,
 	manager_repo: str = MANAGER_REPO_DEFAULT,
 	executor_repo: str = EXECUTOR_REPO_DEFAULT,
-	manager_token: str,
-	executor_token: str,
+	manager_token: str | None = None,
+	executor_token: str | None = None,
 ) -> dict[str, RepoInfo]:
 	"""Branch movement for every repo a manager PR touches, keyed by path.
 
@@ -342,16 +280,12 @@ def collect(
 	return infos
 
 
-def from_env(pr_number: str | None = None) -> dict[str, RepoInfo]:
-	"""`collect` with arguments read from the workflow environment.
-
-	`pr_number` overrides $PR_NUMBER when given (e.g. from a CLI argument).
-	"""
+def from_ctx(ctx: gh_common.Ctx) -> dict[str, RepoInfo]:
+	"""`collect` with repos/PR/tokens resolved from a shared `gh_common.Ctx`."""
 	return collect(
-		pr_number or os.environ['PR_NUMBER'],
-		manager_repo=os.environ.get('MANAGER_REPO')
-		or os.environ.get('GITHUB_REPOSITORY', MANAGER_REPO_DEFAULT),
-		executor_repo=os.environ.get('EXECUTOR_REPO', EXECUTOR_REPO_DEFAULT),
-		manager_token=os.environ['MANAGER_TOKEN'],
-		executor_token=os.environ['EXECUTOR_TOKEN'],
+		ctx.pr_number,
+		manager_repo=ctx.manager_repo,
+		executor_repo=ctx.executor_repo,
+		manager_token=gh_common.manager_token(),
+		executor_token=gh_common.executor_token(),
 	)

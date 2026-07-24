@@ -5,7 +5,15 @@ import typing
 
 import ci_lib
 from pipelines import build, checks, docs, release, tests
-from tools import branches, pr_branches, script_adapters, versions
+from tools import (
+	branches,
+	genvm_merge_into_dev,
+	make_release_notes,
+	open_executor_prs,
+	pr_action_panel,
+	pr_branches,
+	versions,
+)
 
 PIPELINES: list[ci_lib.Pipeline] = [
 	*build.COMMANDS,
@@ -18,7 +26,10 @@ TOOLS: list[ci_lib.Tool] = [
 	*versions.COMMANDS,
 	*branches.COMMANDS,
 	*pr_branches.COMMANDS,
-	*script_adapters.COMMANDS,
+	*make_release_notes.COMMANDS,
+	*pr_action_panel.COMMANDS,
+	*genvm_merge_into_dev.COMMANDS,
+	*open_executor_prs.COMMANDS,
 ]
 
 

@@ -57,6 +57,8 @@ async fn test_timeout() {
         .unwrap()
         .to_owned();
     extra_path.push_str("/?.lua");
+    extra_path.push(';');
+    extra_path.push_str(&common::tests::llm_policy_lua_path());
 
     let config = sync::DArc::new(config::Config {
         base: genvm_common::BaseConfig {

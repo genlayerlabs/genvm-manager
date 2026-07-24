@@ -14,6 +14,16 @@ use super::req::Request;
 
 use super::CtxPart;
 
+static START: std::sync::LazyLock<std::time::Instant> =
+    std::sync::LazyLock::new(std::time::Instant::now);
+
+/// Process-relative monotonic milliseconds: comparable only within one process,
+/// not a wall clock. Exists because the Lua sandbox loads no os library.
+fn monotonic_ms() -> mlua::Integer {
+    let elapsed = START.elapsed().as_millis();
+    elapsed.min(mlua::Integer::MAX as u128) as mlua::Integer
+}
+
 impl CtxPart {
     async fn request(&self, vm: &mlua::Lua, req: Request) -> anyhow::Result<mlua::Value> {
         log_trace!(request:serde = req; "received request");
@@ -262,6 +272,38 @@ pub fn create_global(
 
     use rand::TryRngCore;
 
+    // All hashes return raw digest bytes.
+    dflt.set(
+        "sha2_256",
+        vm.create_function(|vm: &mlua::Lua, data: mlua::String| {
+            let digest = ring::digest::digest(&ring::digest::SHA256, &data.as_bytes());
+            vm.create_string(digest.as_ref())
+        })?,
+    )?;
+
+    dflt.set(
+        "sha3_256",
+        vm.create_function(|vm: &mlua::Lua, data: mlua::String| {
+            use sha3::Digest as _;
+            let digest = sha3::Sha3_256::digest(data.as_bytes());
+            vm.create_string(digest.as_slice())
+        })?,
+    )?;
+
+    dflt.set(
+        "keccak256",
+        vm.create_function(|vm: &mlua::Lua, data: mlua::String| {
+            use sha3::Digest as _;
+            let digest = sha3::Keccak256::digest(data.as_bytes());
+            vm.create_string(digest.as_slice())
+        })?,
+    )?;
+
+    dflt.set(
+        "monotonic_ms",
+        vm.create_function(|_: &mlua::Lua, _: ()| Ok(monotonic_ms()))?,
+    )?;
+
     dflt.set(
         "random_bytes",
         vm.create_function(|vm: &mlua::Lua, length: usize| {
@@ -291,4 +333,88 @@ pub fn create_global(
     )?;
 
     Ok(mlua::Value::Table(dflt))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, sync::Arc};
+
+    use super::*;
+
+    fn config() -> crate::common::ModuleBaseConfig {
+        crate::common::ModuleBaseConfig {
+            bind_address: None,
+            lua_script_path: String::new(),
+            vm_count: 1,
+            lua_path: String::new(),
+            signer_url: Arc::from(""),
+            signer_headers: Arc::new(BTreeMap::new()),
+            data_dir: String::new(),
+        }
+    }
+
+    fn dflt_table(vm: &mlua::Lua) -> mlua::Table {
+        match create_global(vm, &config()).unwrap() {
+            mlua::Value::Table(table) => table,
+            _ => panic!("expected table"),
+        }
+    }
+
+    fn hash_hex(name: &str, input: &[u8]) -> String {
+        let vm = mlua::Lua::new();
+        let dflt = dflt_table(&vm);
+        let hash: mlua::Function = dflt.get(name).unwrap();
+        let input = vm.create_string(input).unwrap();
+        let digest: mlua::String = hash.call(input).unwrap();
+        hex::encode(digest.as_bytes())
+    }
+
+    #[test]
+    fn sha2_256_known_vectors() {
+        assert_eq!(
+            hash_hex("sha2_256", b""),
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert_eq!(
+            hash_hex("sha2_256", b"abc"),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn sha3_256_known_vectors() {
+        assert_eq!(
+            hash_hex("sha3_256", b""),
+            "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+        );
+        assert_eq!(
+            hash_hex("sha3_256", b"abc"),
+            "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
+        );
+    }
+
+    #[test]
+    fn keccak256_known_vectors() {
+        // The Ethereum keccak256 of the empty input.
+        assert_eq!(
+            hash_hex("keccak256", b""),
+            "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+        );
+        assert_eq!(
+            hash_hex("keccak256", b"abc"),
+            "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+        );
+    }
+
+    #[test]
+    fn monotonic_ms_is_non_decreasing() {
+        let vm = mlua::Lua::new();
+        let dflt = dflt_table(&vm);
+        let monotonic_ms: mlua::Function = dflt.get("monotonic_ms").unwrap();
+        let first: mlua::Integer = monotonic_ms.call(()).unwrap();
+        let second: mlua::Integer = monotonic_ms.call(()).unwrap();
+
+        assert!(first >= 0);
+        assert!(second >= first);
+    }
 }

@@ -107,7 +107,7 @@ impl GenericValue {
     }
 }
 
-// ── Manual Encode for GenericValue ──────────────────────────────────
+// -- Manual Encode for GenericValue ----------------------------------
 
 impl<W: Writer> Encode<W> for GenericValue {
     type Error = W::Error;
@@ -145,7 +145,7 @@ impl<W: Writer> Encode<W> for GenericValue {
     }
 }
 
-// ── Manual Decode for GenericValue ──────────────────────────────────
+// -- Manual Decode for GenericValue ----------------------------------
 
 impl Decode for GenericValue {
     fn decode<D: Deserializer>(deserializer: D) -> std::result::Result<Self, CalldataError> {
@@ -223,7 +223,7 @@ impl Decode for GenericValue {
     }
 }
 
-// ── Encode / Decode for Result<T> ─────────────────────────────────
+// -- Encode / Decode for Result<T> ---------------------------------
 
 #[derive(Clone, Deserialize, Serialize)]
 pub enum Result<T> {
@@ -936,7 +936,7 @@ fn decode_host_data(val: genlayer_calldata::Value) -> std::result::Result<HostDa
     })
 }
 
-// ── Manual Encode for HostData (flattened serde_json fields) ───────
+// -- Manual Encode for HostData (flattened serde_json fields) -------
 
 /// Helper: encode a serde_json::Value into calldata format.
 fn encode_json_value<W: Writer>(

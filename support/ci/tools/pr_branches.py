@@ -1,8 +1,8 @@
 import argparse
 import json
-import os
 
 import ci_lib
+import gh_common
 import pr_branches_info
 from pr_branches_info import RepoInfo
 
@@ -98,40 +98,43 @@ class PrBranches(ci_lib.Tool):
 
 	def add_to(self, parser: argparse.ArgumentParser) -> None:
 		sub = parser.add_subparsers(dest='cmd', required=True)
-		show = sub.add_parser(
-			'show-info',
-			help='print each repo base/head/ahead_by/behind_by as JSON',
+		gh_common.add_args(
+			sub.add_parser(
+				'show-info',
+				help='print each repo base/head/ahead_by/behind_by as JSON',
+			)
 		)
-		show.add_argument('pr', nargs='?', help='manager PR number (default: $PR_NUMBER)')
-		prov = sub.add_parser(
-			'provision',
-			help='force-push each moved executor line mirror branch and open its PR',
+		gh_common.add_args(
+			sub.add_parser(
+				'provision',
+				help='force-push each moved executor line mirror branch and open its PR',
+			)
 		)
-		prov.add_argument('pr', nargs='?', help='manager PR number (default: $PR_NUMBER)')
-		check = sub.add_parser(
-			'check',
-			help='fail unless every repo is rebased and every executor pinned commit is landable',
+		gh_common.add_args(
+			sub.add_parser(
+				'check',
+				help='fail unless every repo is rebased and every executor pinned commit is landable',
+			)
 		)
-		check.add_argument('pr', nargs='?', help='manager PR number (default: $PR_NUMBER)')
 
 	def show_info(self, args: argparse.Namespace) -> int:
-		infos = pr_branches_info.from_env(args.pr)
+		infos = pr_branches_info.from_ctx(gh_common.Ctx.from_args(args))
 		print(json.dumps({path: info.as_dict() for path, info in infos.items()}, indent=2))
 		return 0
 
 	def provision(self, args: argparse.Namespace) -> int:
-		infos = pr_branches_info.from_env(args.pr)
+		ctx = gh_common.Ctx.from_args(args)
+		infos = pr_branches_info.from_ctx(ctx)
 		manager = infos[pr_branches_info.MANAGER_PATH]
-		pr_number = args.pr or os.environ['PR_NUMBER']
-		manager_token = os.environ['MANAGER_TOKEN']
-		executor_token = os.environ['EXECUTOR_TOKEN']
+		pr_number = ctx.pr_number
+		executor_token = gh_common.executor_token()
 
 		title = pr_branches_info.gh(
 			'api',
 			f'repos/{manager.repo}/pulls/{pr_number}',
 			'--jq',
 			'.title',
-			token=manager_token,
+			token=gh_common.manager_token(),
 		).stdout.strip()
 
 		for info in infos.values():
@@ -174,11 +177,11 @@ class PrBranches(ci_lib.Tool):
 		No PR number (a bare manual dispatch not tied to a PR) is a no-op pass —
 		there is nothing to gate.
 		"""
-		pr = args.pr or os.environ.get('PR_NUMBER') or ''
-		if not pr.strip():
+		ctx = gh_common.Ctx.from_args(args)
+		if not ctx.pr_number_opt:
 			print('no PR number provided; nothing to check')
 			return 0
-		infos = pr_branches_info.from_env(pr)
+		infos = pr_branches_info.from_ctx(ctx)
 
 		errors: list[str] = []
 

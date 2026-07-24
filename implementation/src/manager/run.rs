@@ -1014,7 +1014,7 @@ pub async fn start_genvm(
     });
 
     // Resolve command path. A request may reroute to an explicit executor dir,
-    // but only when running with a debug mode of `safe` or above — production
+    // but only when running with a debug mode of `safe` or above -- production
     // (`disabled`) always uses the manifest-resolved version so consensus can't
     // be steered to a different binary.
     let mut command_path = ctx.executors_path.clone();

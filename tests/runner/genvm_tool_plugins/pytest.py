@@ -18,10 +18,6 @@ default_env.pop('VIRTUAL_ENV', None)
 
 local_ctx = genvm_tool.tests.stage.configuration.current_context()
 
-cargo_target_dir = local_ctx.shared.root_dir.joinpath(
-	'build', 'ya-build', 'rust-target'
-)
-
 # The Python unit-test interpreter is provided by a standalone, pinned nix flake
 # (executors/v0.3.x/support/nix/py-test) that replaced genlayer-py-std's poetry
 # env. It is realised lazily at run time (not collection time, so `test show`

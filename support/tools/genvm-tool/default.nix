@@ -16,6 +16,7 @@ python.pkgs.buildPythonApplication {
     aiohttp
     jsonnet
     shtab
+    argparse-manpage
     ruamel-yaml
     cloudpickle
     python-dotenv
@@ -24,12 +25,16 @@ python.pkgs.buildPythonApplication {
 
   nativeBuildInputs = [ pkgs.installShellFiles ];
 
-  # Generate the shell completions from the freshly built binary (shtab walks the
-  # whole argparse command tree) and drop them in the standard share/ locations.
+  # Generate the shell completions and man page from the freshly built binary
+  # (shtab / argparse-manpage both walk the whole argparse command tree) and drop
+  # them in the standard share/ locations.
   postInstall = ''
     installShellCompletion --cmd genvm-tool \
       --bash <($out/bin/genvm-tool --print-completion bash) \
       --zsh <($out/bin/genvm-tool --print-completion zsh)
+
+    $out/bin/genvm-tool --print-manpage > genvm-tool.1
+    installManPage genvm-tool.1
   '';
 
   doCheck = false;

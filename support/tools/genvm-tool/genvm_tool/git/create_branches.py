@@ -1,16 +1,10 @@
 """`genvm-tool git create-branches` — branch the sub-repos that have new content.
 
-Surveys the manager and every checked-out executor submodule, keeps the ones
-that carry uncommitted or unpushed work, lets you tick which of those to branch,
-and creates the feature branch (`git checkout -b`) across all picked repos.
-
-The logical branch name is shared, but every executor submodule namespaces it
-under `pr/<line>/` (e.g. `pr/v0.3/<name>`) via :meth:`common.Repo.feature_branch`,
-because all executor submodules push to ONE remote (`genvm-executor`) and a bare
-name would collide between two lines branched at once — the `<line>` segment keeps
-them apart. The manager carries the bare name. This keeps the manager and its
-executor submodule in lockstep while staying collision-free, matching the
-line-scoped `v<X>-dev` release branches CI already relies on.
+Surveys the manager and every checked-out executor submodule, keeps the ones with
+uncommitted or unpushed work, lets you tick which of those to branch, and creates
+the feature branch across the picked repos. The manager gets the bare name; each
+executor submodule namespaces it under `pr/<line>/` (e.g. `pr/v0.3/<name>`), since
+they all push to one shared remote.
 """
 
 import subprocess

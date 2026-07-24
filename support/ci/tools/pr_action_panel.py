@@ -33,20 +33,44 @@ dispatch for same-repo branches — the common GenVM flow.)
 Resetting the panel re-fires issue_comment:edited, but that event is sent by
 the bot, so it is ignored — no loop.
 
-Env: GITHUB_REPOSITORY, PR_NUMBER, COMMENT_ID, SENDER, GH_TOKEN.
+Repo and PR number resolve arg > env > default via gh_common; the token is
+optional (ambient `gh` auth when unset). Env also: COMMENT_ID, SENDER.
 """
 
+import argparse
 import os
 import re
 import subprocess
 
-REPO = os.environ['GITHUB_REPOSITORY']
-PR = os.environ['PR_NUMBER']
-COMMENT_ID = os.environ['COMMENT_ID']
-SENDER = os.environ['SENDER']
+import ci_lib
+import gh_common
 
 CI_SAFE_LABEL = 'ci-safe'
 RUN_FULL_TESTS_LABEL = 'run-full-tests'
+
+# Resolved GitHub context (repo, PR number) for this run; set in the handler.
+_CTX: gh_common.Ctx | None = None
+
+
+def _ctx() -> gh_common.Ctx:
+	assert _CTX is not None, 'gh_common.Ctx not initialized (handler must set it)'
+	return _CTX
+
+
+def repo():
+	return _ctx().manager_repo
+
+
+def pr_number():
+	return _ctx().pr_number
+
+
+def comment_id():
+	return os.environ['COMMENT_ID']
+
+
+def sender():
+	return os.environ['SENDER']
 
 
 def run(*args, check=True):
@@ -63,7 +87,9 @@ def set_output(name, value):
 
 
 def labels():
-	out = gh('api', f'repos/{REPO}/issues/{PR}/labels', '--jq', '.[].name').stdout
+	out = gh(
+		'api', f'repos/{repo()}/issues/{pr_number()}/labels', '--jq', '.[].name'
+	).stdout
 	return set(out.splitlines())
 
 
@@ -72,7 +98,7 @@ def add_label(name):
 		'api',
 		'--method',
 		'POST',
-		f'repos/{REPO}/issues/{PR}/labels',
+		f'repos/{repo()}/issues/{pr_number()}/labels',
 		'-f',
 		f'labels[]={name}',
 	)
@@ -80,7 +106,15 @@ def add_label(name):
 
 def head_branch():
 	return gh(
-		'pr', 'view', PR, '--repo', REPO, '--json', 'headRefName', '--jq', '.headRefName'
+		'pr',
+		'view',
+		pr_number(),
+		'--repo',
+		repo(),
+		'--json',
+		'headRefName',
+		'--jq',
+		'.headRefName',
 	).stdout.strip()
 
 
@@ -92,7 +126,17 @@ def dispatch_full_tests():
 	if not branch:
 		print('could not resolve PR head branch; cannot dispatch full tests')
 		return
-	gh('workflow', 'run', 'queue.yaml', '--repo', REPO, '--ref', branch, '-f', f'pr={PR}')
+	gh(
+		'workflow',
+		'run',
+		'queue.yaml',
+		'--repo',
+		repo(),
+		'--ref',
+		branch,
+		'-f',
+		f'pr={pr_number()}',
+	)
 	print(f'dispatched queue.yaml on `{branch}`')
 
 
@@ -105,11 +149,11 @@ def dispatch_provision():
 		'run',
 		'branch_provision_executor_prs.yaml',
 		'--repo',
-		REPO,
+		repo(),
 		'-f',
-		f'pr={PR}',
+		f'pr={pr_number()}',
 	)
-	print(f'dispatched executor provisioning for PR #{PR}')
+	print(f'dispatched executor provisioning for PR #{pr_number()}')
 
 
 def ticked_boxes(body):
@@ -134,18 +178,34 @@ def untick_momentary(body):
 			'api',
 			'--method',
 			'PATCH',
-			f'repos/{REPO}/issues/comments/{COMMENT_ID}',
+			f'repos/{repo()}/issues/comments/{comment_id()}',
 			'-f',
 			f'body={new}',
 		)
 
 
-def main():
+class PrActionPanel(ci_lib.Tool):
+	"""Handle a ticked box on the GenVM PR action panel."""
+
+	def name(self) -> str:
+		return 'pr-action-panel'
+
+	def add_to(self, parser: argparse.ArgumentParser) -> None:
+		gh_common.add_args(parser, executor_repo=False, head_ref=False)
+
+	def handler(self, args: argparse.Namespace) -> int:
+		global _CTX
+		_CTX = gh_common.Ctx.from_args(args)
+		run_panel()
+		return 0
+
+
+def run_panel():
 	set_output('merge', 'false')
 
 	# Ignore the bot's own panel-reset edit (avoids a self-trigger loop).
-	if SENDER.endswith('[bot]'):
-		print(f'{SENDER} is a bot (panel reset echo); ignoring')
+	if sender().endswith('[bot]'):
+		print(f'{sender()} is a bot (panel reset echo); ignoring')
 		return
 
 	current = labels()
@@ -153,7 +213,9 @@ def main():
 		print(f'PR lacks the `{CI_SAFE_LABEL}` label; ignoring panel actions')
 		return
 
-	body = gh('api', f'repos/{REPO}/issues/comments/{COMMENT_ID}', '--jq', '.body').stdout
+	body = gh(
+		'api', f'repos/{repo()}/issues/comments/{comment_id()}', '--jq', '.body'
+	).stdout
 	boxes = ticked_boxes(body)
 	if not boxes:
 		print('no ticked boxes; nothing to do')
@@ -181,5 +243,4 @@ def main():
 	untick_momentary(body)
 
 
-if __name__ == '__main__':
-	main()
+COMMANDS = [PrActionPanel()]

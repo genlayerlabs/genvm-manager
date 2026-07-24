@@ -1,14 +1,24 @@
 """Rust backend for ``genvm-tool codegen`` (ports the old ``rs.rb`` template).
 
-Output is byte-for-byte identical to the previous ruby generator: the build
-regenerates these files in-tree and a non-empty diff would surface as drift.
+Output follows the previous ruby generator, plus the later `prefix_` and
+`is_valid_` additions: the build regenerates these files in-tree and a non-empty
+diff would surface as drift.
 """
 
 from __future__ import annotations
 
 import json
 
-from .model import Const, Consts, Definition, Enum, StrTrie, TrieNode, to_camel
+from .model import (
+	Const,
+	Consts,
+	Definition,
+	Enum,
+	StrTrie,
+	TrieNode,
+	enumerate_paths,
+	to_camel,
+)
 
 
 def _dump(v) -> str:
@@ -96,8 +106,10 @@ def _enum(e: Enum) -> str:
 
 
 def _emit_struct(node: TrieNode, root_name: str, buf: list[str]) -> None:
-	"""Emit one non-root trie struct: children first, then this struct, then its
-	param children (matching the original ruby buffer order)."""
+	"""
+	Emit one non-root trie struct: children first, then this struct, then its
+	param children (matching the original ruby buffer order).
+	"""
 	for _head, child in node.methods:
 		if child.param is None:
 			_emit_struct(child, root_name, buf)
@@ -109,6 +121,9 @@ def _emit_struct(node: TrieNode, root_name: str, buf: list[str]) -> None:
 			f'    pub const fn val(&self) -> {root_name} {{ '
 			f'{root_name}(Cow::Borrowed("{val}")) }}\n'
 		)
+	buf.append("    pub const fn prefix_(&self) -> &'static str {\n")
+	buf.append(f'        "{" ".join(node.parts)}"\n')
+	buf.append('    }\n')
 	for name, parts in node.leaves:
 		val = ' '.join(parts)
 		buf.append(
@@ -183,18 +198,72 @@ def _trie(t: StrTrie, buf: list[str]) -> None:
 		)
 	buf.append('}\n\n')
 
+	_emit_is_valid(t, root_name, buf)
+
+
+def _emit_is_valid(t: StrTrie, root_name: str, buf: list[str]) -> None:
+	"""
+	Emit ``<Root>::is_valid_(&str)``: does this string name a trie path?
+
+	Needed wherever an *externally supplied* code has to be checked against the
+	trie (ADR-013 validates leader-proposed `vm_error` codes this way). Generated
+	rather than hand-written so it cannot drift from the trie data.
+	"""
+	paths = enumerate_paths(t.entries)
+	plain = [p for p, param in paths if param is None]
+	params = [(p, param) for p, param in paths if param is not None]
+
+	# `cargo fmt` runs over the generated files (pre-commit), and it would collapse
+	# the one-entry-per-line `matches!` below onto a single line — leaving codegen
+	# output and committed file permanently disagreeing, so every build dirties the
+	# tree and every commit re-dirties the build.
+	buf.append('#[rustfmt::skip]\n')
+	buf.append(f'impl {root_name} {{\n')
+	buf.append(f'    /// Whether `s` is a well-formed `{t.name}` path.\n')
+	buf.append('    pub fn is_valid_(s: &str) -> bool {\n')
+	if plain:
+		buf.append('        if matches!(s,\n            ')
+		buf.append(' |\n            '.join(json.dumps(p) for p in plain))
+		buf.append('\n        ) {\n')
+		buf.append('            return true;\n')
+		buf.append('        }\n')
+	for path, param in params:
+		prefix = json.dumps(path + ' ')
+		if param == 'str':
+			# A `$str` tail accepts any non-empty remainder.
+			buf.append(f'        if let Some(rest) = s.strip_prefix({prefix}) {{\n')
+			buf.append('            if !rest.is_empty() {\n')
+		else:
+			# The parameter must round-trip: `parse` alone would accept `+7` and
+			# `007`, making several byte-different strings name the same error.
+			# Codes reach consensus hashes, so only the canonical spelling is valid.
+			buf.append(f'        if let Some(rest) = s.strip_prefix({prefix}) {{\n')
+			buf.append(
+				f'            if rest.parse::<{param}>().is_ok_and(|v| v.to_string() == rest) {{\n'
+			)
+		buf.append('                return true;\n')
+		buf.append('            }\n')
+		buf.append('        }\n')
+	buf.append('        false\n')
+	buf.append('    }\n')
+	buf.append('}\n\n')
+
 
 def render(defs: list[Definition], **_opts) -> str:
 	has_str_trie = any(isinstance(d, StrTrie) for d in defs)
-	# Only enums and str-tries derive serde; a const-only data file (e.g.
-	# public-abi-pending.json) must not emit an unused `use serde` import.
-	has_serde = any(isinstance(d, (Enum, StrTrie)) for d in defs)
+	# Serde imports are emitted per actual use: enums derive both halves, a trie
+	# root derives `Serialize` only, and a const-only data file needs neither —
+	# an unused import is a `warnings-as-errors` build failure.
+	has_deserialize = any(isinstance(d, Enum) for d in defs)
+	has_serialize = has_deserialize or has_str_trie
 	buf: list[str] = []
 	buf.append('// This file is auto-generated. Do not edit!\n\n')
 	buf.append('#![allow(dead_code, clippy::redundant_static_lifetimes)]\n')
 	buf.append('\n')
-	if has_serde:
+	if has_deserialize:
 		buf.append('use serde::{Deserialize, Serialize};\n\n')
+	elif has_serialize:
+		buf.append('use serde::Serialize;\n\n')
 	if has_str_trie:
 		buf.append('use std::borrow::Cow;\n\n')
 	for d in defs:
@@ -212,8 +281,10 @@ def render(defs: list[Definition], **_opts) -> str:
 		elif isinstance(d, StrTrie):
 			_trie(d, buf)
 
-	buf.append('\n// EOF\n')
-	return ''.join(buf)
+	# Definitions are emitted blank-line-terminated, so the trailer would stack a
+	# second blank line that `cargo fmt` (which runs over these files) strips —
+	# permanent codegen drift.
+	return ''.join(buf).rstrip('\n') + '\n\n// EOF\n'
 
 
 __all__ = ['render']

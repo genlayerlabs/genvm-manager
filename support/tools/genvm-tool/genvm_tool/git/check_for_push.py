@@ -1,39 +1,15 @@
 """`genvm-tool git check-for-push` — pre-push status across the sub-repos.
 
 Read-only survey of the manager and every executor submodule. For each repo it
-reports, folds into a per-repo `ready` verdict, and suggests the next action:
+reports whether it is dirty, on a branch, committed into the manager, and in sync
+with `origin`, folds that into a `ready` verdict, and prints the next action in
+the add → commit → push pipeline. After the per-repo rows it emits one
+`suggested_push_command` that pushes the ready repos in order (or `none` if any
+repo is not ready). Exits non-zero when any repo is not ready.
 
-	- dirty                — uncommitted work in the tree
-	- on_branch            — on a real branch, not a detached HEAD
-	- committed_in_manager — (submodule) the submodule's HEAD is the gitlink the
-		manager has committed, i.e. the branch advance is
-		recorded in the superproject
-	- in_sync_with_origin  — the branch tip vs its branch on `origin`
-	- action               — the next step in the add → commit → push pipeline
-
-After all repo rows, it emits one aggregated `suggested_push_command` block: a
-newline-joined shell snippet that pushes the ready repos in order, or `none`
-when anything is not ready.
-
-By default the origin comparison is a LIVE `git ls-remote` query. The queries are
-launched up front — one per distinct origin URL (the executor submodules share a
-remote, so they batch into a single multi-ref call) and all in parallel — before
-any local work or output, so their network latency overlaps everything else.
-
-`ls-remote` only yields the remote branch's existence + hash, so when the remote
-holds commits we don't have locally the exact ahead/behind cannot be counted
-without a fetch — surfaced as `fetch (cannot compare with origin)`. Pass
-`--offline` to compare against the local `origin/<branch>` tracking ref (your
-last fetch) with no network.
-
-`same_branch_as_manager` is shown for submodules as context (the line-namespaced
-mirror convention: `feat/x` on the manager maps to `pr/v0.3/feat/x` in the
-executor — see `common.Repo.feature_branch`) but does not gate `ready`. Exit
-status is non-zero when any repo is not ready. An `absent` origin branch is
-still push-ready because `git push` will create it.
-
-This NEVER fetches, resets, switches, or writes anything — `ls-remote` reads the
-remote without updating any local ref.
+By default it queries `origin` live (`git ls-remote`); pass `--offline` to compare
+against your last-fetched `origin/<branch>` instead, with no network. This never
+fetches, resets, switches, or writes anything.
 """
 
 import os

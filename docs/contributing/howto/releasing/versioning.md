@@ -26,8 +26,10 @@ them.
 manager crates to `<new>.0`, and prints the bare major.minor (callers build
 branch names from it).
 
-`support/ci/branch-versions.py list|latest` — prints active trains (leading `v`
-stripped). Branch naming per train `<X>`:
+`support/ci/branch-versions.py list|manager` — `list` prints the active
+executor lines from `active-versions`; `manager` prints the manager's own train
+from `version` (both as bare major.minor). The manager dev/release branches are
+named after `manager`, NOT the executor lines. Branch naming per train `<X>`:
 
 - `v<X>.x` — release branch (release-ready)
 - `v<X>-dev` — integration branch

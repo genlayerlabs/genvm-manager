@@ -49,10 +49,12 @@ class TrieNode:
 
 	``suffix`` is the CamelCase concatenation of the path heads from the root to
 	this node (``''`` at the root); backends use it to name the generated
-	struct/function. ``parts`` is the space-joined path the node maps to. A node is
-	either a *param* node (``param`` set: consumes one typed argument) or a regular
-	node carrying ``leaves`` (terminal strings) and ``methods`` (child nodes),
-	mirroring the original ruby generators.
+	struct/function. ``parts`` is the path from the root to this node (``[]`` at the
+	root), regardless of whether the node is itself a valid string: only when
+	``terminal`` is set does ``' '.join(parts)`` name a leaf. A node is either a
+	*param* node (``param`` set: consumes one typed argument) or a regular node
+	carrying ``leaves`` (terminal strings) and ``methods`` (child nodes), mirroring
+	the original ruby generators.
 	"""
 
 	suffix: str
@@ -99,11 +101,11 @@ def _unfold(entry):
 	return None
 
 
-def _build(entries, prefix_parts: list[str], suffix: str, terminal_parts) -> TrieNode:
+def _build(entries, prefix_parts: list[str], suffix: str, terminal: bool) -> TrieNode:
 	node = TrieNode(
 		suffix=suffix,
-		parts=terminal_parts if terminal_parts is not None else [],
-		terminal=terminal_parts is not None,
+		parts=prefix_parts,
+		terminal=terminal,
 		param=None,
 		leaves=[],
 		methods=[],
@@ -138,8 +140,7 @@ def _build(entries, prefix_parts: list[str], suffix: str, terminal_parts) -> Tri
 				node.leaves.append((head, current))
 				node.order.append(('leaf', head, current))
 			else:
-				child_terminal = current if is_terminal else None
-				child = _build(non_null, current, child_suffix, child_terminal)
+				child = _build(non_null, current, child_suffix, is_terminal)
 				node.methods.append((head, child))
 				node.order.append(('method', head, child))
 	return node
@@ -177,7 +178,7 @@ def parse(data) -> list[Definition]:
 			defs.append(Consts(t['name'], t['repr'], t['values']))
 		elif kind == 'str_trie':
 			entries = [_unfold(e) for e in t['values']]
-			defs.append(StrTrie(t['name'], _build(entries, [], '', None), entries))
+			defs.append(StrTrie(t['name'], _build(entries, [], '', False), entries))
 		else:
 			raise ValueError(f'unknown codegen type {kind!r}')
 	return defs

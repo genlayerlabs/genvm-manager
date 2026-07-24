@@ -30,6 +30,66 @@ The ``data`` portion depends on the result code:
 - **user_error**: :ref:`Calldata Encoded <gvm-def-calldata-encoding>` error value
 - **vm_error**: UTF-8 encoded :ref:`gvm-def-str-trie-vm-error` string
 
+.. _gvm-def-proposed-result-validity:
+
+Validity Of A Proposed Result
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A result the executor did not compute itself — the leader-proposed
+non-deterministic result consumed in :ref:`gvm-def-sync-mode` and
+:ref:`gvm-def-validator-mode` — is accepted only if it satisfies all of the
+following. A rejected proposal never traps and never bypasses the comparison
+stage; it is replaced by a derived :ref:`gvm-def-vm-error` and handed to the
+comparison as if it had been proposed.
+
+#. The buffer is non-empty. An absent or empty proposal yields
+   :ref:`gvm-def-str-trie-value-vm-error-absent-leader-nondet-output`.
+#. ``result_code`` is one of
+   :ref:`gvm-def-enum-value-result-code-return`,
+   :ref:`gvm-def-enum-value-result-code-user-error` or
+   :ref:`gvm-def-enum-value-result-code-vm-error`. Any other byte — including
+   :ref:`gvm-def-enum-value-result-code-internal-error`, which the enumeration
+   admits but the wire format does not — yields
+   :ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-malformed`.
+#. For **return** and **user_error**, ``data`` is valid
+   :ref:`gvm-def-calldata-encoding` with no trailing bytes; otherwise
+   :ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-malformed`.
+#. For **vm_error**, ``data`` is UTF-8, carries no ``" # "`` detail, and names a
+   :ref:`gvm-def-str-trie-vm-error` path, including the canonical spelling of
+   any parameter. Codes outside the trie — among them every
+   :doc:`pending constant <../../appendix/constants-pending>` — yield
+   :ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-malformed`.
+
+An accepted result is preserved **byte for byte**: validation never re-encodes,
+so every node hashes the value that was proposed.
+
+.. _gvm-def-derived-outcome-namespace:
+
+Derived-Outcome Namespace
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Following :ref:`gvm-def-vm-error` codes are derived by the consuming executor
+rather than proposed:
+
+#. :ref:`gvm-def-str-trie-value-vm-error-absent-leader-nondet-output`
+#. :ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-malformed`
+#. :ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-uses-this-error`
+#. :ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-extra`
+
+A proposed code that equals, or extends at a space boundary, either
+``absent_leader_nondet_output`` or ``leader_output`` is replaced by
+:ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-uses-this-error`
+whose parameter is the first 6 characters of the
+:doc:`../../04-contract-interface/06-gvm32` encoding of ``sha3_256`` of the
+proposed code. A proposal that is its own replacement maps to the parameter
+``fix_point``, which cannot collide with a derived parameter because it is 9
+characters long and a derived one is always 6.
+
+This check runs **before** the trie-validity check, so proposing a derived code
+verbatim can never produce output byte-equal to the proposal. Distinct proposals
+may share a parameter; the mapping is deterministic and the value carries no
+meaning beyond identifying the proposal as rejected.
+
 .. _gvm-def-module-result-encoding:
 
 Module Result Encoding

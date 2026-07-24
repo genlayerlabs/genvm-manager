@@ -1,5 +1,6 @@
 local lib = require("lib-genvm")
 local llm = require("lib-llm")
+local llm_policy = require("llm_policy")
 local sqlite3 = require("lsqlite3")
 
 -- There is no guarantee that different genvm executions will be executed in the same lua VM.
@@ -84,17 +85,207 @@ local function compute_timeout(ctx, remaining_gen)
 	return timeout:to_float()
 end
 
-local function just_in_backend(ctx, mapped_prompt, remaining_gen)
-	---@cast mapped_prompt MappedPrompt
+-- llm_policy owns backend selection and the failure state machine; this script
+-- keeps transport, gen accounting, stats, timeouts and the error contract.
+--
+-- The catalog keys a model by "<provider>/<model>", not the bare model name: two
+-- backends may serve the same name with different capabilities, and one key
+-- would let one backend's capabilities vouch for another's. The chain reproduces
+-- the pre-engine ordering: priority desc, provider name desc, model name asc.
+local PROFILE_NAME = "compat"
 
-	local search_in = llm.select_providers_for(mapped_prompt.prompt, mapped_prompt.format)
+local function build_policy_config()
+	local providers = {}
+	local models = {}
+	local chain = {}
 
-	lib.log {
-		level = "debug",
-		message = "executing prompt in backend",
-		prompt = mapped_prompt,
-		search_in = search_in,
+	local provider_names = {}
+	for provider_name, _ in pairs(llm.providers) do
+		table.insert(provider_names, provider_name)
+	end
+
+	table.sort(provider_names, function(a, b)
+		local a_meta = llm.providers[a].meta
+		local b_meta = llm.providers[b].meta
+		local a_priority = a_meta and a_meta.priority or 0
+		local b_priority = b_meta and b_meta.priority or 0
+
+		if a_priority ~= b_priority then
+			return a_priority > b_priority
+		end
+		return a > b -- just compare names
+	end)
+
+	for _, provider_name in ipairs(provider_names) do
+		local provider_data = llm.providers[provider_name]
+
+		-- Placeholders: the engine validates these but never dereferences them;
+		-- host and key stay in Rust.
+		providers[provider_name] = {
+			base_url = "managed-by-genvm",
+			api_kind = "openai_compatible",
+			auth_env = "managed-by-genvm",
+			tier = "partner",
+			discovery = "static",
+		}
+
+		local model_names = {}
+		for model_name, _ in pairs(provider_data.models or {}) do
+			table.insert(model_names, model_name)
+		end
+		table.sort(model_names)
+
+		for _, model_name in ipairs(model_names) do
+			local model_data = provider_data.models[model_name]
+			local family = provider_name .. "/" .. model_name
+
+			models[family] = {
+				served_by = {
+					{ provider = provider_name, provider_model_id = model_name },
+				},
+				capabilities = {
+					supports_json_mode = model_data.supports_json or false,
+					supports_vision = model_data.supports_image or false,
+					supports_seed = true,
+				},
+			}
+
+			table.insert(chain, { provider = provider_name, model = family })
+		end
+	end
+
+	return {
+		providers = providers,
+		models = models,
+		profiles = {
+			[PROFILE_NAME] = {
+				selector = "chain",
+				chain = chain,
+				retry_policy = PROFILE_NAME,
+			},
+		},
+		-- Every failure kind falls through to the next candidate, preserving the
+		-- pre-engine behaviour of retrying on any user error, overloaded or not.
+		retry_policies = {
+			[PROFILE_NAME] = {
+				unknown = { action = "next_candidate" },
+			},
+		},
 	}
+end
+
+-- The engine reads `host` as a plain global. Omitting `call_provider`/`sleep_ms`
+-- keeps its blocking driver unreachable: this script drives execute_step itself.
+_G.host = {
+	now_ms = function()
+		return lib.rs.monotonic_ms()
+	end,
+	log = function(level, event, fields)
+		lib.log { level = level, message = event, fields = fields }
+	end,
+}
+
+local POLICY_CONFIG = build_policy_config()
+
+do
+	-- Reject a bad catalog at module start, not on the first prompt.
+	local ok, err = llm_policy.init(POLICY_CONFIG)
+	if not ok then
+		error("llm_policy rejected the generated catalog: " .. tostring(err))
+	end
+end
+
+--- Describe a mapped prompt to the engine: which capabilities a candidate must
+--- have to be eligible. Mirrors the checks `llm.select_providers_for` performs.
+---@param mapped_prompt MappedPrompt
+---@return table
+local function build_contract(ctx, mapped_prompt)
+	local needs = {}
+	if lib.get_first_from_table(mapped_prompt.prompt.images) ~= nil then
+		table.insert(needs, "vision")
+	end
+
+	local response_format = nil
+	if mapped_prompt.format == "json" or mapped_prompt.format == "bool" then
+		-- bool is parsed out of a json object, so it needs json capability too
+		response_format = { type = "json_object" }
+	end
+
+	return {
+		profile = PROFILE_NAME,
+		requirements = { needs = needs },
+		response_format = response_format,
+		seed = ctx.policy_seed,
+	}
+end
+
+-- Cap on how long a policy-requested backoff may block one prompt.
+local MAX_WAIT_SECONDS = 30
+
+-- Run the (provider, model) the engine asked for. Returns the answer on success
+-- (nil otherwise) and the feedback table to hand back to `execute_step`. A
+-- non-user error is re-raised: it is a runtime fault, not a routing signal.
+local function run_candidate(ctx, mapped_prompt, timeout, request)
+	local provider_name = request.provider_id
+	local model_name = request.served_model_id
+	local model_data = llm.providers[provider_name].models[model_name]
+
+	mapped_prompt.prompt.use_max_completion_tokens = model_data.use_max_completion_tokens
+
+	local call = {
+		provider = provider_name,
+		model = model_name,
+		prompt = mapped_prompt.prompt,
+		format = mapped_prompt.format,
+		timeout = timeout,
+	}
+
+	lib.log { level = "trace", message = "calling exec_prompt_in_provider", request = call }
+	local success, result = pcall(exec_update_policy_data, ctx, call, function(res)
+		-- convert token usage into gen using the per-model rate, and report it
+		-- back as the gen consumed by this call (charged to the host as fuel)
+		local total_tokens = (res.tokens and res.tokens.total) or 0
+		local consumed_gen = rat.new(total_tokens) * gen_per_token(ctx, call.provider, call.model)
+		res.consumed_gen = consumed_gen
+		return consumed_gen
+	end)
+
+	if success then
+		return result, { ok = true }
+	end
+
+	local as_user_error = lib.rs.as_user_error(result)
+	if as_user_error == nil then
+		lib.log { level = "warning", message = "non-user-error", original = result }
+		error(result)
+	end
+
+	local status = as_user_error.ctx and as_user_error.ctx.status
+	lib.log { level = "warning", message = "provider failed, looking for next", error = as_user_error }
+
+	return nil,
+		{
+			ok = false,
+			error_kind = llm.provider_http_error_description(status),
+			http_status = status,
+			-- the engine stores this as a plain string in its trace
+			error_message = table.concat(as_user_error.causes or {}, ","),
+		}
+end
+
+-- Sleep out a policy-requested backoff, bounded by MAX_WAIT_SECONDS. `until_ms`
+-- is on the same monotonic clock the engine reads through `host.now_ms`.
+local function wait_until(until_ms)
+	local delay = ((until_ms or 0) - lib.rs.monotonic_ms()) / 1000
+	if delay <= 0 then
+		return
+	end
+	lib.log { level = "debug", message = "policy backoff", seconds = delay }
+	lib.rs.sleep_seconds(math.min(delay, MAX_WAIT_SECONDS))
+end
+
+local function dispatch_prompt(ctx, mapped_prompt, remaining_gen)
+	---@cast mapped_prompt MappedPrompt
 
 	local timeout = compute_timeout(ctx, remaining_gen)
 	if timeout and timeout < 1 then
@@ -106,100 +297,75 @@ local function just_in_backend(ctx, mapped_prompt, remaining_gen)
 		llm.exhaust()
 	end
 
-	local provider_keys = {}
-	for provider_name, _ in pairs(search_in) do
-		table.insert(provider_keys, provider_name)
-	end
+	local contract = build_contract(ctx, mapped_prompt)
 
-	table.sort(provider_keys, function(a, b)
-		local a_data = search_in[a]
-		local b_data = search_in[b]
+	lib.log {
+		level = "debug",
+		message = "executing prompt in backend",
+		prompt = mapped_prompt,
+		contract = contract,
+	}
 
-		local a_priority = a_data.meta and a_data.meta.priority or 0
-		local b_priority = b_data.meta and b_data.meta.priority or 0
+	local step = llm_policy.execute_step(nil, contract)
+	local answer = nil
 
-		if a_priority ~= b_priority then
-			return a_priority > b_priority
-		end
-		return a > b -- just compare names
-	end)
-
-	for _, provider_name in ipairs(provider_keys) do
-		local provider_data = search_in[provider_name]
-		local model = lib.get_first_from_table(provider_data.models)
-
-		if model == nil then
-			goto continue
-		end
-
-		mapped_prompt.prompt.use_max_completion_tokens = model.value.use_max_completion_tokens
-
-		local request = {
-			provider = provider_name,
-			model = model.key,
-			prompt = mapped_prompt.prompt,
-			format = mapped_prompt.format,
-			timeout = timeout,
-		}
-
-		lib.log {
-			level = "trace",
-			message = "calling exec_prompt_in_provider",
-			request = request,
-		}
-		local success, result = pcall(exec_update_policy_data, ctx, request, function(res)
-			-- convert token usage into gen using the per-model rate, and report it
-			-- back as the gen consumed by this call (charged to the host as fuel)
-			local total_tokens = (res.tokens and res.tokens.total) or 0
-			local consumed_gen = rat.new(total_tokens) * gen_per_token(ctx, request.provider, request.model)
-			res.consumed_gen = consumed_gen
-			return consumed_gen
-		end)
-
-		lib.log {
-			level = "debug",
-			message = "executed with",
-			type = type(result),
-			success = success,
-			result = result,
-		}
-
-		if success then
-			return result
-		end
-
-		local as_user_error = lib.rs.as_user_error(result)
-		if as_user_error == nil then
-			lib.log { level = "warning", message = "non-user-error", original = result }
-
-			error(result)
-		end
-
-		if llm.overloaded_statuses[as_user_error.ctx.status] then
-			lib.log { level = "warning", message = "service is overloaded, looking for next", error = as_user_error }
+	while step.status ~= "done" do
+		if step.status == "call" then
+			local this_answer, feedback = run_candidate(ctx, mapped_prompt, timeout, step.request)
+			answer = this_answer or answer
+			step = llm_policy.execute_step(step.state_handle, nil, feedback)
+		elseif step.status == "wait" then
+			wait_until(step.until_ms)
+			step = llm_policy.execute_step(step.state_handle, nil, nil)
 		else
-			lib.log { level = "error", message = "provider failed", error = as_user_error, request = request }
-			-- lets fall back to retry
-			-- as_user_error.fatal = true
-			-- lib.rs.user_error(as_user_error)
+			error("unexpected policy step status: " .. tostring(step.status))
 		end
-
-		::continue::
 	end
 
-	lib.log { level = "error", message = "no provider could handle prompt", search_in = search_in }
+	if step.result.ok then
+		return answer
+	end
+
+	lib.log {
+		level = "error",
+		message = "no provider could handle prompt",
+		error = step.result.error,
+		trace = step.result.trace,
+	}
 	lib.rs.user_error {
 		causes = { "NO_PROVIDER_FOR_PROMPT" },
 		fatal = true,
 		ctx = {
 			prompt = mapped_prompt.prompt,
-			search_in = search_in,
+			trace = step.result.trace,
 		},
 	}
 end
 
 function Setup(ctx)
 	ctx.stats = {}
+
+	-- The engine keeps mutable routing state (breakers, latency EMA) in module
+	-- scope and a VM is reused across sessions; reset per session so a decision
+	-- never depends on which pooled VM this session got.
+	local ok, err = llm_policy.init(POLICY_CONFIG)
+	if not ok then
+		error("llm_policy rejected the generated catalog: " .. tostring(err))
+	end
+
+	-- Per-session routing seed: true randomness so validators diverge, logged so
+	-- the decision can be replayed from the record. Under the compat chain it is
+	-- inert (only sampling selectors read it); wired now for auditability.
+	local host_data = ctx.host_data or {}
+	local b1, b2, b3, b4 = string.byte(lib.rs.random_bytes(4), 1, 4)
+	ctx.policy_seed = (((b1 * 256 + b2) * 256 + b3) * 256 + b4) % 2147483647
+	lib.log {
+		level = "info",
+		message = "llm policy seed",
+		seed = ctx.policy_seed,
+		tx_id = host_data.tx_id,
+		node_address = host_data.node_address,
+	}
 
 	local gen_per_time_unit_str = ctx.gas_data and ctx.gas_data.genPerTimeUnit
 	local gen_per_time_unit = nil
@@ -334,7 +500,7 @@ function ExecPrompt(ctx, args, remaining_gen)
 
 	local mapped = llm.exec_prompt_transform(args)
 
-	return just_in_backend(ctx, mapped, remaining_gen)
+	return dispatch_prompt(ctx, mapped, remaining_gen)
 end
 
 function ExecPromptTemplate(ctx, args, remaining_gen)
@@ -347,5 +513,5 @@ function ExecPromptTemplate(ctx, args, remaining_gen)
 
 	local mapped = llm.exec_prompt_template_transform(args)
 
-	return just_in_backend(ctx, mapped, remaining_gen)
+	return dispatch_prompt(ctx, mapped, remaining_gen)
 end

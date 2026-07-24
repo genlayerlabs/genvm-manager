@@ -21,7 +21,7 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 	parser.add_argument(
 		'--filter-tag',
 		type=str,
-		help='Only run tests matching this tags, `(a|b)&!c`',
+		help='Only run tests matching these tags, `(a|b)&!c`',
 		default='true',
 		metavar='EXPR',
 	)

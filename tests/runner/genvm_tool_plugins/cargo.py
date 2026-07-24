@@ -19,6 +19,23 @@ BUILD_DIR = Path(build_info['build_dir'])
 TARGET_DIR = Path(build_info['rust_target_dir'])
 COVERAGE_DIR = Path(build_info['coverage_dir'])
 
+if 'rust_target_dirs' not in build_info or 'rust_target' not in build_info:
+	raise RuntimeError(
+		'build/info.json predates per-line cargo target dirs, re-run `genvm-tool configure`'
+	)
+
+# Line checkout -> its own cargo target dir; see `rust_target_dirs_info`. Falling
+# back to the shared dir on a stale info.json would resurrect the cross-line
+# artifact clobbering this exists to prevent, hence the hard error above.
+_LINE_TARGET_DIRS = {
+	Path(mount): Path(target_dir)
+	for mount, target_dir in build_info['rust_target_dirs'].items()
+}
+
+# Passed to every cargo invocation, matching the ninja build: without it cargo
+# builds a separate host unit graph and shares nothing with what ninja compiled.
+RUST_TARGET = build_info['rust_target']
+
 # Add --coverage flag to run parser
 local_ctx.run_parser.add_argument(
 	'--coverage',
@@ -61,6 +78,12 @@ def _get_default_env() -> dict[str, str]:
 	env['AFL_FUZZER_LOOPCOUNT'] = '20'  # without it no coverage will be written!
 	env['AFL_NO_CFG_FUZZING'] = '1'
 	env['AFL_BENCH_UNTIL_CRASH'] = '1'
+	# persistent mode carries state across iterations, so calibration reports
+	# most of the corpus as unstable; the warning is pure noise here
+	env['AFL_NO_WARN_INSTABILITY'] = '1'
+	# drops one "attempting dry run" line per corpus entry; seeds are calibrated
+	# lazily instead, so broken ones surface when they are first fuzzed
+	env['AFL_NO_STARTUP_CALIBRATION'] = '1'
 
 	return env
 
@@ -197,6 +220,20 @@ if _is_coverage_enabled():
 	_profile_objects.append(BUILD_DIR / 'out' / 'bin' / 'genvm-modules')
 
 
+def _target_dir(rust_root_dir: Path) -> Path:
+	"""Target dir for a crate: its line's, or the shared one if it is in no line."""
+	rel = rust_root_dir.relative_to(local_ctx.shared.root_dir)
+	for mount, target_dir in _LINE_TARGET_DIRS.items():
+		if rel.is_relative_to(mount):
+			return target_dir
+	return TARGET_DIR
+
+
+def _artifact_dir(target_dir: Path) -> Path:
+	"""Where `--target` puts built artifacts, as opposed to host build scripts."""
+	return target_dir / RUST_TARGET / 'debug'
+
+
 def _load_cargo_config(
 	rust_root_dir: Path, flags_key: str = 'cargo_test_flags'
 ) -> tuple[dict, dict[str, str], list[str]]:
@@ -269,9 +306,11 @@ def cargo_test(
 
 	cargo_toml = tomllib.loads(rust_root_dir.joinpath('Cargo.toml').read_text())
 
+	target_dir = _target_dir(rust_root_dir)
+
 	# Track deps directory for coverage
 	if _is_coverage_enabled():
-		deps_dir = TARGET_DIR / 'debug' / 'deps'
+		deps_dir = _artifact_dir(target_dir) / 'deps'
 		if deps_dir not in _profile_objects:
 			_profile_objects.append(deps_dir)
 
@@ -280,8 +319,10 @@ def cargo_test(
 		'test',
 		'--message-format=short',
 		'--color=always',
+		'--target',
+		RUST_TARGET,
 		'--target-dir',
-		str(TARGET_DIR),
+		str(target_dir),
 	] + extra_flags
 
 	# 1. Examples - verify compilation
@@ -300,8 +341,10 @@ def cargo_test(
 					'cargo',
 					'check',
 					'--color=always',
+					'--target',
+					RUST_TARGET,
 					'--target-dir',
-					str(TARGET_DIR),
+					str(target_dir),
 					'--example',
 					ex_name,
 				]
@@ -378,9 +421,21 @@ def cargo_fuzz(
 		rust_root_dir, 'cargo_afl_build_flags'
 	)
 
+	target_dir = _target_dir(rust_root_dir)
+
+	# Keyed by crate, not by target name: the lines share fuzz target stems, and
+	# one AFL output dir per stem would mix their corpora — which `cmin` then
+	# writes back into `fuzz/inputs-<name>` under `--fuzz-update-corpus`.
+	out_dir = (
+		local_ctx.shared.artifacts_dir
+		/ 'fuzz'
+		/ rust_root_dir.relative_to(local_ctx.shared.root_dir)
+		/ name
+	)
+
 	# Track fuzz binary for coverage
 	if _is_coverage_enabled():
-		fuzz_binary = TARGET_DIR / 'debug' / 'examples' / f'fuzz-{name}'
+		fuzz_binary = _artifact_dir(target_dir) / 'examples' / f'fuzz-{name}'
 		if fuzz_binary not in _profile_objects:
 			_profile_objects.append(fuzz_binary)
 
@@ -397,8 +452,10 @@ def cargo_fuzz(
 					'cargo-afl',
 					'afl',
 					'build',
+					'--target',
+					RUST_TARGET,
 					'--target-dir',
-					TARGET_DIR,
+					target_dir,
 					'--example',
 					f'fuzz-{name}',
 					'--color=always',
@@ -408,9 +465,7 @@ def cargo_fuzz(
 			),
 			genvm_tool.tests.test.CommandToResultStep(),
 			genvm_tool.tests.test.ResultStopIfErrorStep(),
-			genvm_tool.tests.exec.step.MkDir(
-				path=local_ctx.shared.artifacts_dir / 'fuzz' / name
-			),
+			genvm_tool.tests.exec.step.MkDir(path=out_dir),
 			genvm_tool.tests.exec.step.Run(
 				args=[
 					'cargo-afl',
@@ -423,12 +478,12 @@ def cargo_fuzz(
 					'-i',
 					f'./fuzz/inputs-{name}',
 					'-o',
-					f'{local_ctx.shared.artifacts_dir}/fuzz/{name}',
+					str(out_dir),
 					'-V',
 					str(getattr(ctx.configuration.args, 'fuzz_timeout', 30)),
 					'-t',
 					'5000',
-					f'{TARGET_DIR}/debug/examples/fuzz-{name}',
+					str(_artifact_dir(target_dir) / f'examples/fuzz-{name}'),
 				],
 				mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE_TTY,
 			),
@@ -438,7 +493,7 @@ def cargo_fuzz(
 	)
 
 	if getattr(ctx.configuration.args, 'fuzz_update_corpus', False):
-		opt_dir = local_ctx.shared.artifacts_dir.joinpath('fuzz/', f'{name}-opt')
+		opt_dir = out_dir.parent / f'{name}-opt'
 
 		async def remove_opt_dir(_):
 			if opt_dir.exists():
@@ -462,11 +517,11 @@ def cargo_fuzz(
 					'-T',
 					'all',
 					'-o',
-					f'{local_ctx.shared.artifacts_dir}/fuzz/{name}-opt',
+					str(opt_dir),
 					'-i',
-					f'{local_ctx.shared.artifacts_dir}/fuzz/{name}',
+					str(out_dir),
 					'--',
-					f'{TARGET_DIR}/debug/examples/fuzz-{name}',
+					str(_artifact_dir(target_dir) / f'examples/fuzz-{name}'),
 				],
 				mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE,
 			)

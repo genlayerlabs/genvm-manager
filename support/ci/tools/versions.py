@@ -19,32 +19,57 @@ def version_key(version: str) -> tuple[int, ...]:
 	return tuple(int(part) for part in major_minor(version).split('.'))
 
 
-def active_versions() -> list[str]:
+def load_root_conf() -> dict:
 	conf_path = os.environ.get('MONOREPO_ROOT', ci_lib.ROOT_DIR / '.genvm-monorepo-root')
-	conf = json.loads(open(conf_path, 'rb').read())
+	return json.loads(open(conf_path, 'rb').read())
+
+
+def active_versions() -> list[str]:
+	conf = load_root_conf()
 	return sorted(
 		(bare(version) for version in conf.get('active-versions', [])), key=version_key
 	)
 
 
+def manager_version() -> str:
+	"""The manager's own release train as bare major.minor (e.g. '0.6').
+
+	Read from the `version` field. The manager dev/release branches
+	(`v<X>-dev`, `v<X>.x`) are named after this — NOT after the executor lines
+	in `active-versions`, which move independently (currently v0.2 / v0.3).
+	"""
+	return major_minor(load_root_conf()['version'])
+
+
+def active_lines() -> list[str]:
+	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3']).
+
+	Same data as `active_versions`, prefixed with the `v` the executor branches
+	(`<line>-dev`, `pr/<line>/...`) use. The manager release line is independent of
+	these; a manager PR ships every active line.
+	"""
+	return [f'v{version}' for version in active_versions()]
+
+
 class BranchVersions(ci_lib.Tool):
-	"""Read active version trains from .genvm-monorepo-root."""
+	"""Read version trains from .genvm-monorepo-root.
+
+	`list` yields the active executor lines (`active-versions`); `manager`
+	yields the manager's own train (`version`). These differ — don't use one
+	where the other is meant.
+	"""
 
 	def name(self) -> str:
 		return 'branch-versions'
 
 	def add_to(self, parser: argparse.ArgumentParser) -> None:
-		parser.add_argument('cmd', nargs='?', choices=['list', 'latest'], default='list')
+		parser.add_argument('cmd', nargs='?', choices=['list', 'manager'], default='list')
 
 	def handler(self, args: argparse.Namespace) -> int:
-		versions = active_versions()
-		if args.cmd == 'list':
-			print('\n'.join(versions))
+		if args.cmd == 'manager':
+			print(manager_version())
 			return 0
-		if not versions:
-			print('no active versions configured in .genvm-monorepo-root', file=sys.stderr)
-			return 1
-		print(versions[-1])
+		print('\n'.join(active_versions()))
 		return 0
 
 

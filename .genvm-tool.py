@@ -37,17 +37,27 @@ def tests(ctx):
 		ctx.shared.logger.warning('build/info.json not found, generating default')
 		_build_dir = ctx.shared.root_dir / 'build'
 		_build_dir.mkdir(parents=True, exist_ok=True)
+		_monorepo_cfg = json.loads(
+			(ctx.shared.root_dir / genvm_tool.cmd_configure.MONOREPO_ROOT_FILE).read_text()
+		)
+		_rust_target_dir = _build_dir / 'ya-build' / 'rust-target'
 		_info_path.write_text(
 			json.dumps(
 				{
 					'coverage_dir': str(_build_dir / 'cov'),
 					'build_dir': str(_build_dir),
-					'rust_target_dir': str(_build_dir / 'ya-build' / 'rust-target'),
+					'rust_target_dir': str(_rust_target_dir),
+					'rust_target': genvm_tool.cmd_configure.detect_rust_target(),
 					# executor_versions / primary_executor_version: resolved from
 					# source (.genvm-monorepo-root + committed manifests), so a
 					# build-less test run still knows which out/executor/<real> dir
 					# to reroute to. configure emits the same keys.
-					**genvm_tool.cmd_configure.build_independent_info(ctx.shared.root_dir),
+					**genvm_tool.cmd_configure.build_independent_info(
+						_monorepo_cfg, ctx.shared.root_dir
+					),
+					**genvm_tool.cmd_configure.rust_target_dirs_info(
+						_monorepo_cfg, ctx.shared.root_dir, _rust_target_dir
+					),
 				},
 				indent=2,
 			)

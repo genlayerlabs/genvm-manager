@@ -2,6 +2,7 @@
 
 - [setup.md](setup.md) — first-time clone: submodule init, nix/direnv dev shell, third-party materialization.
 - [genvm-tool.md](genvm-tool.md) — command overview, codegen data → generated files, plugin/test-definition layout.
+- [write-a-script.md](write-a-script.md) — conventions for new helper scripts: python + argparse, integrate into genvm-tool / support/ci.
 
 ## building/
 - [build.md](building/build.md) — debug build: configure + ninja, outputs, cargo quirks.
@@ -17,6 +18,7 @@
 
 ## committing/
 - [submodules.md](committing/submodules.md) — manager + executor lines, gitlink bumps, pre-commit hook, push order.
+- [runners.md](committing/runners.md) — runner dev-mode and hash hygiene before committing an executor line.
 - [git-third-party.md](committing/git-third-party.md) — how vendored trees (wasmtime, …) are tracked, edited, and committed as patches.
 
 ## releasing/

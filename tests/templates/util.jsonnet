@@ -1,6 +1,6 @@
 local addOutPaths(entry, data) =
 	local parentPath = data.parentPath;
-	local treePath = if parentPath == null then std.toString(data.i) else parentPath + '_' + std.toString(data.i);
+	local treePath = (if parentPath == null then "" else parentPath + "_") + data.slug;
 	local suff = '.' + treePath;
 	{
 		entry:
@@ -63,7 +63,7 @@ local expandModes(entry, parentMainTreePath) =
 local recurse(entries, data) =
 	std.flatMap(function(i)
 		local res = std.foldl((function(acc, nxt) nxt(acc.entry, acc.data)), [addOutPaths], {
-			data: data {i: i},
+			data: data { slug: if std.objectHas(entries[i], 'slug') then entries[i].slug else std.toString(i) },
 			entry: entries[i],
 		});
 

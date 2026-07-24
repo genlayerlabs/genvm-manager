@@ -297,6 +297,12 @@
                 entry = "${hooks-python}/bin/python3 support/scripts/md-local-links.py";
                 types = [ "markdown" ];
               };
+              check-source-text = {
+                enable = true;
+                name = "check-source-text";
+                entry = "${hooks-python}/bin/python3 support/scripts/check-source-text.py";
+                files = "\\.rs$";
+              };
               # --- commit-msg -------------------------------------------
               check-commit-message = {
                 enable = true;

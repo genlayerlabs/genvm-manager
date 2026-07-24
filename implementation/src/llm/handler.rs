@@ -59,7 +59,7 @@ impl MessageHandlerProvider<genvm_modules_interfaces::llm::Message, llm_iface::P
         impl MessageHandler<genvm_modules_interfaces::llm::Message, llm_iface::PromptAnswer>,
     > {
         let genvm_id = ctx.scripting.hello.genvm_id;
-        let user_vm = self.vm_pool.get().await;
+        let user_vm = self.vm_pool.get().await?;
 
         let (handler_ctx, ctx_val) = user_vm.create_ctx(&ctx)?;
 

@@ -136,7 +136,7 @@ fn encode_node(node: &MessageAllocationNode, parent_index: U256) -> Vec<u8> {
     buf
 }
 
-/// `abi.encode(InternalMessageParams)` — a dynamic tuple (contains
+/// `abi.encode(InternalMessageParams)` -- a dynamic tuple (contains
 /// `uint256[] rotations`), so it is prefixed with the offset word. `appealRounds`
 /// is reconstructed as `len(rotations) - 1` (the chain-derived value).
 ///
@@ -171,7 +171,7 @@ fn encode_internal_params(params: &InternalMessageParams) -> Vec<u8> {
     buf
 }
 
-/// `abi.encode(ExternalMessageParams)` — a fully static tuple, so it is just
+/// `abi.encode(ExternalMessageParams)` -- a fully static tuple, so it is just
 /// the two inline words with no leading offset.
 fn encode_external_params(params: &ExternalMessageParams) -> Vec<u8> {
     let mut buf = Vec::new();

@@ -1,8 +1,8 @@
 import argparse
-import os
 import subprocess
 
 import ci_lib
+import gh_common
 
 from tools.versions import active_versions
 
@@ -17,6 +17,11 @@ class ProvisionBranches(ci_lib.Tool):
 	def name(self) -> str:
 		return 'provision-branches'
 
+	def add_to(self, parser: argparse.ArgumentParser) -> None:
+		# Only the manager repo is relevant here — it iterates executor lines from
+		# .genvm-monorepo-root, not a single PR/head.
+		gh_common.add_args(parser, executor_repo=False, pr=False, head_ref=False)
+
 	def remote_has(self, branch: str) -> bool:
 		return (
 			ci_lib.run(
@@ -27,6 +32,7 @@ class ProvisionBranches(ci_lib.Tool):
 		)
 
 	def handler(self, args: argparse.Namespace) -> int:
+		repo = gh_common.Ctx.from_args(args).manager_repo
 		ci_lib.run(['git', 'fetch', 'origin', '--prune'])
 
 		pushrefs: list[str] = []
@@ -71,7 +77,6 @@ class ProvisionBranches(ci_lib.Tool):
 		else:
 			print('All branches already exist; nothing to push')
 
-		repo = os.environ['GITHUB_REPOSITORY']
 		for version in active_versions():
 			version_branch = f'v{version}.x'
 			dev_branch = f'v{version}-dev'

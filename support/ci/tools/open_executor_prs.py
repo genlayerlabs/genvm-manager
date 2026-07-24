@@ -2,7 +2,9 @@
 """Open (or reuse) the linked executor PRs for a manager PR and list them on it.
 
 Invoked by .github/workflows/branch_executor_prs.yaml when a manager PR is opened
-against a dev branch. The manager release line (e.g. v0.6) is independent of the
+against a dev branch or its head is pushed (`synchronize`), so mirror branches
+pushed after the PR opens still get linked. The manager release line (e.g. v0.6)
+is independent of the
 executor lines it ships (v0.2, v0.3): one manager PR bundles the work of EVERY
 active executor line, each on its own line-namespaced mirror branch in the shared
 genvm-executor repo (`pr/<line>/<feature>`, see genvm_tool.common.Repo.feature_branch).
@@ -13,64 +15,45 @@ each active line whose mirror branch `pr/<line>/<head>` exists on genvm-executor
 open (or reuse) a PR `pr/<line>/<head>` -> `<line>-dev` there, then upsert a marked
 comment on the manager PR listing each as an `executor: <url>` line.
 
-Two tokens: the executor PRs are created with EXECUTOR_TOKEN (a PAT with
+Two tokens: the executor PRs are created with the executor token (a PAT with
 genvm-executor access — the default GITHUB_TOKEN is manager-scoped and cannot touch
-another repo); the manager comment uses MANAGER_TOKEN (the default GITHUB_TOKEN).
-Never executes PR code — only `gh` API/PR calls.
+another repo); the manager comment uses the manager token. Both are optional and
+fall back to ambient `gh` auth for local runs. Never executes PR code — only `gh`
+API/PR calls.
 
-Env: MANAGER_REPO, EXECUTOR_REPO, PR_NUMBER, HEAD_REF, MANAGER_TOKEN, EXECUTOR_TOKEN.
+Inputs (repos, PR number, head ref) resolve arg > env > default via gh_common.
 """
 
+import argparse
 import json
-import os
-import subprocess
 
-from tools.versions import active_versions as configured_active_versions
+import ci_lib
+import gh_common
+from gh_common import gh
 
-MANAGER_REPO = os.environ['MANAGER_REPO']
-EXECUTOR_REPO = os.environ.get('EXECUTOR_REPO', 'genlayerlabs/genvm-executor')
-PR = os.environ['PR_NUMBER']
-HEAD_REF = os.environ['HEAD_REF']
-MANAGER_TOKEN = os.environ['MANAGER_TOKEN']
-EXECUTOR_TOKEN = os.environ['EXECUTOR_TOKEN']
+from tools.versions import active_lines
 
 # Marker so re-runs update the same comment instead of stacking new ones.
 COMMENT_MARKER = '<!-- genvm-executor-prs -->'
 
 
-def gh(*args, token, check=True):
-	"""`gh` with GH_TOKEN bound to the given token (manager- or executor-scoped)."""
-	return subprocess.run(
-		['gh', *args],
-		env={**os.environ, 'GH_TOKEN': token},
-		check=check,
-		text=True,
-		capture_output=True,
-	)
-
-
-def active_lines() -> list[str]:
-	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3'])."""
-	return [f'v{v}' for v in configured_active_versions()]
-
-
-def executor_branch_exists(branch: str) -> bool:
+def executor_branch_exists(ctx: gh_common.Ctx, branch: str) -> bool:
 	# matching-refs returns [] (not a 404) when nothing matches; it is a prefix
 	# query, so confirm an EXACT ref before treating the branch as present.
 	out = gh(
 		'api',
-		f'repos/{EXECUTOR_REPO}/git/matching-refs/heads/{branch}',
-		token=EXECUTOR_TOKEN,
+		f'repos/{ctx.executor_repo}/git/matching-refs/heads/{branch}',
+		token=gh_common.executor_token(),
 	).stdout
 	return any(r.get('ref') == f'refs/heads/{branch}' for r in json.loads(out or '[]'))
 
 
-def existing_pr(head: str, base: str) -> str | None:
+def existing_pr(ctx: gh_common.Ctx, head: str, base: str) -> str | None:
 	url = gh(
 		'pr',
 		'list',
 		'--repo',
-		EXECUTOR_REPO,
+		ctx.executor_repo,
 		'--head',
 		head,
 		'--base',
@@ -81,34 +64,34 @@ def existing_pr(head: str, base: str) -> str | None:
 		'url',
 		'--jq',
 		'.[0].url // ""',
-		token=EXECUTOR_TOKEN,
+		token=gh_common.executor_token(),
 	).stdout.strip()
 	return url or None
 
 
-def open_pr(head: str, base: str) -> str:
+def open_pr(ctx: gh_common.Ctx, head: str, base: str) -> str:
 	title = gh(
 		'pr',
 		'view',
-		PR,
+		ctx.pr_number,
 		'--repo',
-		MANAGER_REPO,
+		ctx.manager_repo,
 		'--json',
 		'title',
 		'--jq',
 		'.title',
-		token=MANAGER_TOKEN,
+		token=gh_common.manager_token(),
 	).stdout.strip()
 	body = (
-		f'Auto-opened executor mirror of {MANAGER_REPO}#{PR}.\n\n'
-		f'Carries the executor-side work for that manager PR. Closed and its branch '
-		f'`{head}` deleted automatically when the manager PR merges.'
+		f'Auto-opened executor mirror of {ctx.manager_repo}#{ctx.pr_number}.\n\n'
+		f'Carries the executor-side work for that manager PR. Auto-closed as merged '
+		f'when the manager PR lands (its `{head}` branch is moved onto `{base}`).'
 	)
 	r = gh(
 		'pr',
 		'create',
 		'--repo',
-		EXECUTOR_REPO,
+		ctx.executor_repo,
 		'--base',
 		base,
 		'--head',
@@ -117,12 +100,12 @@ def open_pr(head: str, base: str) -> str:
 		title,
 		'--body',
 		body,
-		token=EXECUTOR_TOKEN,
+		token=gh_common.executor_token(),
 		check=False,
 	)
 	if r.returncode != 0:
 		# Lost a race against a concurrent run? Fall back to whatever is open now.
-		url = existing_pr(head, base)
+		url = existing_pr(ctx, head, base)
 		if url:
 			return url
 		raise SystemExit(
@@ -131,53 +114,67 @@ def open_pr(head: str, base: str) -> str:
 	return r.stdout.strip().splitlines()[-1].strip()
 
 
-def upsert_comment(lines: list[str]) -> None:
+def upsert_comment(ctx: gh_common.Ctx, lines: list[str]) -> None:
 	body = f'{COMMENT_MARKER}\n### Linked executor PR(s)\n\n' + '\n'.join(lines) + '\n'
 	ids = gh(
 		'api',
-		f'repos/{MANAGER_REPO}/issues/{PR}/comments',
+		f'repos/{ctx.manager_repo}/issues/{ctx.pr_number}/comments',
 		'--jq',
 		f'.[] | select(.body | contains("{COMMENT_MARKER}")) | .id',
-		token=MANAGER_TOKEN,
+		token=gh_common.manager_token(),
 	).stdout.split()
 	if ids:
 		gh(
 			'api',
 			'--method',
 			'PATCH',
-			f'repos/{MANAGER_REPO}/issues/comments/{ids[0]}',
+			f'repos/{ctx.manager_repo}/issues/comments/{ids[0]}',
 			'-f',
 			f'body={body}',
-			token=MANAGER_TOKEN,
+			token=gh_common.manager_token(),
 		)
 	else:
 		gh(
 			'api',
 			'--method',
 			'POST',
-			f'repos/{MANAGER_REPO}/issues/{PR}/comments',
+			f'repos/{ctx.manager_repo}/issues/{ctx.pr_number}/comments',
 			'-f',
 			f'body={body}',
-			token=MANAGER_TOKEN,
+			token=gh_common.manager_token(),
 		)
 
 
-def main() -> None:
+class OpenExecutorPrs(ci_lib.Tool):
+	"""Open (or reuse) the linked executor PRs for a manager PR and list them on it."""
+
+	def name(self) -> str:
+		return 'open-executor-prs'
+
+	def add_to(self, parser: argparse.ArgumentParser) -> None:
+		gh_common.add_args(parser)
+
+	def handler(self, args: argparse.Namespace) -> int:
+		open_executor_prs(gh_common.Ctx.from_args(args))
+		return 0
+
+
+def open_executor_prs(ctx: gh_common.Ctx) -> None:
+	head_ref = ctx.head_ref  # resolve once (may shell out to git locally)
 	lines = []
 	for line in active_lines():
-		head = f'pr/{line}/{HEAD_REF}'
+		head = f'pr/{line}/{head_ref}'
 		base = f'{line}-dev'
-		if not executor_branch_exists(head):
+		if not executor_branch_exists(ctx, head):
 			print(f'no executor branch `{head}`; skipping {line} (nothing pushed for it)')
 			continue
-		url = existing_pr(head, base) or open_pr(head, base)
+		url = existing_pr(ctx, head, base) or open_pr(ctx, head, base)
 		print(f'{line}: executor PR {url}')
 		lines.append(f'executor: {url}')
 	if lines:
-		upsert_comment(lines)
+		upsert_comment(ctx, lines)
 	else:
 		print('no executor mirror branches found for any active line; nothing to link')
 
 
-if __name__ == '__main__':
-	main()
+COMMANDS = [OpenExecutorPrs()]

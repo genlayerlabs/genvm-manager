@@ -1,12 +1,21 @@
 name: branch / open linked executor PRs
 
-# When a manager PR is opened against a dev branch, open the matching executor
-# PR(s) in the genvm-executor repo. The manager release line is independent of the
-# executor lines it ships, so one manager PR fans out over EVERY active executor
-# line (.genvm-monorepo-root): for each, `pr/<line>/<feature>` -> <line>-dev. Each
-# is listed on the manager PR as an `executor: <url>` line. The executor work lives
-# on line-namespaced mirror branches the developer pushed via
+# When a manager PR is opened (or updated) against a dev branch, open the matching
+# executor PR(s) in the genvm-executor repo. The manager release line is independent
+# of the executor lines it ships, so one manager PR fans out over EVERY active
+# executor line (.genvm-monorepo-root): for each, `pr/<line>/<feature>` -> <line>-dev.
+# Each is listed on the manager PR as an `executor: <url>` line. The executor work
+# lives on line-namespaced mirror branches the developer pushed via
 # `genvm-tool git create-branches`. See `support/ci/run.sh tool open-executor-prs`.
+#
+# `synchronize` (a push to the PR head) re-runs it: executor mirror branches are
+# often pushed after the manager PR is opened, so the initial `opened` run finds
+# nothing to link. `edited` fires when the base branch changes, so a PR opened
+# against `main` and retargeted onto a dev branch (branch_retarget.yaml) also
+# runs — the `opened` event was filtered out because its base was still `main`.
+# The script is idempotent — it reuses any existing executor PR and upserts the
+# same marked comment — so re-running per event just fills in the links as the
+# branches appear.
 #
 # pull_request_target gives a manager-scoped write token for the comment; the
 # cross-repo executor PR needs a PAT with genvm-executor access
@@ -16,7 +25,14 @@ name: branch / open linked executor PRs
 on:
   pull_request_target:
     branches: ['v*-dev']
-    types: [opened]
+    types: [opened, synchronize, reopened, edited]
+
+# Serialize per PR so overlapping pushes don't race on creating the executor PR or
+# upserting the comment; don't cancel in-flight runs — each one is a cheap, safe
+# reconcile and the last state should reflect the latest head.
+concurrency:
+  group: executor-prs-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
 
 permissions:
   pull-requests: write

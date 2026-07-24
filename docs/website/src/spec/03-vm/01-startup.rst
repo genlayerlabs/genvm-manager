@@ -14,6 +14,8 @@ Top-Level Startup
 
 Before executing the root :term:`sub-VM`, :term:`GenVM`:
 
+#. Validates the entry payload against :ref:`gvm-def-contract-call-conv` (see
+   below).
 #. Reads the contract's locked slots and root-slot data.
 #. Resolves the contract code from deployment input or from the contract's
    configured code slot.
@@ -26,6 +28,21 @@ Before executing the root :term:`sub-VM`, :term:`GenVM`:
 If code is supplied with the execution request, that code is the runner source
 for the deployment execution. Otherwise, the runner source is the contract code
 resolved from storage.
+
+.. _gvm-vm-startup-entry-validation:
+
+Entry Payload Validation
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The entry payload is host-supplied and is checked against
+:ref:`gvm-def-contract-call-conv` before permissions are read and before any
+runner loads. A payload that violates the convention produces the
+:ref:`gvm-def-vm-error`
+:ref:`gvm-def-pending-str-trie-value-vm-error-malformed-entry` as the execution
+result, like any other failure at this point.
+
+Messages emitted by :ref:`gvm-def-post-message` and ``DeployContract`` are
+executed later as top-level entries, so they are validated here too.
 
 .. _gvm-vm-startup-message:
 

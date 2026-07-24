@@ -35,6 +35,17 @@ CARGO_LD_LIBRARY_PATH = (
 )
 
 
+def target_dir_for_line(rust_target_dir: Path, key: str) -> Path:
+	"""Cargo target dir for one executor line.
+
+	Lines ship crates with identical names and versions; cargo's artifact hash
+	does not cover where a package came from, so in a shared target dir two lines
+	write the same ``libfoo-<hash>.rlib`` and silently overwrite each other.
+	Everything that runs cargo resolves through here.
+	"""
+	return rust_target_dir / key
+
+
 # --- ninja DSL -------------------------------------------------------------
 
 
@@ -258,17 +269,24 @@ class Ninja:
 	def build(self, rule: str, *outputs) -> Build:
 		return Build(self, rule, outputs)
 
-	def codegen(self, out: Path, lang: str, data: Path) -> None:
+	def codegen(
+		self, out: Path, lang: str, data: Path, extra_flags: list[str] | None = None
+	) -> None:
 		"""Emit one `codegen` edge (`genvm-tool codegen --lang <lang>`).
 
 		Requires the `codegen` rule. The generated file depends on its data JSON and
 		on the codegen backend sources (``codegen_deps``, set by the command) so an
-		edit to either regenerates it.
+		edit to either regenerates it. ``extra_flags`` are appended to the command
+		verbatim (e.g. ``--rst-anchor-ns``).
 		"""
 		b = self.build('codegen', out)
 		b.add_dependency(data)
 		b.add_implicit_dependency(getattr(self, 'codegen_deps', []))
 		b.var('lang', lang)
+		# `var` shell-quotes its value, so an empty one would become a literal ''
+		# argument on every codegen edge.
+		if extra_flags:
+			b.var('extra_flags', ' '.join(extra_flags))
 		b.finish()
 
 	def install(self, frm: str, to: str, phony: Build) -> None:
@@ -377,6 +395,8 @@ class LineContext:
 	data_phony: Build
 	all_bin: Build
 
+	is_support_only: bool
+
 	@property
 	def exec_root(self) -> Path:
 		return self.source_dir / self.exec_rel
@@ -388,12 +408,14 @@ class LineContext:
 
 	@property
 	def line_target_dir(self) -> Path:
-		"""Per-line cargo target dir; lines share crate names so each needs its own."""
-		return self.n.rust_target_dir / self.key
+		"""This line's cargo target dir; see :func:`target_dir_for_line`."""
+		return target_dir_for_line(self.n.rust_target_dir, self.key)
 
-	def codegen(self, out: Path, lang: str, data: Path) -> None:
+	def codegen(
+		self, out: Path, lang: str, data: Path, extra_flags: list[str] | None = None
+	) -> None:
 		"""Emit a codegen edge and register its output on the codegen phony."""
-		self.n.codegen(out, lang, data)
+		self.n.codegen(out, lang, data, extra_flags)
 		self.codegen_phony.add_dependency(out)
 
 	def register_standard_codegen(self) -> None:
@@ -414,12 +436,19 @@ class LineContext:
 			'rust',
 			data / 'host-fns.json',
 		)
+		pending_abi = self.exec_root / 'executor/codegen/data/public-abi-pending.json'
+		if pending_abi.exists():
+			self.codegen(
+				self.exec_root / 'executor/crates/common/src/public_abi_pending.rs',
+				'rust',
+				self.exec_root / 'executor/codegen/data/public-abi-pending.json',
+			)
 
 	def register_standard_crates(self) -> None:
 		"""Build this line's `genvm` binary plus its `common`/`sdk-rs` crates.
 
-		calldata + calldata-derive are shared, manager-root crates (registered
-		once by the command); they are no longer per-line.
+		`calldata` and `calldata-derive` live in this line's tree too but get no
+		edge of their own — they are path deps of the crates listed here.
 		"""
 		td = self.line_target_dir
 		self.n.register_cargo(

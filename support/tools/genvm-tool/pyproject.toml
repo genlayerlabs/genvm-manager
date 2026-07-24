@@ -7,6 +7,7 @@ dependencies = [
     "aiohttp",
     "jsonnet",
     "shtab",
+    "argparse-manpage",
     "ruamel.yaml",
     "cloudpickle",
     "python-dotenv",

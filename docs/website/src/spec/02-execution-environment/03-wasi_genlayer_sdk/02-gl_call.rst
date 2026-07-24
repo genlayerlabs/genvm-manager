@@ -74,8 +74,15 @@ Requirements
 
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-call-others`
+#. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
 Creates a :term:`sub-VM`. See :ref:`gvm-meta-property-derivation`.
+
+The calling convention is checked in the calling :term:`sub-VM`, before the
+callee is spawned. A violation is the caller's own malformed argument, so it is
+answered with ``Errno::Inval`` like the other argument checks and the caller can
+recover — unlike a top-level entry, where the same violation is the execution's
+result (:ref:`gvm-vm-startup-entry-validation`).
 
 .. _gvm-def-post-message:
 
@@ -112,6 +119,7 @@ Requirements
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
 #. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
+#. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
 .. _gvm-gl-call-balance-fees:
 
@@ -206,6 +214,7 @@ Requirements
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
 #. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
+#. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
 Supports CREATE2-style deployment with salt nonce for deterministic addressing.
 ``use_balance`` / ``fee_params`` behave as for :ref:`gvm-gl-call-balance-fees`.

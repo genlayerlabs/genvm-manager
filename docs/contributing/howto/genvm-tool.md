@@ -1,59 +1,46 @@
 # genvm-tool
 
-Lives at `support/tools/genvm-tool` (on PATH as `genvm-tool` in the dev shell;
+Lives at `support/tools/genvm-tool` (on `PATH` as `genvm-tool` in the dev shell;
 outside it, call `support/tools/genvm-tool/genvm-tool`).
 
-## Commands
+## Command reference
 
-| Command | Purpose |
-|---|---|
-| `configure` | generate `build/build.ninja` + `build/info.json` — [build.md](building/build.md) |
-| `test` | run the test suite — [testing/README.md](testing/README.md) |
-| `codegen` | generate language bindings from data JSON (below) |
-| `build-manifest` | generate the manager's `data/manifest.yaml` |
-| `git ls` / `list-repo` / `create-branches` / `check-for-push` | git helpers across manager + submodules — [submodules.md](committing/submodules.md) |
-
-Command registration: `genvm_tool/__main__.py` (`TOPLEVEL`, `GROUPS`); each
-command module has `NAME`/`HELP` — look there for details.
-
-## codegen
+The full man page is generated from the parser itself:
 
 ```bash
-genvm-tool codegen --lang {rust,python,rst,go} -i <data.json> -o <out>
+genvm-tool --print-manpage | man -l -
 ```
 
-(`--go-package` selects the go package name, default `genvm`.)
+## genvm-tool test
 
-Codegen data lives per executor line at
-`executors/v<X>.x/executor/codegen/data/{public-abi.json,host-fns.json}`.
-After editing the JSON, regenerate via the build (`genvm-tool configure` then
-`ninja -C build codegen`) or run `genvm-tool codegen` by hand per the tables:
+```sh
+genvm-tool test run [--filter-name REGEX] [--filter-tag EXPR] [--filter-continue FILE] [--fail-fast]
+```
 
-Per-line generated files (registered by `register_standard_codegen` in
-`tests/runner/genvm_tool_plugins/ninja.py`, paths relative to the line root):
+All given filters must match (they are AND-ed). `--filter-name` is an
+unanchored regex over the test name; `--filter-tag` is a boolean tag
+expression like `(a|b)&!c`.
 
-| Output | Input | Lang |
-|---|---|---|
-| `executor/crates/sdk-rs/src/abi/consts.rs` | `public-abi.json` | rust |
-| `runners/genlayer-py-std/src/genlayer/vm/public_abi.py` | `public-abi.json` | python |
-| `executor/crates/common/src/host_fns.rs` | `host-fns.json` | rust |
+To list every test a filter selects (several hundred entries — pipe it, or use
+the json log format for machine consumption):
 
-Manager-global generated files (from the **primary** line's data, wired in
-`genvm_tool/cmd_configure.py`) — these go stale when a line's codegen JSON
-changes and are refreshed by the same configure/ninja codegen step:
+```sh
+genvm-tool --log-format=json test show test
+```
 
-| Output | Input | Lang |
-|---|---|---|
-| `tests/runner/origin/host_fns.py` | `host-fns.json` | python |
-| `tests/runner/origin/public_abi.py` | `public-abi.json` | python |
-| `docs/website/src/spec/appendix/constants.rst` | `public-abi.json` | rst |
+Full testing workflow: [testing/README.md](testing/README.md).
 
-## Plugins and test definitions
+## genvm-tool git
 
-Plugins (`tests/runner/genvm_tool_plugins/`) are **importable libraries** —
-reusable build/test helpers, no side effects on import. Test *definitions* are
-kept out of the plugin package: each lives in `tests/system/<name>/test.py`
-exposing `collect(ctx, **kwargs)`, and is registered from `.genvm-tool.py` via
-`ctx.collect_dir('tests/system/<name>', ...)` (discovery:
-`genvm_tool/tests/stage/collection.py`). The project entry point overall is
-`.genvm-tool.py` at the repo root (each executor line has its own).
+Multi-repo helpers over the manager and every executor submodule:
+
+| Command | Effect |
+|---|---|
+| `genvm-tool git ls` | list tracked files across all repos |
+| `genvm-tool git list-repo` | list the manager and every executor submodule repo |
+| `genvm-tool git create-branches` | create a feature branch across the sub-repos that have new content |
+| `genvm-tool git check-for-push` | read-only pre-push status; prints the suggested push command |
+
+Where they fit in the workflow:
+[first-contribution tutorial](../tutorial/first-contribution.md),
+[submodules.md](committing/submodules.md).

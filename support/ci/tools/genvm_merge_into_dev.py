@@ -17,7 +17,8 @@ Gates (all required, all on the head commit):
 Strategy: every repo ends up with ONE commit per merged PR. The manager's
 commits are squashed onto base (a single commit that needs no gitlink rewrite is
 fast-forwarded as-is, preserving its SHA); each executor line's commits are
-squashed onto its own dev branch. The PR is closed afterwards.
+squashed onto its own dev branch. Every linked PR is auto-closed as merged
+afterwards (see below).
 
 Executor mirror: the manager release line (e.g. v0.6) is independent of the
 executor lines it ships (v0.2, v0.3), so a single manager commit carries a
@@ -38,10 +39,12 @@ Squashing collapses several authors into one, so `Co-authored-by:` trailers are
 added for every other human author in the range (never tool/AI attribution — the
 commit-message hook rejects that).
 
-After a successful merge each line's executor mirror branch
-(`pr/<line>/<feature>`, opened by branch_executor_prs.yaml) is deleted — its
-tip now lives in the executor's `<line>-dev`, so the branch and its PR are
-redundant.
+After a successful merge every linked PR is auto-closed as MERGED, without deleting
+any branch: each executor line's mirror branch (`pr/<line>/<feature>`, opened by
+branch_executor_prs.yaml) and the manager PR's own head branch are force-moved onto
+the commit that landed on their base, so head == base tip and GitHub marks the PR
+merged. (Deleting a branch, or `gh pr close`, closes the PR as merely 'closed' and
+drops the merged link.)
 
 (The dev -> version release-gate merge is a separate, not-yet-automated
 flow; on that one the executor's version branch is fast-forwarded and its
@@ -51,26 +54,37 @@ Talks to GitHub through the `gh` CLI and moves refs through `git`; it does
 not exec arbitrary PR code, though the workflow checks out this script itself
 from the PR head (gated on the `ci-safe` label). The dev branches are
 protected, so the workflow checks out with the GENVM_CI_PRIVATE_KEY deploy key
-and pushes non-force
-(a base that advanced is safely rejected). The active executor submodules
+and pushes them non-force
+(a base that advanced is safely rejected); the unprotected head/mirror branches
+are instead force-moved onto the landed commit to auto-merge their PRs. The active executor submodules
 must be checked out with a remote `origin` that can push the executor repo
 (the workflow wires its own deploy key); the active lines come from
 .genvm-monorepo-root via tools.versions.
 
-Env: GITHUB_REPOSITORY, PR_NUMBER, GH_TOKEN, E2E_CHECK_PATTERN.
+Repo and PR number resolve arg > env > default via gh_common; the token is
+optional (ambient `gh` auth when unset). Env also: E2E_CHECK_PATTERN.
 """
 
+import argparse
 import json
 import os
 import re
 import subprocess
 import sys
 
-from tools.versions import active_versions as configured_active_versions
+import ci_lib
+import gh_common
+import pr_branches_info
 
-REPO = os.environ['GITHUB_REPOSITORY']
-PR = os.environ['PR_NUMBER']
-E2E_PATTERN = os.environ.get('E2E_CHECK_PATTERN', 'e2e')
+from tools.versions import active_lines
+
+# Resolved GitHub context (repo, PR number) for this run; set in the handler.
+_CTX: gh_common.Ctx | None = None
+
+
+def _ctx() -> gh_common.Ctx:
+	assert _CTX is not None, 'gh_common.Ctx not initialized (handler must set it)'
+	return _CTX
 
 
 def run(*args, check=True, env=None):
@@ -82,7 +96,12 @@ def run(*args, check=True, env=None):
 
 
 def gh(*args):
-	return run('gh', *args).stdout
+	"""GitHub API/PR *reads* via the retrying wrapper shared with pr_branches_info,
+	so a transient truncated-JSON / 5xx blip on a gate query doesn't fail the whole
+	merge (the exact fragility that wrapper was hardened against). Writes stay on
+	plain `run('gh', ...)` so a retry can't double-post a comment. Token is optional
+	(ambient `gh` auth when unset)."""
+	return pr_branches_info.gh(*args, token=gh_common.manager_token()).stdout
 
 
 def git(*args, check=True):
@@ -99,6 +118,18 @@ def is_ancestor(repo, maybe_ancestor, descendant):
 	if repo is None:
 		return git(*args, check=False).returncode == 0
 	return egit(repo, *args, check=False).returncode == 0
+
+
+def repo():
+	return _ctx().manager_repo
+
+
+def pr_number():
+	return _ctx().pr_number
+
+
+def e2e_pattern():
+	return os.environ.get('E2E_CHECK_PATTERN', 'e2e')
 
 
 # Identities the commit-message hook rejects as AI/tool attribution
@@ -157,21 +188,15 @@ def coauthor_trailers(repo, rev_range, exclude):
 	return trailers
 
 
-def active_lines():
-	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3']). The manager
-	release line is independent of these; a manager PR ships every active line."""
-	return [f'v{v}' for v in configured_active_versions()]
-
-
 def block(msg):
 	"""Comment the reason on the PR and fail the job."""
 	run(
 		'gh',
 		'pr',
 		'comment',
-		PR,
+		pr_number(),
 		'--repo',
-		REPO,
+		repo(),
 		'--body',
 		f'❌ Merge blocked: {msg}',
 		check=False,
@@ -180,7 +205,7 @@ def block(msg):
 
 
 def pr_view(*fields):
-	out = gh('pr', 'view', PR, '--repo', REPO, '--json', ','.join(fields))
+	out = gh('pr', 'view', pr_number(), '--repo', repo(), '--json', ','.join(fields))
 	return json.loads(out)
 
 
@@ -209,7 +234,7 @@ def check_gates(pr):
 	runs = json.loads(
 		gh(
 			'api',
-			f'repos/{REPO}/actions/workflows/queue.yaml/runs?head_sha={head_sha}',
+			f'repos/{repo()}/actions/workflows/queue.yaml/runs?head_sha={head_sha}',
 		)
 	)['workflow_runs']
 	if not any(r['status'] == 'completed' and r['conclusion'] == 'success' for r in runs):
@@ -220,10 +245,10 @@ def check_gates(pr):
 	checks = json.loads(
 		gh(
 			'api',
-			f'repos/{REPO}/commits/{head_sha}/check-runs?per_page=100',
+			f'repos/{repo()}/commits/{head_sha}/check-runs?per_page=100',
 		)
 	)['check_runs']
-	e2e = [c for c in checks if re.search(E2E_PATTERN, c['name'], re.I)]
+	e2e = [c for c in checks if re.search(e2e_pattern(), c['name'], re.I)]
 	if not e2e:
 		block(f'no E2E check found on `{head_sha}` (run it on this PR first).')
 	bad = [c for c in e2e if c['conclusion'] != 'success']
@@ -234,22 +259,75 @@ def check_gates(pr):
 	return base, head_sha
 
 
-def delete_executor_mirror_branch(submodule, line, head_ref):
-	"""Delete the executor mirror branch `pr/<line>/<head_ref>` after a merge.
+def land_executor_mirror_branch(submodule, line, head_ref, landed):
+	"""Move the executor mirror branch `pr/<line>/<head_ref>` onto `landed` after a merge.
 
-	The manager PR's work for this line lived on that namespaced branch; its tip is
-	now contained in the executor's `<line>-dev` (we just fast-forwarded it there),
-	so the branch — and the auto-opened executor PR it backed (branch_executor_prs.yaml)
-	— are redundant. Deleting the branch also closes that PR. Best-effort: a failure
-	here never unwinds an otherwise-complete merge. The branch is unprotected, so the
-	executor deploy key can delete it.
+	The manager PR's work for this line now sits on the executor's `<line>-dev` at
+	`landed` (we just pushed it there); force-moving the mirror branch to that SAME
+	commit makes its auto-opened PR (`pr/<line>/<head_ref>` -> `<line>-dev`,
+	branch_executor_prs.yaml) have head == base, so GitHub auto-closes it as MERGED.
+	(Deleting the branch — the old behaviour — closed that PR as merely 'closed', and
+	dropped the merged link.) Best-effort: a failure here never unwinds an otherwise
+	-complete merge. The branch is unprotected, so the executor deploy key can move it.
+
+	Only lines this PR actually moved were provisioned a mirror branch + PR
+	(branch_executor_prs.yaml); an untouched line has none, and force-pushing would
+	CREATE a stray dangling ref (the old delete was a harmless no-op when absent) — so
+	land only a branch that already exists. `plan_executor_line` fetched every executor
+	head into `refs/remotes/origin/*`, so the mirror branch is present locally iff it
+	exists on the remote.
 	"""
 	branch = f'pr/{line}/{head_ref}'
-	r = egit(submodule, 'push', 'origin', '--delete', branch, check=False)
+	if (
+		egit(
+			submodule,
+			'rev-parse',
+			'--verify',
+			'--quiet',
+			f'refs/remotes/origin/{branch}',
+			check=False,
+		).returncode
+		!= 0
+	):
+		print(f'no executor mirror branch {branch}; nothing to auto-merge for {line}')
+		return
+	r = egit(
+		submodule, 'push', '--force', 'origin', f'{landed}:refs/heads/{branch}', check=False
+	)
 	if r.returncode == 0:
-		print(f'deleted executor mirror branch {branch}')
+		print(
+			f'landed executor mirror branch {branch} -> {landed[:12]} (auto-merges its PR)'
+		)
 	else:
-		print(f'note: could not delete executor mirror branch {branch}: {r.stderr.strip()}')
+		print(f'note: could not land executor mirror branch {branch}: {r.stderr.strip()}')
+
+
+def close_manager_pr(pr, push_sha):
+	"""Auto-close the manager PR as MERGED by moving its head branch onto `push_sha`.
+
+	`push_sha` is the commit we just landed on the manager `<base>`; force-moving the
+	PR head branch onto it makes head == base tip, so GitHub marks the PR merged —
+	the same trick as the executor mirrors, and unlike a bare `gh pr close` (which
+	reads as merely 'closed').
+
+	A fork PR's head branch lives in another repo, so `<head_ref>` is not a branch on
+	`origin` — moving it would create a stray branch and not touch the PR. Those never
+	reach here (the merge gate needs a same-repo run), but be explicit: cross-repo PRs
+	fall back to a plain close. Best-effort.
+	"""
+	head_ref = pr['headRefName']
+	if pr.get('isCrossRepository'):
+		print(f'PR head `{head_ref}` is on a fork; closing explicitly (cannot move it)')
+		run('gh', 'pr', 'close', pr_number(), '--repo', repo(), check=False)
+		return
+	r = git('push', '--force', 'origin', f'{push_sha}:refs/heads/{head_ref}', check=False)
+	if r.returncode == 0:
+		print(f'moved manager PR head `{head_ref}` -> {push_sha[:12]} (auto-merges the PR)')
+	else:
+		print(
+			f'note: could not move PR head `{head_ref}` ({r.stderr.strip()}); closing explicitly'
+		)
+		run('gh', 'pr', 'close', pr_number(), '--repo', repo(), check=False)
 
 
 def executor_gitlink(commit, submodule):
@@ -292,7 +370,7 @@ def build_messages(pr):
 	).strip()
 	title = pr['title']
 	tail = f'\n\n{body}\n' if body else '\n'
-	return f'{title} (#{PR}){tail}', f'{title} ({REPO}#{PR}){tail}'
+	return f'{title} (#{pr_number()}){tail}', f'{title} ({repo()}#{pr_number()}){tail}'
 
 
 def already_squashed(submodule, exec_base, exec_sha):
@@ -448,7 +526,7 @@ def merge(pr, base, head_sha):
 		'fetch',
 		'--no-tags',
 		'origin',
-		f'refs/pull/{PR}/head:refs/prhead',
+		f'refs/pull/{pr_number()}/head:refs/prhead',
 		f'+refs/heads/{base}:refs/remotes/origin/{base}',
 	)
 
@@ -533,7 +611,6 @@ def merge(pr, base, head_sha):
 	# Push the executors first: the manager commit gitlinks into them, so the
 	# dependencies must land before the referrer.
 	push_executor_lines(plans)
-	pinned = [(submodule, line) for submodule, line, _b, _p, _l, _push in plans]
 
 	# Non-force FF push; rejected if base advanced since the checks. The
 	# executors are already advanced at this point; a rejection here leaves them
@@ -551,21 +628,40 @@ def merge(pr, base, head_sha):
 		'gh',
 		'pr',
 		'comment',
-		PR,
+		pr_number(),
 		'--repo',
-		REPO,
+		repo(),
 		'--body',
 		f'✅ Merged into `{base}` (`{push_sha}`) via fast-forward.',
 		check=False,
 	)
-	run('gh', 'pr', 'close', PR, '--repo', REPO, check=False)
 
-	# Clean up the now-redundant executor mirror branches (and the PRs they backed).
-	for submodule, line in pinned:
-		delete_executor_mirror_branch(submodule, line, pr['headRefName'])
+	# Everything landed. Now auto-close every linked PR as MERGED by moving its head
+	# branch onto the commit that reached its base (head == base tip). This replaces
+	# deleting the executor mirror branches / a bare manager `gh pr close`, both of
+	# which dropped the merged link. Best-effort and last: the land already succeeded.
+	for submodule, line, _base, _pinned, landed, _push in plans:
+		land_executor_mirror_branch(submodule, line, pr['headRefName'], landed)
+	close_manager_pr(pr, push_sha)
 
 
-def main():
+class GenvmMergeIntoDev(ci_lib.Tool):
+	"""Gate and perform a Merge of a PR into a v<X>-dev branch."""
+
+	def name(self) -> str:
+		return 'genvm-merge-into-dev'
+
+	def add_to(self, parser: argparse.ArgumentParser) -> None:
+		gh_common.add_args(parser, executor_repo=False, head_ref=False)
+
+	def handler(self, args: argparse.Namespace) -> int:
+		global _CTX
+		_CTX = gh_common.Ctx.from_args(args)
+		merge_into_dev()
+		return 0
+
+
+def merge_into_dev():
 	pr = pr_view(
 		'baseRefName',
 		'headRefName',
@@ -576,10 +672,10 @@ def main():
 		'isDraft',
 		'title',
 		'body',
+		'isCrossRepository',
 	)
 	base, head_sha = check_gates(pr)
 	merge(pr, base, head_sha)
 
 
-if __name__ == '__main__':
-	main()
+COMMANDS = [GenvmMergeIntoDev()]

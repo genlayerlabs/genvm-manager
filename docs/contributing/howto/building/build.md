@@ -38,3 +38,11 @@ Getting or changing runners: [runners.md](runners.md), [modify-runner.md](../ext
 - In this nix environment, `cargo check` inside an executor's `executor/` dir
   may need `LD_LIBRARY_PATH="$(nix eval --raw nixpkgs#zlib)/lib"` so rustc
   finds libz.
+- Each executor line gets its own cargo target dir
+  (`build/ya-build/rust-target/<line>`, listed in `build/info.json` under
+  `rust_target_dirs`); crates outside a line use the parent dir. Lines ship
+  crates with identical names and versions, and cargo's artifact hash ignores
+  where a package came from, so a shared dir lets them overwrite each other.
+- Build and tests both pass `--target <host triple>` (`rust_target` in
+  `build/info.json`). Omitting it builds a second, unshared unit graph in the
+  same dir, so running cargo by hand without it recompiles everything.
