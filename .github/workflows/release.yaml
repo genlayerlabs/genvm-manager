@@ -67,7 +67,9 @@ jobs:
     needs: [build-and-test]
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Needed for creating releases
+      attestations: write  # Signed provenance for the exact release assets
+      contents: write      # Tag and release creation
+      id-token: write      # Short-lived Sigstore signing identity
     steps:
       - uses: actions/checkout@v4
         with:
@@ -113,6 +115,11 @@ jobs:
               exit 1
             }
           done
+
+      - name: Attest release asset build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: release-assets/*.tar.xz
 
       - name: Tag the release
         env:
