@@ -53,7 +53,7 @@ jobs:
       artifact_notes: ${{ steps.plan.outputs.artifact_notes }}
       notes_file: ${{ steps.plan.outputs.notes_file }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Each line's manifest.json (its executor-version) lives in the
           # submodule, so the gitlinks must be materialized.
@@ -71,7 +71,7 @@ jobs:
     needs: plan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # make-release-notes diffs against the previous tag via `git describe`.
           fetch-depth: 0
@@ -90,7 +90,7 @@ jobs:
           fi
           # Echoed so a debug run needs no artifact download.
           cat "$NOTES_FILE"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ needs.plan.outputs.artifact_notes }}
           path: ${{ needs.plan.outputs.notes_file }}
