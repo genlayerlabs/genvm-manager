@@ -136,5 +136,14 @@ jobs:
           name: Release ${{ needs.build-and-test.outputs.tag }}
           tag_name: ${{ needs.build-and-test.outputs.tag }}
           body_path: artifacts/notes/${{ needs.build-and-test.outputs.notes_file }}
-          draft: false
+          # Immutable releases lock as soon as they are published. Build the
+          # complete release as a draft so every attested asset is attached
+          # before publication.
+          draft: true
           prerelease: ${{ contains(needs.build-and-test.outputs.tag, '-') }}
+
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build-and-test.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false
