@@ -91,6 +91,23 @@ def fetch_pr_refs(base_ref: str, pr_number: str) -> tuple[str, str]:
 	return merge_base, head
 
 
+def gh(*args: str) -> str:
+	proc = subprocess.run(['gh', *args], check=True, capture_output=True, text=True)
+	return proc.stdout.strip()
+
+
+def base_ref_of(pr_number: str) -> str:
+	"""The PR's base branch, read from the API.
+
+	`GITHUB_BASE_REF` is only set on `pull_request` events, but these checks also
+	run on the panel's `workflow_dispatch`, where the PR number is known and the
+	event payload is not. Falling back to "not a pull request" there would report
+	no changes at all — a silent pass.
+	"""
+	repo = os.environ.get('GITHUB_REPOSITORY', '')
+	return gh('api', f'repos/{repo}/pulls/{pr_number}', '--jq', '.base.ref')
+
+
 def main() -> int:
 	parser = argparse.ArgumentParser(description=__doc__)
 	parser.add_argument(
@@ -100,13 +117,17 @@ def main() -> int:
 	)
 	args = parser.parse_args()
 
-	event = os.environ.get('GITHUB_EVENT_NAME', '')
 	base_ref = os.environ.get('GITHUB_BASE_REF', '')
 	pr_number = os.environ.get('GITHUB_PR_NUMBER', '')
 
 	paths = [MANAGER, *submodule_paths()]
 
-	if event == 'pull_request' and base_ref and pr_number:
+	# Keyed off the PR NUMBER, not the event name: the number is available on
+	# every event that validates a PR, and keying off `pull_request` made this
+	# silently report "no changes" on panel-dispatched runs.
+	if pr_number:
+		if not base_ref:
+			base_ref = base_ref_of(pr_number)
 		base, head = fetch_pr_refs(base_ref, pr_number)
 	else:
 		# Not a pull request: nothing to diff against.

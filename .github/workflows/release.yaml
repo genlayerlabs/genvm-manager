@@ -27,7 +27,7 @@ on:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 permissions:
   actions: read
@@ -40,6 +40,7 @@ jobs:
   # seconds instead of after three platform builds.
   check-tag:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Ensure tag is free
@@ -66,6 +67,7 @@ jobs:
   release-publish:
     needs: [build-and-test]
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: write  # Needed for creating releases
     steps:

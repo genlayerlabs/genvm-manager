@@ -10,9 +10,8 @@ name: GenVM full
 #     executor landability precondition) ALWAYS run, in parallel;
 #   - `gate-check` aggregates them and plans the test matrix (plan-queue-matrix);
 #     the heavy `matrix-tests` cells run only when a run-full-tests marker is set
-#     — the `rtm` (ready-to-merge) label or the `run-full-tests` label ("Force run
-#     full tests" sets the latter). Without a marker the plan is empty, so
-#     matrix-tests is skipped;
+#     — the `run-full-tests` label ("Force run full tests" sets it). Without a
+#     marker the plan is empty, so matrix-tests is skipped;
 #   - without a marker `validate-end` fails, so the CI check stays red
 #     until a full run has happened.
 #
@@ -25,6 +24,11 @@ name: GenVM full
 on:
   pull_request:
     branches: ['v*-dev']
+    # Deliberately NOT `edited`: this workflow's concurrency group cancels
+    # in-flight runs, so a typo fix in the PR body would kill a running
+    # matrix-tests cell (over an hour of work). The PR title can therefore be
+    # edited to something invalid after `initial / pr-title` went green — the
+    # Merge action re-checks it against the title it is about to land.
     types: [opened, synchronize, reopened, ready_for_review, labeled]
   workflow_dispatch:
     inputs:
@@ -49,14 +53,18 @@ concurrency:
 
 defaults:
   run:
-    shell: bash -x {0}
-
-env:
-  GCS_BUCKET: "gh-af"
+    shell: bash -exo pipefail {0}
 
 jobs:
   initial:
     uses: ./.github/workflows/incl_initial.yaml
+    with:
+      # Resolved from whichever event triggered this run, so the PR-scoped
+      # checks run on BOTH a push and a panel dispatch. They used to test
+      # `github.event_name == 'pull_request'` themselves and so skipped on every
+      # dispatched run — while that run could still conclude `success` and be
+      # accepted by the Merge gate, which takes ANY green run on the head sha.
+      pr: ${{ github.event.pull_request.number || inputs.pr }}
     secrets: inherit
 
   # Precondition (run.sh tool pr-branches check): the PR must be landable via the
@@ -82,10 +90,14 @@ jobs:
       (github.event_name == 'pull_request' &&
        github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ github.event.pull_request.number || inputs.pr }}/head
+          # Read-only gh API calls; nothing here pushes, so the checkout
+          # credential should not survive into the PR code this job runs.
+          persist-credentials: false
       - name: Executor mirror PRs are landed
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
@@ -97,6 +109,7 @@ jobs:
   gate-check:
     needs: [initial, check-executor-prs]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: ${{ always() }}
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
@@ -121,7 +134,7 @@ jobs:
         env:
           # Heavy cells run only with a marker; without one the plan is empty and
           # matrix-tests is skipped.
-          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
         run: ./support/ci/run.sh pipeline plan-queue-matrix
 
   matrix-tests:
@@ -155,13 +168,14 @@ jobs:
 
   validate-end:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: ${{ always() }}
     needs:
       - initial
       - gate-check
       - matrix-tests
     env:
-      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
     steps:
       - name: check
         run: |
@@ -173,12 +187,16 @@ jobs:
           # No run-full-tests marker -> heavy tests were skipped; keep the
           # gate red so the PR is not mergeable until they run.
           if [ "$HAS_MARKER" != "true" ]; then
-            echo "::error::full tests have not run — add the 'rtm' label or check 'Force run full tests' on the action panel"
+            echo "::error::full tests have not run — check 'Force run full tests' on the action panel or add the 'run-full-tests' label"
             exit 1
           fi
           results="${{ needs.matrix-tests.result }}"
           echo "$results"
-          if echo "$results" | grep -qiE '(failure|cancelled|skipped)'; then
+          # Herestring, not `echo "$results" |`: this is the last gate before a
+          # PR is mergeable, and under `pipefail` a non-zero left-hand side would
+          # make the condition false — i.e. fail OPEN, reporting green for a
+          # matrix that failed. Nothing should be able to swallow that.
+          if grep -qiE '(failure|cancelled|skipped)' <<<"$results"; then
             echo "::error::one or more full-test jobs failed/cancelled/skipped"
             exit 1
           fi

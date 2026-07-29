@@ -12,6 +12,14 @@ inputs:
   github_token:
     description: GitHub token for nix setup
     required: false
+  pr:
+    description: >-
+      PR number to diff against, overriding `github.event.pull_request.number`.
+      A caller invoked by `workflow_dispatch` has no pull_request payload but
+      does know the number, and without this its `changes` output would come
+      back empty — silently checking nothing.
+    required: false
+    default: ""
 outputs:
   changes:
     description: >-
@@ -28,12 +36,13 @@ runs:
         git config --global user.email "ci@genlayerlabs.com"
         git config --global user.name "CI worker"
         python3 support/scripts/get-all-git.py "--third-party=${{ inputs.third_party }}"
-      shell: bash -ex {0}
+      shell: bash -exo pipefail {0}
     - name: compute per-repo changes
       id: changes
-      shell: bash
+      shell: bash -exo pipefail {0}
       env:
-        GITHUB_PR_NUMBER: ${{ github.event.pull_request.number }}
+        GITHUB_PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+        GH_TOKEN: ${{ inputs.github_token }}
       run: |
         cd "$GITHUB_WORKSPACE"
         python3 support/scripts/ci-changes.py --github-output

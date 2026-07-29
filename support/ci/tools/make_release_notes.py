@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Generate categorized release notes from conventional commits."""
+"""
+Generate categorized release notes from conventional commits.
+"""
 
 import argparse
 import re
@@ -14,7 +16,8 @@ import ci_lib
 
 
 def strip_trailing_emoji(text: str) -> str:
-	"""Drop the trailing gitmoji suffix (and its variation selectors/ZWJ).
+	"""
+	Drop the trailing gitmoji suffix (and its variation selectors/ZWJ).
 
 	Commit subjects follow ``type(scope): summary <emoji>``; the category
 	heading already conveys the type, so the emoji is redundant noise here.
@@ -35,7 +38,9 @@ NOREPLY_RE = re.compile(
 
 
 def format_author(email: str) -> str:
-	"""Collapse GitHub noreply addresses to ``@handle``; keep real emails as-is."""
+	"""
+	Collapse GitHub noreply addresses to ``@handle``; keep real emails as-is.
+	"""
 	m = NOREPLY_RE.fullmatch(email)
 	return f'@{m.group("handle")}' if m else email
 
@@ -62,7 +67,8 @@ class CommitEntry:
 
 
 def parse_git_log(rev_range: str, *, dir: Path | None = None) -> list[CommitEntry]:
-	"""Run git log and return parsed commit entries.
+	"""
+	Run git log and return parsed commit entries.
 
 	Body lines that look like ``* type: description`` are promoted to top-level
 	entries so they get categorised on their own (inheriting the commit's
@@ -149,7 +155,9 @@ def format_notes(categories: dict[str, list[str]], rev_range: str) -> str:
 
 
 class MakeReleaseNotes(ci_lib.Tool):
-	"""Generate categorized release notes from conventional commits."""
+	"""
+	Generate categorized release notes from conventional commits.
+	"""
 
 	def name(self) -> str:
 		return 'make-release-notes'

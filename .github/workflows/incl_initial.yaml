@@ -1,13 +1,33 @@
 name: GenVM initial checks
 on:
   workflow_call:
+    inputs:
+      pr:
+        description: >-
+          PR number these checks validate. The caller resolves it from the event
+          (`github.event.pull_request.number` on a `pull_request`, `inputs.pr` on
+          the panel's `workflow_dispatch`), so the PR-scoped jobs below run for
+          BOTH — they used to key off `github.event_name == 'pull_request'` and
+          therefore skipped on every panel-dispatched run, while that run could
+          still conclude `success` and satisfy the Merge gate. Empty for a
+          non-PR run, which skips them.
+        type: string
+        required: false
+        default: ""
 
-env:
-  GCS_BUCKET: "gh-af"
+# A reusable workflow does not inherit the caller's `defaults`, so the shell
+# is set here too: GitHub's stock `bash -e {0}` has no `pipefail`.
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
 
+# Timeouts are set from measured job durations, generously (roughly 3x the
+# observed maximum) so a slow-but-healthy run is never killed — the point is to
+# cap a hung job well below the 6-hour default, not to enforce a budget.
 jobs:
   pre-commit:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - name: Get source
@@ -26,9 +46,13 @@ jobs:
   # `check-commit-message` is a commit-msg-stage hook, so the pre-commit run
   # above never fires it. Check every commit the PR adds, in the manager and in
   # each executor submodule that moved.
+  #
+  # This is the one initial check the Merge action does NOT re-run, so it must
+  # not be skippable on a run the Merge gate will accept.
   commit-messages:
-    if: github.event_name == 'pull_request'
+    if: inputs.pr != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +62,11 @@ jobs:
         uses: ./.github/actions/get-src
         with:
           with_nix: "false"
+          pr: ${{ inputs.pr }}
+          # Needed even with with_nix=false: on a dispatched run there is no
+          # GITHUB_BASE_REF, so ci-changes.py resolves the base branch through
+          # the API and an unauthenticated `gh` exits 4.
+          github_token: ${{ secrets.GITHUB_TOKEN }}
       - name: Check commit messages
         env:
           CHANGES: ${{ steps.src.outputs.changes }}
@@ -47,26 +76,39 @@ jobs:
   # contain the base tip (0 commits behind). We assert it here too (as part
   # of the always-on `initial` checks) so the gate goes red the moment the
   # branch falls behind, instead of surfacing only at merge time.
+  #
+  # The measurement itself lives in support/ci/behind.py, shared with
+  # rebase-watch and the Merge action, so the three cannot disagree about the
+  # same PR.
   behind-check:
-    if: github.event_name == 'pull_request'
+    if: inputs.pr != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
       - name: Ensure 0 commits behind base
         env:
-          BASE: ${{ github.event.pull_request.base.ref }}
-          PR: ${{ github.event.pull_request.number }}
-        run: |
-          # Resolve base tip and PR head via explicit refs so this also
-          # works for fork PRs (head.sha is not fetchable by sha there).
-          git fetch --no-tags origin \
-            "+refs/heads/${BASE}:refs/base" \
-            "refs/pull/${PR}/head:refs/prhead"
-          if ! git merge-base --is-ancestor refs/base refs/prhead; then
-            BEHIND="$(git rev-list --count refs/prhead..refs/base)"
-            echo "::error::PR is ${BEHIND} commit(s) behind ${BASE}; update/rebase the branch so it is 0 behind before merging"
-            exit 1
-          fi
-          echo "0 commits behind ${BASE}"
+          # BASE is resolved from the PR by the pipeline itself, so this works
+          # on a dispatch run where the event carries no pull_request payload.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr }}
+        run: ./support/ci/run.sh pipeline behind-check
+
+  # The Merge action squashes a PR into `<title> (#N)`, so the PR title becomes
+  # a commit subject verbatim and must satisfy the same rules as one. Nothing
+  # re-validates a generated squash message, so an invalid title would only
+  # surface as a commit the hook rejects — after it landed.
+  pr-title:
+    if: inputs.pr != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check PR title is a valid commit subject
+        env:
+          # PR_TITLE likewise comes from the API, not the event payload.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr }}
+        run: ./support/ci/run.sh pipeline pr-title

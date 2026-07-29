@@ -3,7 +3,7 @@
     "--features", "vendored-lua"
   ],
   "cargo_afl_build_flags": [
-    "--features", "vendored-lua"
+    "--features", "vendored-lua,fuzzing"
   ],
   "keep_env": [
     "OPENAIKEY",

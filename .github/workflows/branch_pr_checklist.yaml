@@ -24,11 +24,12 @@ permissions:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   post:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR: ${{ github.event.pull_request.number }}
@@ -38,8 +39,14 @@ jobs:
         run: |
           # Only post once: skip if a panel (identified by the HTML marker)
           # already exists on the PR. `edited` can fire repeatedly.
-          if gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json comments \
-              --jq '.comments[].body' | grep -qF '<!-- genvm-actions -->'; then
+          #
+          # Collect first, match second — NOT `gh ... | grep -qF`. Under
+          # `pipefail`, `grep -q` exiting at the first match can SIGPIPE a `gh`
+          # still writing a large comment list, which makes the pipeline
+          # non-zero and sends us down the "no panel yet" path — posting a
+          # second panel on exactly the busiest PRs.
+          comments="$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json comments --jq '.comments[].body')"
+          if grep -qF '<!-- genvm-actions -->' <<<"$comments"; then
             echo "action panel already present; skipping"
             exit 0
           fi
@@ -49,12 +56,17 @@ jobs:
 
           Tick a box to run it (the box unticks itself when handled). Actions only run while the PR has the **`ci-safe`** label.
 
-          - [ ] Force run full tests
-          - [ ] Rerun full tests
-          - [ ] Provision executor PRs
-          - [ ] Merge into dev
+          <!-- The `action:<id>` markers below are what the handler dispatches on; the wording beside them is free to change. -->
 
-          <sub>Full GenVM CI runs only when **`rtm`** or **`run-full-tests`** is set — "Force run full tests" is a sticky toggle for `run-full-tests`. Adding **`rtm`** marks the PR ready-to-merge and also runs full tests. **Merge** requires: `rtm`, green full tests, green E2E, and the branch 0 commits behind.</sub>
+
+          - [ ] Force run full tests <!-- action:force -->
+          - [ ] Rerun full tests <!-- action:rerun -->
+          - [ ] Provision executor PRs <!-- action:provision -->
+          - [ ] Merge into dev <!-- action:merge -->
+
+          <sub>Full GenVM CI runs only when **`run-full-tests`** is set — "Force run full tests" is a sticky toggle for it. **Merge** requires: an approving review from a maintainer on the head commit (pushing revokes it), green full tests, green E2E, and the branch 0 commits behind.</sub>
+
+          <sub>A **repo admin** can comment `/genvm-force-merge` to land the PR without the review, full-CI and E2E gates — for when those signals are unobtainable, not when they are red. The base, title and 0-behind checks still apply, and the skip is recorded on the PR.</sub>
           EOF
           )"
 

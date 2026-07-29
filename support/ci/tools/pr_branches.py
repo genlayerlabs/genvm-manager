@@ -8,7 +8,8 @@ from pr_branches_info import RepoInfo
 
 
 def force_push_head(repo: str, branch: str, sha: str, token: str) -> str:
-	"""Point `refs/heads/<branch>` in `repo` at `sha`, creating or force-moving it.
+	"""
+	Point `refs/heads/<branch>` in `repo` at `sha`, creating or force-moving it.
 
 	`sha` must already be an object in `repo` (the executor commit the manager
 	gitlink pins). Returns 'created' or 'updated'.
@@ -59,7 +60,9 @@ def open_pr(
 	manager_pr: str,
 	token: str,
 ) -> str:
-	"""Open the executor mirror PR `head -> base`, or reuse one that races in."""
+	"""
+	Open the executor mirror PR `head -> base`, or reuse one that races in.
+	"""
 	body = (
 		f'Auto-opened executor mirror of {manager_repo}#{manager_pr}.\n\n'
 		f'Carries the executor-side work for that manager PR.'
@@ -91,7 +94,9 @@ def open_pr(
 
 
 class PrBranches(ci_lib.Tool):
-	"""Inspect and provision per-repo branch movement for a manager PR."""
+	"""
+	Inspect and provision per-repo branch movement for a manager PR.
+	"""
 
 	def name(self) -> str:
 		return 'pr-branches'
@@ -160,7 +165,8 @@ class PrBranches(ci_lib.Tool):
 		return 0
 
 	def check(self, args: argparse.Namespace) -> int:
-		"""Gate for the manager PR's CI. Records every problem, then fails if any.
+		"""
+		Gate for the manager PR's CI. Records every problem, then fails if any.
 
 		The manager PR and its executor PRs land almost-atomically via the panel
 		(Provision then Merge), so this checks that the land is POSSIBLE, not that the
@@ -221,7 +227,9 @@ class PrBranches(ci_lib.Tool):
 		return 'manager' if info.line is None else f'executor {info.line}'
 
 	def _provisionable(self, info: RepoInfo) -> bool:
-		"""Whether an executor line has a mirror branch + PR to provision."""
+		"""
+		Whether an executor line has a mirror branch + PR to provision.
+		"""
 		if info.base_sha is None:
 			print(f'{info.line}: base sha is null (line absent at base); skipping')
 			return False

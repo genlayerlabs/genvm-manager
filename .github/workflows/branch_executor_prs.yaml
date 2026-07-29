@@ -35,16 +35,21 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  # Explicit, though this job only ever checks out the base repo: a `permissions`
+  # block sets every unlisted scope to `none`, so the checkout works today only
+  # because the repo is public. Naming it keeps that from being load-bearing.
+  contents: read
   pull-requests: write
   issues: write
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   open:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Open and link executor PR(s)

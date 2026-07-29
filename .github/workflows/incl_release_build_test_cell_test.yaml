@@ -35,10 +35,17 @@ on:
         required: true
         type: string
 
+# A reusable workflow does not inherit the caller's `defaults`, so the shell
+# is set here too: GitHub's stock `bash -e {0}` has no `pipefail`.
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
 jobs:
   test:
     name: release-test / ${{ inputs.name }}
     runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 

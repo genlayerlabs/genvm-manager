@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Collect per-repo branch movement for a manager PR.
+"""
+Collect per-repo branch movement for a manager PR.
 
 A manager PR (e.g. on the v0.6 line) bundles work across several repos: the
 manager itself and every active executor line it ships (v0.2, v0.3, ...), each
@@ -51,7 +52,8 @@ MANAGER_PATH = '.'
 
 @dataclasses.dataclass(frozen=True)
 class RepoInfo:
-	"""How one repo's PR head moved relative to its base branch.
+	"""
+	How one repo's PR head moved relative to its base branch.
 
 	`base_sha`/`head_sha` are None when the path is absent at that side (a line
 	added or removed by the PR). `ahead_by`/`behind_by` are None when the two
@@ -72,30 +74,40 @@ class RepoInfo:
 
 	@property
 	def moved(self) -> bool:
-		"""The head points somewhere other than the base."""
+		"""
+		The head points somewhere other than the base.
+		"""
 		return self.head_sha != self.base_sha
 
 	@property
 	def has_pr(self) -> bool:
-		"""An open PR for this repo's head_ref -> base_ref exists."""
+		"""
+		An open PR for this repo's head_ref -> base_ref exists.
+		"""
 		return self.pr_url is not None
 
 	@property
 	def rebased(self) -> bool:
-		"""Head contains the base tip (not behind). A positive behind_by means it
-		needs a rebase; unknown (None) is left to the synced check."""
+		"""
+		Head contains the base tip (not behind). A positive behind_by means it
+		needs a rebase; unknown (None) is left to the synced check.
+		"""
 		return not self.behind_by
 
 	@property
 	def synced(self) -> bool:
-		"""The head gitlink is present in the executor repo (comparable to base), so
+		"""
+		The head gitlink is present in the executor repo (comparable to base), so
 		it can land together with the manager commit. Being ahead of base is normal —
 		manager and executors land almost-atomically — so only a head commit missing
-		from the executor repo (ahead_by is None) is unsynced."""
+		from the executor repo (ahead_by is None) is unsynced.
+		"""
 		return self.ahead_by is not None
 
 	def as_dict(self) -> dict:
-		"""Plain-dict form (all fields plus the derived flags) for JSON output."""
+		"""
+		Plain-dict form (all fields plus the derived flags) for JSON output.
+		"""
 		return {
 			**dataclasses.asdict(self),
 			'moved': self.moved,
@@ -106,7 +118,9 @@ class RepoInfo:
 
 
 def _api(*args: str, token: str | None = None, allow_missing: bool = False):
-	"""`gh api` returning parsed JSON, or None on a 404 when allow_missing."""
+	"""
+	`gh api` returning parsed JSON, or None on a 404 when allow_missing.
+	"""
 	r = gh('api', *args, token=token, check=not allow_missing)
 	if r.returncode != 0:
 		# allow_missing: treat any failure (typically HTTP 404 — a ref/path that
@@ -116,9 +130,15 @@ def _api(*args: str, token: str | None = None, allow_missing: bool = False):
 
 
 def compare(
-	repo: str, base: str, head: str, token: str, *, allow_missing: bool = False
+	repo: str,
+	base: str,
+	head: str,
+	token: str | None,
+	*,
+	allow_missing: bool = False,
 ):
-	"""GitHub `compare` of `base...head` in `repo`.
+	"""
+	GitHub `compare` of `base...head` in `repo`.
 
 	Returns `(base_tip_sha, ahead_by, behind_by)`, or None when the comparison is
 	not possible (allow_missing). `base_tip_sha` is the base ref's own commit; the
@@ -134,8 +154,11 @@ def compare(
 	return data['base_commit']['sha'], data['ahead_by'], data['behind_by']
 
 
-def submodule_sha(manager_repo: str, path: str, ref: str, token: str) -> str | None:
-	"""The executor gitlink (submodule commit) recorded at `manager_repo`'s `ref`.
+def submodule_sha(
+	manager_repo: str, path: str, ref: str, token: str | None
+) -> str | None:
+	"""
+	The executor gitlink (submodule commit) recorded at `manager_repo`'s `ref`.
 
 	Reads the submodule pointer through the contents API (`type: submodule`), so no
 	checkout is needed. None when the path is absent at that ref (a line the PR adds
@@ -149,8 +172,10 @@ def submodule_sha(manager_repo: str, path: str, ref: str, token: str) -> str | N
 	return data['sha']
 
 
-def existing_pr(repo: str, head: str, base: str, token: str) -> str | None:
-	"""URL of the open PR `head -> base` in `repo`, or None if none is open."""
+def existing_pr(repo: str, head: str, base: str, token: str | None) -> str | None:
+	"""
+	URL of the open PR `head -> base` in `repo`, or None if none is open.
+	"""
 	url = gh(
 		'pr',
 		'list',
@@ -171,8 +196,11 @@ def existing_pr(repo: str, head: str, base: str, token: str) -> str | None:
 	return url or None
 
 
-def manager_info(pr_number: str, manager_repo: str, manager_token: str) -> RepoInfo:
-	"""RepoInfo for the manager repo itself (base branch tip vs PR head).
+def manager_info(
+	pr_number: str, manager_repo: str, manager_token: str | None
+) -> RepoInfo:
+	"""
+	RepoInfo for the manager repo itself (base branch tip vs PR head).
 
 	The manager PR always exists (it is the one being inspected), so its `pr_url`
 	is taken straight from the PR object rather than queried.
@@ -205,10 +233,11 @@ def executor_info(
 	manager_head_sha: str,
 	manager_head_ref: str,
 	executor_repo: str,
-	manager_token: str,
-	executor_token: str,
+	manager_token: str | None,
+	executor_token: str | None,
 ) -> RepoInfo:
-	"""RepoInfo for one executor line: its gitlink at the manager base vs head.
+	"""
+	RepoInfo for one executor line: its gitlink at the manager base vs head.
 
 	The executor mirror branch is deterministically named `pr/<line>/<head>` off
 	the manager PR's head ref (genvm_tool.common.Repo.feature_branch), so its
@@ -257,7 +286,8 @@ def collect(
 	manager_token: str | None = None,
 	executor_token: str | None = None,
 ) -> dict[str, RepoInfo]:
-	"""Branch movement for every repo a manager PR touches, keyed by path.
+	"""
+	Branch movement for every repo a manager PR touches, keyed by path.
 
 	"." is the manager; "executors/v<X>.x" is each active executor line (from
 	.genvm-monorepo-root via tools.versions).
@@ -281,7 +311,9 @@ def collect(
 
 
 def from_ctx(ctx: gh_common.Ctx) -> dict[str, RepoInfo]:
-	"""`collect` with repos/PR/tokens resolved from a shared `gh_common.Ctx`."""
+	"""
+	`collect` with repos/PR/tokens resolved from a shared `gh_common.Ctx`.
+	"""
 	return collect(
 		ctx.pr_number,
 		manager_repo=ctx.manager_repo,

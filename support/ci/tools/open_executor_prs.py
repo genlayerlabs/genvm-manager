@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Open (or reuse) the linked executor PRs for a manager PR and list them on it.
+"""
+Open (or reuse) the linked executor PRs for a manager PR and list them on it.
 
 Invoked by .github/workflows/branch_executor_prs.yaml when a manager PR is opened
 against a dev branch or its head is pushed (`synchronize`), so mirror branches
@@ -146,7 +147,9 @@ def upsert_comment(ctx: gh_common.Ctx, lines: list[str]) -> None:
 
 
 class OpenExecutorPrs(ci_lib.Tool):
-	"""Open (or reuse) the linked executor PRs for a manager PR and list them on it."""
+	"""
+	Open (or reuse) the linked executor PRs for a manager PR and list them on it.
+	"""
 
 	def name(self) -> str:
 		return 'open-executor-prs'

@@ -39,9 +39,16 @@ on:
         description: the notes file's name inside artifact_notes
         value: ${{ jobs.plan.outputs.notes_file }}
 
+# A reusable workflow does not inherit the caller's `defaults`, so the shell
+# is set here too: GitHub's stock `bash -e {0}` has no `pipefail`.
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       tag: ${{ steps.plan.outputs.tag }}
       build_matrix: ${{ steps.plan.outputs.build_matrix }}
@@ -70,6 +77,7 @@ jobs:
   notes:
     needs: plan
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:

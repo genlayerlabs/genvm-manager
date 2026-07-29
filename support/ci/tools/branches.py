@@ -1,5 +1,4 @@
 import argparse
-import subprocess
 
 import ci_lib
 import gh_common
@@ -7,12 +6,22 @@ import gh_common
 from tools.versions import active_versions
 
 
-def gh(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-	return ci_lib.run(['gh', *args], check=check, capture_output=True)
+def gh(*args: str, check: bool = True) -> str:
+	"""
+	`gh` with the manager token, returning stdout.
+
+	Shares gh_common's wrapper rather than shelling out separately, so this tool
+	gets the same tracing, token resolution and transient-failure retries as
+	every other one. `retry=False`: the calls below include `pr create`, which
+	must not be replayed.
+	"""
+	return gh_common.gh_manager(*args, check=check, retry=False)
 
 
 class ProvisionBranches(ci_lib.Tool):
-	"""Provision version/dev branches and standing release-gate PRs."""
+	"""
+	Provision version/dev branches and standing release-gate PRs.
+	"""
 
 	def name(self) -> str:
 		return 'provision-branches'
@@ -95,7 +104,7 @@ class ProvisionBranches(ci_lib.Tool):
 				'number',
 				'--jq',
 				'.[0].number // ""',
-			).stdout.strip()
+			).strip()
 			if existing:
 				print(
 					f'Standing PR {dev_branch} -> {version_branch} already open (#{existing})'

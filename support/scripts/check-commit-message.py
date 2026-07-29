@@ -52,7 +52,12 @@ BODY_MIN_CHARS = 20
 # Matches git trailer lines: "Token: value" (Co-authored-by:, Signed-off-by:, etc.)
 GIT_TRAILER_RE = re.compile(r'^[A-Za-z][A-Za-z0-9-]*:\s*.+$')
 
-PR_REF_RE = re.compile(r'\s*\(#\d+\)\s*$')
+# A trailing PR reference, either bare (`(#42)`) or repo-qualified
+# (`(genlayerlabs/genvm-manager#42)`). The qualified form is what a squash
+# landing in the EXECUTOR repo carries, because a bare `#42` would not resolve
+# there — see genvm_merge_into_dev.pr_reference. Both must be recognised, or a
+# perfectly good subject is read as having its emoji in the middle.
+PR_REF_RE = re.compile(r'\s*\((?:[\w.-]+/[\w.-]+)?#\d+\)\s*$')
 SQUASH_BULLET_RE = re.compile(r'^\*\s*')
 
 

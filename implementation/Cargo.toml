@@ -3,16 +3,22 @@ name = "genvm-modules"
 version = "0.6.0-rc0"
 edition = "2021"
 
+# The fuzz targets link against the AFL runtime, which only `cargo-afl` supplies.
+# Gate them so a plain `cargo test`/`cargo build --examples` skips them instead of
+# failing to link.
 [[example]]
 name = "fuzz-genvm-modules-normalize-whitespace"
 path = "fuzz/genvm-modules-normalize-whitespace.rs"
+required-features = ["fuzzing"]
 
 [[example]]
 name = "fuzz-genvm-modules-complete-json"
 path = "fuzz/genvm-modules-complete-json.rs"
+required-features = ["fuzzing"]
 
 [features]
 default = []
+fuzzing = []
 vendored-lua = ["mlua/vendored"]
 
 [dependencies]

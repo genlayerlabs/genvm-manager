@@ -26,7 +26,8 @@ NOTES_FILE = 'release-notes.md'
 
 
 def artifact_of(cell: str) -> str:
-	"""Artifact name a build cell uploads and a test cell downloads.
+	"""
+	Artifact name a build cell uploads and a test cell downloads.
 
 	Keyed by cell rather than minted at upload time: every leg of a matrix job
 	writes the *same* `outputs` key, so a per-leg name cannot be handed back as
@@ -36,7 +37,8 @@ def artifact_of(cell: str) -> str:
 
 
 def asset_of(cell: str) -> str:
-	"""The tarball a cell packs — already named as the published release asset.
+	"""
+	The tarball a cell packs — already named as the published release asset.
 
 	Nothing downstream renames it: the publisher attaches what it downloads.
 	"""
@@ -92,7 +94,8 @@ SMOKE_MODULES = [
 
 
 def release_filter_tag() -> str:
-	"""The release preset's tag expression, read at plan time.
+	"""
+	The release preset's tag expression, read at plan time.
 
 	The old jobs inlined `$(cat ...)` into the shell; resolving it here keeps the
 	steps shell-free and puts the expression in the plan, where it is visible.
@@ -101,7 +104,8 @@ def release_filter_tag() -> str:
 
 
 def stable_test_steps(installable: str) -> GithubStep:
-	"""configure + run the release preset inside `installable`'s shell.
+	"""
+	configure + run the release preset inside `installable`'s shell.
 
 	`configure` must come first: it writes build/info.json, which is what points
 	the runner at the extracted build/out tree.
@@ -235,7 +239,8 @@ def test_cells() -> list[dict]:
 
 
 class PlanReleaseMatrix(ci_lib.Pipeline):
-	"""Emit the release build/test matrices and the tag they are built at.
+	"""
+	Emit the release build/test matrices and the tag they are built at.
 
 	One build cell per release artifact (runners + one per platform) and one test
 	cell per platform, all keyed by names both sides derive from this plan.

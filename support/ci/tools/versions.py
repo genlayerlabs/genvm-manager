@@ -3,6 +3,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 
 import ci_lib
 
@@ -21,7 +22,7 @@ def version_key(version: str) -> tuple[int, ...]:
 
 def load_root_conf() -> dict:
 	conf_path = os.environ.get('MONOREPO_ROOT', ci_lib.ROOT_DIR / '.genvm-monorepo-root')
-	return json.loads(open(conf_path, 'rb').read())
+	return json.loads(Path(conf_path).read_bytes())
 
 
 def active_versions() -> list[str]:
@@ -32,7 +33,8 @@ def active_versions() -> list[str]:
 
 
 def manager_version() -> str:
-	"""The manager's own release train as bare major.minor (e.g. '0.6').
+	"""
+	The manager's own release train as bare major.minor (e.g. '0.6').
 
 	Read from the `version` field. The manager dev/release branches
 	(`v<X>-dev`, `v<X>.x`) are named after this — NOT after the executor lines
@@ -42,7 +44,8 @@ def manager_version() -> str:
 
 
 def active_lines() -> list[str]:
-	"""Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3']).
+	"""
+	Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3']).
 
 	Same data as `active_versions`, prefixed with the `v` the executor branches
 	(`<line>-dev`, `pr/<line>/...`) use. The manager release line is independent of
@@ -51,8 +54,20 @@ def active_lines() -> list[str]:
 	return [f'v{version}' for version in active_versions()]
 
 
+def newest_line() -> str:
+	"""
+	The newest active executor line as `v<X>` (e.g. 'v0.3').
+
+	`active-versions` is hand-ordered in .genvm-monorepo-root, so "newest" must be
+	decided by `version_key`, not by position — reading `active-versions[0]`
+	directly is what let two consumers disagree on which line is primary.
+	"""
+	return active_lines()[-1]
+
+
 class BranchVersions(ci_lib.Tool):
-	"""Read version trains from .genvm-monorepo-root.
+	"""
+	Read version trains from .genvm-monorepo-root.
 
 	`list` yields the active executor lines (`active-versions`); `manager`
 	yields the manager's own train (`version`). These differ — don't use one
@@ -74,7 +89,9 @@ class BranchVersions(ci_lib.Tool):
 
 
 class CheckVersions(ci_lib.Tool):
-	"""Keep manager-owned Rust crate versions in sync with .genvm-monorepo-root."""
+	"""
+	Keep manager-owned Rust crate versions in sync with .genvm-monorepo-root.
+	"""
 
 	CARGO_FILES = ['implementation/Cargo.toml']
 

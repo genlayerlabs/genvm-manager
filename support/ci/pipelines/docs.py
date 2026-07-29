@@ -1,13 +1,15 @@
 import argparse
-import json
 import os
 import sys
 
 import ci_lib
+from tools.versions import active_lines, newest_line
 
 
 class Docs(ci_lib.Pipeline):
-	"""Generate and build documentation."""
+	"""
+	Generate and build documentation.
+	"""
 
 	def name(self) -> str:
 		return 'docs'
@@ -19,13 +21,16 @@ class Docs(ci_lib.Pipeline):
 			['git', 'log', '-1', '--date=format:%Y', '--format=%ad']
 		).strip()
 
-		monorepo = json.loads((ci_lib.ROOT_DIR / '.genvm-monorepo-root').read_text())
-
 		# Runner versions are per-executor-line data (the runner manifest), so the
-		# generated manifest + available-runners page land in the primary line's
+		# generated manifest + available-runners page land in the newest line's
 		# SDK sub-site, not the manager. generate.py writes available-runners.rst
 		# next to this json (json_path.with_name).
-		primary_line = monorepo['active-versions'][0]
+		#
+		# `newest_line()`, not `active-versions[0]`: that field is hand-ordered, and
+		# every other consumer goes through the sorted `tools.versions` helpers — so
+		# indexing it raw meant two readers of one field disagreeing on which line
+		# is "first".
+		primary_line = newest_line()
 		runners_versions_json = (
 			f'executors/{primary_line}.x/docs/website/src/python-sdk/runners-versions.json'
 		)
@@ -52,7 +57,7 @@ class Docs(ci_lib.Pipeline):
 		# generated executors.rst page. Built after the manager site so its
 		# objects.inv exists (intersphinx) and its html root is not clobbered.
 		doc_root = ci_lib.ROOT_DIR / 'build' / 'doc'
-		for line in monorepo['active-versions']:
+		for line in active_lines():
 			exec_prefix = f'executors/{line}.x'
 			src = (ci_lib.ROOT_DIR / exec_prefix / 'docs' / 'website' / 'src').resolve()
 			installable = f'./{exec_prefix}#gen-docs'
@@ -84,7 +89,9 @@ class Docs(ci_lib.Pipeline):
 
 
 class DocsSrc(ci_lib.Pipeline):
-	"""Build docs inside the docs Nix environment."""
+	"""
+	Build docs inside the docs Nix environment.
+	"""
 
 	def name(self) -> str:
 		return 'docs-src'

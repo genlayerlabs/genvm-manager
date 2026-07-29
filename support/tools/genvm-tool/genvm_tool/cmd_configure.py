@@ -98,11 +98,6 @@ def rust_target_dirs_info(
 
 def configure(parser):
 	parser.add_argument(
-		'--test-always-fail-module',
-		action='store_true',
-		help='enable the test_always_fail_module feature on the executor',
-	)
-	parser.add_argument(
 		'--ci',
 		action='store_true',
 		help='CI mode: pass --locked to cargo so the build fails on a stale Cargo.lock',
@@ -244,8 +239,6 @@ def main(ctx: common.Context, args) -> int:
 	# Regenerate build.ninja when this script changes (re-runs the tool via the
 	# launcher above). Preserve the configure flags so a regen keeps mode.
 	regen_args = []
-	if args.test_always_fail_module:
-		regen_args.append('--test-always-fail-module')
 	if args.ci:
 		regen_args.append('--ci')
 	regen = n.build('CUSTOM_COMMAND', 'build.ninja')

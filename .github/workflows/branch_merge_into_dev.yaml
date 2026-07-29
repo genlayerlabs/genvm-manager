@@ -9,10 +9,14 @@ name: branch / merge PR into dev
 #
 # Gates (all required):
 #   1. base branch is a v<X>-dev branch
-#   2. PR carries the `rtm` (ready-to-merge) label
+#   2. a maintainer (push access) approved the head commit; pushing new commits
+#      revokes it, since the approval is matched against that exact sha
 #   3. full GenVM CI (queue.yaml) concluded success on the head commit
 #   4. the cross-repo E2E check concluded success on the head commit
 #   5. the PR is 0 commits behind base (head already contains base tip)
+#
+# `force_actor` (set only by branch_force_merge.yaml, for `/genvm-force-merge`
+# from a repo admin) waives gates 2-4; 1 and 5 always hold.
 #
 # Merge strategy: one commit per merged PR in every repo. A manager PR that is
 #   a single commit and rewrites no gitlink is fast-forwarded as-is (SHA
@@ -23,8 +27,10 @@ name: branch / merge PR into dev
 #
 # Executor mirror: the landed manager commit gitlinks into each active executor
 # line; the script squashes each line onto its SAME-NAMED <line>-dev branch. It
-# plans and fast-forward-checks every side up front, then pushes the executors
-# first (the dependencies) and the manager second.
+# plans and fast-forward-checks every side up front, uploads every object under a
+# scratch ref, moves the PR head branches onto what is about to land, and only then
+# advances the target branches: the manager first (the one push that can lose a
+# race), then each <line>-dev.
 #
 # The dev branches are protected; the default GITHUB_TOKEN cannot push to
 # them. We push over SSH with the GENVM_CI_PRIVATE_KEY deploy key (on the
@@ -45,6 +51,25 @@ on:
         description: number of the PR to merge
         type: string
         required: true
+      force_actor:
+        description: >-
+          Login of the repo admin who ran `/genvm-force-merge`. Non-empty means
+          gates 2-4 (review, full CI, E2E) are skipped and the skip is announced
+          on the PR under this login. ONLY branch_force_merge.yaml may set it,
+          and only after checking the admin role in its own trusted YAML — the
+          merge script runs from the PR head and cannot authorize itself.
+        type: string
+        required: false
+        default: ""
+      force_head_sha:
+        description: >-
+          Head commit the `/genvm-force-merge` command was typed on. Required
+          with `force_actor`: the admin authorizes a commit, not a branch, so a
+          push landing in between must abort the merge rather than ride in on
+          the authorization.
+        type: string
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -55,16 +80,29 @@ permissions:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 env:
-  # check-run name (case-insensitive substring) the genlayer-e2e pipeline
-  # posts on the head commit. Adjust if that pipeline renames its check.
-  E2E_CHECK_PATTERN: "e2e"
+  # Exact check-run name, and the slug of the app that posts it, for the E2E
+  # check on the head commit. Both must match: a name alone is not a protected
+  # namespace, so any app (or a workflow in the PR) could post a green check
+  # under it. Adjust if that pipeline is renamed or re-homed.
+  E2E_CHECK_NAME: "E2E Tests"
+  E2E_CHECK_APP_SLUG: "ci-core-e2e-runner"
 
 jobs:
   merge:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # A constant group, so at most ONE merge runs repository-wide, whatever PR or
+    # dev branch it targets. Two merges racing would each pass their own
+    # 0-behind check and then push a base the other never saw; the loser's
+    # non-force push is rejected mid-way, after the executor lines have already
+    # been advanced. Serialising is cheaper than making that recoverable.
+    # Never cancel: an interrupted merge can leave the lines ahead of the manager.
+    concurrency:
+      group: merge-into-dev
+      cancel-in-progress: false
     steps:
       # Gate: this job checks out and runs the PR's own CI scripts while the
       # deploy keys are in scope, so refuse unless the PR is `ci-safe`. Uses the
@@ -74,9 +112,44 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
         run: |
-          if ! gh api "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels" \
-              --jq '.[].name' | grep -qxF 'ci-safe'; then
+          # Collect first, match second: under `pipefail` a `grep -q` that exits
+          # early can SIGPIPE the `gh` feeding it, and the resulting non-zero
+          # pipeline would read as "no ci-safe label" and refuse a valid merge.
+          names="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR_NUMBER/labels?per_page=100" --jq '.[].name')"
+          if ! grep -qxF 'ci-safe' <<<"$names"; then
             echo "::error::PR #$PR_NUMBER lacks the 'ci-safe' label; refusing to merge (this job runs PR code)."
+            exit 1
+          fi
+
+      # A forced merge waives the gates that prove the commit good, so its
+      # authorization is re-derived here — in the reusable workflow's own YAML,
+      # with the plain GITHUB_TOKEN, before any PR code is fetched. `force_actor`
+      # is an input like any other: a caller that is not branch_force_merge.yaml
+      # could pass an arbitrary login, and the merge script itself comes from the
+      # PR head, so neither is a place this can be trusted.
+      - name: Re-check the force-merge authorization
+        if: inputs.force_actor != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          FORCE_ACTOR: ${{ inputs.force_actor }}
+          FORCE_HEAD_SHA: ${{ inputs.force_head_sha }}
+        run: |
+          perm="$(gh api "repos/$GITHUB_REPOSITORY/collaborators/$FORCE_ACTOR/permission" \
+            --jq '.permission' 2>/dev/null || echo none)"
+          if [ "$perm" != admin ]; then
+            echo "::error::force merge claims '$FORCE_ACTOR', who has '$perm' access, not admin."
+            exit 1
+          fi
+          if [ -z "$FORCE_HEAD_SHA" ]; then
+            echo "::error::force merge without force_head_sha; refusing."
+            exit 1
+          fi
+          head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')"
+          if [ "$head" != "$FORCE_HEAD_SHA" ]; then
+            gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body \
+              "❌ Force merge aborted: the head moved from \`${FORCE_HEAD_SHA:0:12}\` (the commit \`$FORCE_ACTOR\` authorized) to \`${head:0:12}\`. Re-issue \`/genvm-force-merge\` if that commit is also meant to land unchecked."
+            echo "::error::PR head moved since the force-merge command; refusing."
             exit 1
           fi
 
@@ -101,7 +174,12 @@ jobs:
         run: |
           install -m700 -d ~/.ssh
           key=~/.ssh/executor_ci
+          # The job-wide shell is `bash -x`, and Actions masks a multi-line secret
+          # line by line — an xtrace of the write would print PEM fragments it
+          # does not recognise. Trace goes off for exactly that one command.
+          set +x
           printf '%s\n' "$EXECUTOR_DEPLOY_KEY" > "$key"
+          set -x
           chmod 600 "$key"
           ssh="ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
           # The manager release line ships every active executor line, so the
@@ -119,4 +197,5 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ inputs.pr_number }}
+          FORCE_ACTOR: ${{ inputs.force_actor }}
         run: ./support/ci/run.sh tool genvm-merge-into-dev

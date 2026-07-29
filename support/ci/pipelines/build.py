@@ -13,7 +13,8 @@ def build_and_pack(
 	compression_level: int = 9,
 	show_trace: bool = False,
 ) -> Path:
-	"""Realize `installable` and pack its output tree as ARTIFACTS_DIR/`artifact_name`.
+	"""
+	Realize `installable` and pack its output tree as ARTIFACTS_DIR/`artifact_name`.
 
 	The out-link is keyed by artifact, not by installable: one installable may be
 	packed into several artifacts that differ only in `globs`, and each needs its
@@ -54,7 +55,9 @@ def build_and_pack(
 
 
 class Build(ci_lib.Pipeline):
-	"""Build and package a GenVM target."""
+	"""
+	Build and package a GenVM target.
+	"""
 
 	def name(self) -> str:
 		return 'build'

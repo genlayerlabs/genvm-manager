@@ -74,7 +74,8 @@ def _check_of(step: SubStep) -> bool:
 
 
 def _finish(step: SubStep, result: subprocess.CompletedProcess) -> None:
-	"""Enforce a step's `expect_exit_codes`, if it declared any.
+	"""
+	Enforce a step's `expect_exit_codes`, if it declared any.
 
 	Lets a step assert an exact non-zero exit — e.g. a daemon smoke test killed by
 	`timeout` must exit 124 — without a shell to write `|| test $? -eq 124` in.
@@ -311,10 +312,11 @@ QUEUE_CELLS = [
 
 
 class PlanQueueMatrix(ci_lib.Pipeline):
-	"""Emit queue.yaml's test matrix as a GitHub `matrix` output.
+	"""
+	Emit queue.yaml's test matrix as a GitHub `matrix` output.
 
-	The heavy cells run only when a marker is set (RUN_FULL_TESTS, from the rtm /
-	run-full-tests labels or a manual dispatch); otherwise the matrix is empty and
+	The heavy cells run only when a marker is set (RUN_FULL_TESTS, from the
+	run-full-tests label or a manual dispatch); otherwise the matrix is empty and
 	matrix-tests is skipped.
 	"""
 
@@ -335,7 +337,8 @@ class PlanQueueMatrix(ci_lib.Pipeline):
 
 
 class TestMatrixCell(ci_lib.Pipeline):
-	"""Replay one step list of a matrix cell (from plan-queue-matrix / into_commands).
+	"""
+	Replay one step list of a matrix cell (from plan-queue-matrix / into_commands).
 
 	into_commands emits a list per key ('configure', 'build', 'tool'); test_cell.yaml
 	slices it with fromJSON and hands us one of those lists, so --job-json here is a
@@ -397,7 +400,8 @@ class TestMatrixCell(ci_lib.Pipeline):
 
 
 class CheckCellKeys(ci_lib.Pipeline):
-	"""Fail unless a cell's step mapping holds exactly the keys the caller replays.
+	"""
+	Fail unless a cell's step mapping holds exactly the keys the caller replays.
 
 	into_commands' keys and test_cell.yaml's "Job:" steps must stay in sync in both
 	directions: a key nobody replays would silently drop its steps, and a step whose

@@ -20,11 +20,12 @@ permissions:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   provision:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:

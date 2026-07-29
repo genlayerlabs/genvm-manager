@@ -29,11 +29,12 @@ concurrency:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   forward:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,8 +51,11 @@ jobs:
           # authoritative alias), NOT the pushed branch's own copy — an older
           # dev branch carries a stale version and would otherwise try to drag
           # main backwards once a newer train exists.
-          git show origin/main:.genvm-monorepo-root > /tmp/main-monorepo-root.json
-          MANAGER="$(MONOREPO_ROOT=/tmp/main-monorepo-root.json ./support/ci/run.sh tool branch-versions manager)"
+          # $RUNNER_TEMP, not /tmp: the runner wipes it between jobs, so nothing
+          # is left behind on a self-hosted box.
+          root_json="${RUNNER_TEMP}/main-monorepo-root.json"
+          git show origin/main:.genvm-monorepo-root > "$root_json"
+          MANAGER="$(MONOREPO_ROOT="$root_json" ./support/ci/run.sh tool branch-versions manager)"
           if [ "$BRANCH" != "v${MANAGER}-dev" ]; then
             echo "Pushed branch ${BRANCH} is not the latest dev branch (v${MANAGER}-dev); nothing to do"
             exit 0

@@ -32,17 +32,23 @@ concurrency:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   dispatch:
-    # Only the panel comment, only on a PR, only when the PR is `ci-safe`
+    # Only a panel-shaped comment, only on a PR, only when the PR is `ci-safe`
     # (we check out and run its scripts, so an unvetted PR must not reach here).
+    #
+    # NOTE: this matches the MARKER IN THE COMMENT BODY, which anyone can put in
+    # a comment of their own. It is a cheap pre-filter, NOT authorization. The
+    # tool re-checks that the bot authored the comment and that the editor has
+    # write access — see `Who may tick a box` in pr_action_panel.py.
     if: >
       github.event.issue.pull_request &&
       contains(github.event.comment.body, '<!-- genvm-actions -->') &&
       contains(github.event.issue.labels.*.name, 'ci-safe')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       merge: ${{ steps.act.outputs.merge }}
     steps:
@@ -52,6 +58,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
+          # The handler talks to GitHub through `gh` (GH_TOKEN below) and never
+          # pushes, so the checkout credential is not needed — and leaving it in
+          # .git/config would hand it to the PR code this job runs.
+          persist-credentials: false
       - name: Handle ticked boxes
         id: act
         env:

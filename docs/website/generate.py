@@ -20,9 +20,25 @@ docs_src_root_dir = genvm_root_dir.joinpath('docs', 'website', 'src')
 # the manager's. All active lines are branches of ONE repo, so any of them sees
 # every executor tag; take the first.
 monorepo = json.loads(genvm_root_dir.joinpath('.genvm-monorepo-root').read_text())
-executor_dir = genvm_root_dir.joinpath(
-	'executors', f'{monorepo["active-versions"][0]}.x'
-)
+
+
+def _newest_line() -> str:
+	"""The newest active executor line, e.g. `v0.3`.
+
+	Decided by version order, NOT by position: `active-versions` is hand-ordered
+	and `genvm-tool check-versions bump` APPENDS the new line, so after the next
+	bump `active-versions[0]` is no longer the newest. This must agree with
+	`support/ci/tools/versions.py:newest_line`, which is what decides the
+	sub-site this page is generated into — if the two disagree, this page renders
+	one line's runner data into another line's site.
+	"""
+	return max(
+		monorepo['active-versions'],
+		key=lambda v: tuple(int(p) for p in v.lstrip('v').split('-', 1)[0].split('.')[:2]),
+	)
+
+
+executor_dir = genvm_root_dir.joinpath('executors', f'{_newest_line()}.x')
 
 
 def executor_git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -92,10 +108,11 @@ proc = subprocess.run(
 res = json.loads(proc.stdout)
 
 # docs.nix accumulates the runners of EVERY active line, but this page is
-# per-line (it renders into active-versions[0]'s sub-site). Post-split the lines
-# are independent — v0.2 is not "before" v0.3 — so scope to this line's own
-# versions; otherwise the other lines' hashes leak in as bogus history.
-_line = monorepo['active-versions'][0]
+# per-line (it renders into the NEWEST line's sub-site — see `_newest_line`).
+# Post-split the lines are independent — v0.2 is not "before" v0.3 — so scope to
+# this line's own versions; otherwise the other lines' hashes leak in as bogus
+# history.
+_line = _newest_line()
 res = {v: r for v, r in res.items() if v.startswith(_line + '.')}
 
 # --- Post-process: sort by semver, enrich with descriptions, diffs, commits ---
