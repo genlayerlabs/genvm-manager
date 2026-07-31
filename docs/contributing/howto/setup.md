@@ -1,31 +1,26 @@
-# First-time setup
+# First-Time Setup
 
-1. Get the executor submodules and vendored third-party trees **before** entering
-   the dev shell (the nix flake reads them):
+1. Materialize the submodules and the vendored third-party trees **before**
+   entering the dev shell — the nix flake reads them:
 
    ```bash
    python3 support/scripts/get-all-git.py
    ```
 
-   The default options are sufficient for normal setup: the command resolves
-   duplicate submodule remotes, fetches each unique remote once into a local
-   cache, initializes submodules from that cache, and materializes all
-   third-party trees.
-
-2. Enter the dev shell:
+   The defaults fetch every unique submodule remote once into a local cache,
+   initialize the submodules from it, and materialize all third-party trees
+2. Enter the dev shell — normally direnv does this, `.envrc` is
+   `use flake '.?submodules=1#full'`:
 
    ```bash
    nix develop '.?submodules=1#full'
    ```
 
-   `?submodules=1` is required on **every** flake ref — without it:
-   `Path 'executors/v0.3.x' … is not tracked by Git`. Usually auto-loaded via
-   direnv (`.envrc` is `use flake '.?submodules=1#full'`).
+   `?submodules=1` is mandatory on every manager flake ref; without it nix
+   fails with `Path 'executors/v0.3.x' … is not tracked by Git`
+3. Only outside the dev shell, and only for manual `git third-party` calls:
+   `source env.sh` puts `support/tools/git-third-party` on `PATH` and sources
+   `.env` if present
 
-3. `source env.sh` — adds `support/tools/git-third-party` to PATH and sources
-   `.env` if present. Only needed outside the dev shell for manual
-   `git third-party` use.
-
-See [git-third-party.md](committing/git-third-party.md) for how vendoring works.
-
-Next: [build.md](building/build.md).
+Next: [build.md](building/build.md). Vendoring mechanics:
+[git-third-party.md](committing/git-third-party.md)

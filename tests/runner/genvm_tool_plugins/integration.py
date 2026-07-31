@@ -48,7 +48,7 @@ local_ctx.run_parser.add_argument(
 	'--ignore-hash',
 	action='store_true',
 	default=False,
-	help='Ignore .hash files entirely (skip hash comparison and do not write missing ones)',
+	help='Skip the committed .hash golden sidecars (no comparison, no creation). Leader-vs-validator/sync comparison still runs.',
 )
 
 
@@ -233,7 +233,13 @@ def _flatten_tree(
 	return result
 
 
-_TOP_LEVEL_METADATA_KEYS = frozenset({'entry', 'tags'})
+_TOP_LEVEL_METADATA_KEYS = frozenset({'entry', 'tags', 'debug_mode'})
+
+# Ordered as in `genvm_common::DebugMode`; each level adds to the previous one.
+# `unsafe` is what every case has always run with: contracts name their runner
+# as `py-genlayer:test`, and that alias only resolves from `unsafe` up.
+_DEBUG_MODES = ('disabled', 'safe', 'safe-unbounded', 'unsafe', 'unsafe-tracing')
+_DEBUG_MODE_DEFAULT = 'unsafe'
 
 
 @dataclass
@@ -267,7 +273,8 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 	total_steps: int
 	tmp_dir: Path
 	max_attempts: int
-	ignore_hash: bool = False
+	debug_mode: str = _DEBUG_MODE_DEFAULT
+	save_hashes: bool = True
 	is_benchmark: bool = False
 	ci: bool = False
 
@@ -476,7 +483,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		self._total_steps = case.total_steps
 		self._tmp_dir = case.tmp_dir
 		self._max_attempts = case.max_attempts
-		self._ignore_hash = case.ignore_hash
+		self._debug_mode = case.debug_mode
+		self._save_hashes = case.save_hashes
 		self._ci = case.ci
 
 	def to_str(self) -> str:
@@ -737,7 +745,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					host_data=host_data,
 					ctx=ctx,
 					host='unix://' + mock_host.path,
-					debug_mode='unsafe',
+					debug_mode=self._debug_mode,
 					code=code,
 					calldata=calldata_bytes,
 					bucket_totals=bucket_totals,
@@ -913,13 +921,23 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 
 		expected_hash_path = single_conf['expected_hash_path']
 
+		# A golden sidecar pins the hash across commits, and a line whose hashes
+		# are still moving may legitimately stop tracking those. It may not stop
+		# comparing this run's own modes against each other -- that is the
+		# determinism property itself, and dropping it would leave a validator
+		# step asserting only that it did not crash, since `expandModes` also
+		# empties the semantics of every non-main mode. So when goldens are off,
+		# fall back to the main mode's artifact rather than checking nothing.
+		compares_golden = single_conf.get('expected_hash_is_golden', True)
+		if compares_golden and (_is_ignore_hash_enabled() or not self._save_hashes):
+			expected_hash_path = single_conf.get('runtime_hash_path')
+			compares_golden = False
+
 		check_expected_hash = expected_hash_path is not None
 		if (
 			res.result_kind == public_abi.ResultCode.VM_ERROR and res.result_data == 'timeout'
 		):
 			check_expected_hash = False  # Don't check hash for timeouts, as they can be flaky
-		if _is_ignore_hash_enabled() or self._ignore_hash:
-			check_expected_hash = False
 
 		if check_expected_hash:
 			expected_hash_path = Path(expected_hash_path)
@@ -933,12 +951,28 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					return {
 						'passed': False,
 						'context': {
-							'reason': 'hash mismatch',
+							'reason': 'hash mismatch'
+							if compares_golden
+							else 'modes of one run disagree',
+							'compared_against': 'committed golden'
+							if compares_golden
+							else 'this run of the main mode',
 							'hash_path': str(expected_hash_path),
 							'tree_path': tree_path,
 							**diff,
 						},
 					}
+			elif not compares_golden:
+				# The main mode runs first and always writes its artifact, so a
+				# missing one is a harness bug, not a golden waiting to be born.
+				return {
+					'passed': False,
+					'context': {
+						'reason': 'main mode produced no hash artifact',
+						'hash_path': str(expected_hash_path),
+						'tree_path': tree_path,
+					},
+				}
 			else:
 				expected_hash_path.parent.mkdir(exist_ok=True, parents=True)
 				expected_hash_path.write_text(
@@ -1013,7 +1047,11 @@ def integration_test_single_executor(
 	executor_integration_conf: dict = (
 		executor_integration_fn() if executor_integration_fn else {}
 	)
-	ignore_hash = executor_integration_conf.get('ignore-hash', False)
+	# `save-hashes` replaces the inverted `ignore-hash`; a line that has not been
+	# renamed yet still gets what it asked for.
+	save_hashes = executor_integration_conf.get(
+		'save-hashes', not executor_integration_conf.get('ignore-hash', False)
+	)
 
 	jsonnet_files = list(
 		x for x in CASES_DIR.glob('**/*.jsonnet') if not x.name.startswith('_')
@@ -1032,7 +1070,7 @@ def integration_test_single_executor(
 				jsonnet_file,
 				cases_dir=CASES_DIR,
 				reroute_to=reroute_to,
-				ignore_hash=ignore_hash,
+				save_hashes=save_hashes,
 				manager_service=manager_service,
 				modules_service=modules_service,
 				webdriver_service=webdriver_service,
@@ -1055,7 +1093,7 @@ def _single_integration_test(
 	*,
 	cases_dir: Path,
 	reroute_to: str,
-	ignore_hash: bool,
+	save_hashes: bool,
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
@@ -1116,6 +1154,17 @@ def _single_integration_test(
 	extra_tags = jsonnet_parsed.get('tags', [])
 	if extra_tags:
 		tags.update(extra_tags)
+
+	debug_mode = jsonnet_parsed.get('debug_mode', _DEBUG_MODE_DEFAULT)
+	if debug_mode not in _DEBUG_MODES:
+		raise ValueError(
+			f'{jsonnet_file}: unknown debug_mode {debug_mode!r}, expected one of {_DEBUG_MODES}'
+		)
+	if debug_mode == 'disabled':
+		# `reroute_to` is honored only from `safe` up, and that is what points a
+		# case at its own line's executor. Below it the case would silently run
+		# whatever the manifest resolves to.
+		raise ValueError(f'{jsonnet_file}: debug_mode "disabled" cannot reroute')
 
 	# Recompute needed_services after tags update
 	needed_services = {manager_service}
@@ -1204,7 +1253,8 @@ def _single_integration_test(
 				total_steps=total_steps,
 				tmp_dir=tmp_dir,
 				max_attempts=max_attempts,
-				ignore_hash=ignore_hash,
+				debug_mode=debug_mode,
+				save_hashes=save_hashes,
 				is_benchmark=is_benchmark,
 				ci=ci,
 			)

@@ -2,8 +2,8 @@
 """Pre-commit guard: keep source text plain and citation-free.
 
 Comments should read on their own terms and stay ASCII. Rejected anywhere in a
-scanned file: ADR references (`ADR-012`, `ADR 12`) and issue references
-(`GVM-281`) -- they renumber and move, and that prose belongs in docs/, not a
+scanned file: architecture-decision and issue-ticket references -- they
+renumber and move, and that prose belongs in docs/, not a
 source comment; and a blacklist of non-ASCII punctuation that each has an
 obvious ASCII swap: the paragraph sign, em-dash (`--`), box-drawing horizontal
 (`-`), rightwards arrow (`->`) and ellipsis (`...`). It is a blacklist, not a

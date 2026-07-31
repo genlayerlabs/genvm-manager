@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 
 import argparse
+import contextlib
+import fcntl
 import hashlib
 import os
 import posixpath
 import re
 import shlex
 import subprocess
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlparse, urlunparse
@@ -146,6 +149,12 @@ def get_all_repo_git_info(root: Path) -> list[RepoGitInfo]:
 	return result
 
 
+def git_common_dir(root: Path) -> Path:
+	return Path(
+		git_output(['git', 'rev-parse', '--path-format=absolute', '--git-common-dir'], root)
+	)
+
+
 def cache_path_for_url(root: Path, url: str) -> Path:
 	parsed = urlparse(url)
 	url_path = parsed.path if parsed.scheme else url.rsplit(':', 1)[-1]
@@ -153,7 +162,27 @@ def cache_path_for_url(root: Path, url: str) -> Path:
 	name = re.sub(r'\.git$', '', name)
 	name = re.sub(r'[^A-Za-z0-9._-]+', '-', name).strip('-') or 'repo'
 	digest = hashlib.sha256(url.encode()).hexdigest()[:16]
-	return root / '.git' / 'genvm-submodule-cache' / f'{name}-{digest}.git'
+	return git_common_dir(root) / 'genvm-submodule-cache' / f'{name}-{digest}.git'
+
+
+@contextlib.contextmanager
+def cache_lock(root: Path) -> Iterator[None]:
+	"""
+	Serialize the shared submodule cache against another copy of this script.
+
+	CI runs it from several jobs against the same checkout, and both the bare
+	cache and the worktrees that borrow it with ``--reference`` are mutated in
+	place: an interleaved init/fetch loses to git's own lockfiles, or leaves a
+	cache another job is already reading from half-updated.
+	"""
+	lock = git_common_dir(root) / 'genvm-submodule-cache.lock'
+	with open(lock, 'w') as handle:
+		try:
+			fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+		except BlockingIOError:
+			print(f'+ waiting for {lock}', flush=True)
+			fcntl.flock(handle, fcntl.LOCK_EX)
+		yield
 
 
 def ensure_cache(root: Path, url: str, hashes: list[str], env: dict[str, str]) -> Path:
@@ -199,6 +228,11 @@ def set_remote(repo: Path, name: str, url: str, env: dict[str, str]) -> None:
 
 
 def update_submodules_with_cache(root: Path, env: dict[str, str]) -> None:
+	with cache_lock(root):
+		_update_submodules_with_cache(root, env)
+
+
+def _update_submodules_with_cache(root: Path, env: dict[str, str]) -> None:
 	submodules = get_submodule_git_info(root)
 	by_url: dict[str, list[SubmoduleGitInfo]] = {}
 	for submodule in submodules:

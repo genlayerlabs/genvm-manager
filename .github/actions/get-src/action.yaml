@@ -48,15 +48,6 @@ runs:
         python3 support/scripts/ci-changes.py --github-output
     - name: setup nix
       if: ${{ inputs.with_nix == 'true' }}
-      uses: cachix/install-nix-action@v31.6.2
+      uses: ./.github/actions/genlayerlabs-nix-setup
       with:
-        extra_nix_config: |
-          experimental-features = nix-command flakes recursive-nix
-          substituters = https://cache.nixos.org/ https://nix-community.cachix.org https://cache.nix.kp2pml30.moe
-          trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= cache.nix.kp2pml30.moe:9izVvysdKza7+bjw2gI/etkDVfEQy+kne2aU/TZpA5o=
-          download-attempts = 10
-          connect-timeout = 15
-          stalled-download-timeout = 60
-          fallback = true
-        github_access_token: ${{ inputs.github_token }}
-        install_url: https://releases.nixos.org/nix/nix-2.24.14/install
+        github_token: ${{ inputs.github_token }}

@@ -190,6 +190,59 @@
             done < <(git ls-files '*Cargo.toml' ':(exclude)executors/')
             exit $rc
           '';
+          # pre-commit 4.5 exposes only the first non-deletion update from
+          # pre-push stdin, and can skip hook stages when the outgoing commit is
+          # already on another remote ref. Its supported legacy-hook chaining
+          # preserves stdin, so validate every outgoing SHA there directly.
+          verify-manager-push-refs = pkgs.writeShellScript "verify-manager-push-refs" ''
+            set -euo pipefail
+            input="$(${pkgs.coreutils}/bin/cat)"
+            if [[ -z "$input" ]]; then
+              exit 0
+            fi
+            declare -A manager_refs=()
+            while read -r local_ref local_sha remote_ref remote_sha extra; do
+              if [[ -z "$local_ref" || -z "$local_sha" || -z "$remote_ref" || -z "$remote_sha" || -n "$extra" ]]; then
+                echo "verify-pushed-executors: malformed pre-push input; refusing push"
+                exit 1
+              fi
+              if [[ "$local_sha" != 0000000000000000000000000000000000000000 ]]; then
+                manager_refs["$local_sha"]=1
+              fi
+            done <<< "$input"
+            rc=0
+            for manager_ref in "''${!manager_refs[@]}"; do
+              ${genvm-tool}/bin/genvm-tool git verify-pushed-executors --manager-ref "$manager_ref" || rc=1
+            done
+            if ((rc)); then
+              exit 1
+            fi
+            user_legacy="$(dirname -- "$0")/pre-push.user-legacy"
+            if [[ -x "$user_legacy" ]]; then
+              printf '%s\n' "$input" | "$user_legacy" "$@"
+            fi
+          '';
+          install-manager-push-refs = ''
+            hooks_dir="$(git rev-parse --git-path hooks)"
+            legacy="$hooks_dir/pre-push.legacy"
+            user_legacy="$hooks_dir/pre-push.user-legacy"
+            installed="$(${pkgs.coreutils}/bin/readlink "$legacy" 2>/dev/null || true)"
+            install_hook=1
+            # `-e` alone would call a dangling symlink absent and overwrite it.
+            if [[ ( -e "$legacy" || -L "$legacy" ) && "$installed" != *-verify-manager-push-refs && "$installed" != *-verify-single-manager-push-ref ]]; then
+              if [[ ! -e "$user_legacy" && ! -L "$user_legacy" ]]; then
+                mv "$legacy" "$user_legacy"
+              else
+                # Overwriting would lose a hook we cannot put anywhere, so the
+                # shell comes up without ours rather than without theirs.
+                echo "cannot preserve existing $legacy: $user_legacy already exists; leaving it in place" >&2
+                install_hook=0
+              fi
+            fi
+            if ((install_hook)); then
+              ln -sfn ${verify-manager-push-refs} "$legacy"
+            fi
+          '';
           pre-commit-check = git-hooks.lib.${system}.run {
             src = ./.;
             excludes = [
@@ -699,8 +752,10 @@
               # custom-rust toolchain is not shadowed.)
               ++ pre-commit-check.enabledPackages;
             # The interactive dev shell (.envrc → `.#full`) also installs the
-            # git-hooks pre-commit/commit-msg stubs into .git/hooks.
-            shellHook = shell-hook-base + pre-commit-check.shellHook;
+            # git-hooks pre-commit/commit-msg/pre-push stubs into .git/hooks.
+            # The final fragment adds the stdin-aware outgoing-ref guard chained
+            # by pre-commit's supported `.legacy` hook mechanism.
+            shellHook = shell-hook-base + pre-commit-check.shellHook + install-manager-push-refs;
           };
           devShells.check-qemu = pkgs.mkShell {
             packages = packages-0 ++ [ pkgs.qemu ];

@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from genvm_tool import formatter
+from genvm_tool import common, formatter
 from genvm_tool.formatter import Formatter, Sink
 
 from .util.watchdog import Watchdog
@@ -120,6 +120,7 @@ class SharedContext:
 			check=True,
 			capture_output=True,
 			text=True,
+			env=common.git_env(),
 		)
 
 		r = [

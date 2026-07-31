@@ -1,73 +1,36 @@
-# Your first contribution: patching an executor
+# Your First Contribution: Patching an Executor
 
-End-to-end walkthrough for the most common change — fixing something inside an
-executor line (`executors/<line>.x`). Each step links to the how-to guide with
-the full details; read those when a step surprises you.
+End-to-end walkthrough of the most common change, a fix inside an executor line.
+Each step links to the guide with the full details
 
-## 1. Set up the checkout
+1. **Set up** ([setup.md](../howto/setup.md)) —
+   `python3 support/scripts/get-all-git.py`, then enter the dev shell
+2. **Change and verify** ([build.md](../howto/building/build.md),
+   [testing/README.md](../howto/testing/README.md)):
 
-Follow [setup.md](../howto/setup.md): materialize submodules and vendored trees
-(`python3 support/scripts/get-all-git.py`), then enter the dev shell
-(`nix develop '.?submodules=1#full'`, usually auto-loaded via direnv).
+   ```bash
+   genvm-tool configure && ninja -C build all/bin
+   genvm-tool test run --filter-name 'executors/<line>.x/'
+   ```
+3. **Branch** — `genvm-tool git create-branches feat/<name>` surveys which repos
+   carry new content and branches the ones you tick: the manager gets
+   `feat/<name>`, each executor gets `pr/<line>/feat/<name>`, since all lines
+   push to one shared executor remote
+4. **Commit** ([submodules.md](../howto/committing/submodules.md)) — inside the
+   executor first, then `git add executors/<line>.x` in the manager and commit
+   the gitlink bump together with any manager-side change. If you touched
+   runners, do the hash hygiene first
+   ([committing/runners.md](../howto/committing/runners.md))
+5. **Pass pre-commit** — the hooks run where you commit, so never
+   `--no-verify`. Ahead of time: `nix fmt` for the manager, or
+   `./support/ci/run.sh pipeline commit-hooks` for everything, as CI does
+6. **Push, submodules first**, so the gitlinks resolve:
 
-## 2. Make and verify the change
-
-Edit inside `executors/<line>.x/`, then build and test:
-
-```bash
-genvm-tool configure && ninja -C build all/bin        # building/build.md
-genvm-tool test run --filter-name 'executors/<line>.x/'  # testing/README.md
-```
-
-## 3. Create the branches
-
-```bash
-genvm-tool git create-branches feat/<name>
-```
-
-It surveys which repos carry new content and creates the branch in the ones
-you tick: the manager gets `feat/<name>` verbatim, each executor gets
-`pr/<line>/feat/<name>` (all lines push to one shared executor remote, hence
-the namespace). Branch model:
-[submodules.md](../howto/committing/submodules.md).
-
-## 4. Commit, then update the gitlink
-
-The manager pins each submodule by a gitlink (a pinned commit), so the order
-matters ([submodules.md](../howto/committing/submodules.md)):
-
-1. Commit **inside** the executor: `cd executors/<line>.x && git add … && git commit`.
-2. In the manager, stage the moved gitlink: `git add executors/<line>.x`.
-3. Commit the manager (gitlink bump + any manager-side changes together).
-
-If you touched runners, do the hash hygiene first:
-[committing/runners.md](../howto/committing/runners.md).
-
-## 5. Pass pre-commit
-
-The dev shell installs each repo's pre-commit hooks, so `git commit` already
-runs them where you commit — do **not** bypass with `--no-verify`. To run them
-ahead of time:
-
-- manager only: `nix fmt` (runs the whole generated pre-commit config over the
-  working tree);
-- everything at once, as CI does: `./support/ci/run.sh pipeline commit-hooks`.
-
-## 6. Push — executor first, then manager
-
-```bash
-genvm-tool git check-for-push   # readiness per repo + suggested push command
-git -C executors/<line>.x push origin pr/<line>/feat/<name>
-git push origin feat/<name>
-```
-
-Submodules must be pushed before the manager so its pinned gitlinks resolve.
-
-## 7. Open one PR — in the manager only
-
-Open the manager PR against its dev base (e.g. `v0.6-dev`). Do **not** open
-executor PRs yourself: CI automatically opens the matching executor PR for
-every active line and links each on the manager PR as an `executor: <url>`
-line.
-
-Merge requirements (tests, merge queue): [../README.md](../README.md).
+   ```bash
+   genvm-tool git check-for-push   # readiness per repo + suggested command
+   git -C executors/<line>.x push origin pr/<line>/feat/<name>
+   git push origin feat/<name>
+   ```
+7. **Open one PR, in the manager only** ([pr.md](../howto/pr.md)), against the
+   dev base. CI opens and links the matching executor PR for every line you
+   pushed a branch for

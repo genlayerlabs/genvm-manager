@@ -31,11 +31,7 @@ def configure(parser):
 
 
 def _git(repo: common.Repo, *args: str) -> subprocess.CompletedProcess:
-	return subprocess.run(
-		['git', '-C', str(repo.path), *args],
-		capture_output=True,
-		text=True,
-	)
+	return common.git(repo, *args)
 
 
 def _new_content(repo: common.Repo) -> str | None:

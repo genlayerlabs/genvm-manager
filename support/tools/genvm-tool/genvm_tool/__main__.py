@@ -23,14 +23,14 @@ from . import (
 	cmd_build_manifest,
 	cmd_codegen,
 	cmd_configure,
-	cmd_howto,
+	cmd_docs,
 	cmd_test,
 	common,
 	formatter,
 	git,
 )
 
-TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest, cmd_codegen, cmd_howto]
+TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest, cmd_codegen, cmd_docs]
 GROUPS = [git]
 
 # One-line tagline for the man page NAME line and completion header; the fuller
@@ -43,9 +43,9 @@ git across the manager and its executor submodules.
 
 Commands are either top-level leaves (configure, test, ...) or a group with its
 own leaves (git ls, git check-for-push, ...). Pass -h to any of them for the
-per-command details, or run `genvm-tool howto` for the contributor guides."""
+per-command details, or run `genvm-tool docs` for the contributor documentation."""
 EPILOG = (
-	'Guides live in docs/contributing/howto/ (rendered by `genvm-tool howto`). '
+	'Guides live in docs/contributing/ (rendered by `genvm-tool docs`). '
 	'Every subcommand accepts -h/--help.'
 )
 

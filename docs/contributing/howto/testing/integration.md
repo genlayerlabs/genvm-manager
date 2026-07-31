@@ -1,61 +1,70 @@
-# Integration tests
+# Integration Tests
 
 ```bash
 genvm-tool test run --filter-tag integration
 ```
 
 Cases are `.jsonnet` files in `executors/<line>.x/tests/integration/`; each
-produces a `<name>/prepare` case plus one case per step (`/0l`, `/0v`, `/0s`, …).
-A sibling `.skip` file marks a case skipped. The suite iterates every line in
-`active-versions` (`.genvm-monorepo-root`) and runs each line's cases against
-that line's own built executor (`build/info.json` maps `v0.3` → the concrete
-built version).
+yields a `<name>/prepare` case plus one per step (`/0l`, `/0v`, `/0s`, …), and
+a sibling `.skip` file marks a case skipped. Every line in `active-versions`
+runs its own cases against its own built executor, via `build/info.json`
 
-## Common tags
+## Tags
 
 | Tag | Meaning |
 |---|---|
-| `stable` | needs **no LLM keys and no webdriver** (manager only) — safe to run offline |
-| `unstable`, `semi-stable` | need modules + webdriver; `unstable` is retried (3 attempts), `semi-stable` is not |
-| `bench` | benchmarks — excluded from the presets |
+| `stable` | no LLM keys and no webdriver, runs offline; the executor is told `no_modules` |
+| `semi-stable`, `unstable` | need modules and webdriver; `unstable` is retried up to 3 times |
+| `bench` | benchmarks, excluded from the presets |
+| `feature-*` | generated from the case's feature paths |
 
-## Running a subset
+Stability is the second argument of `util.features(paths, stability)` in the
+case's jsonnet `tags`; legacy v0.2.x uses a `stable/` top-level directory
+instead. `--filter-tag` tokenizes alphabetic words only, so a hyphenated tag —
+`semi-stable`, any `feature-*` — is unmatchable there; use `--filter-name`
 
-- **One executor line** — test names are repo-relative paths and
-  `--filter-name` is an unanchored regex, so:
-  `genvm-tool test run --filter-name 'executors/v0.3.x/'`
-- **Offline / no LLMs / no web** — the `stable` tag marks tests needing only
-  the manager (no modules, no webdriver; the executor is told `no_modules`):
-  `--filter-tag 'integration & stable'` (`tests/presets/release.txt`
-  additionally excludes `bench`). Stability is the second argument of
-  `util.features(paths, stability)` in the case's jsonnet `tags`
-  (`'stable'` / `'semi-stable'` / `'unstable'`). (Legacy: v0.2.x instead uses a
-  `stable/` top-level directory.)
-- **After a fix** — rerun only the failed cases via the continue file:
-  `--filter-continue <file>` (see [README.md](README.md)).
+## Running a Subset
 
-## Golden files and hashes
+1. One line: `--filter-name 'executors/v0.3.x/'`, an unanchored regex over the
+   repo-relative test name
+2. Offline: `--filter-tag 'integration & stable'`, or the `release.txt` preset,
+   which also drops `bench`
+3. After a fix: `--filter-continue <file>`, see [README.md](README.md)
 
-Goldens live next to the cases (`*.N.stdout`). A missing golden is
-auto-created on the first run; after that a mismatch **fails** the test —
-delete the sidecar to regenerate it.
+## Golden Files and Hashes
 
-With `stable_hash: true` on a step entry (the default) the leader's execution
-hash is likewise compared against an auto-created `.N.hash` sidecar; with
-`stable_hash: false` there is no sidecar and validators compare to the
-leader's runtime hash instead.
+Goldens are `*.N.stdout` next to the case: created on the first run, a mismatch
+**fails** afterwards, so delete the sidecar to regenerate. `stable_hash: true`
+on a step, the default, likewise compares the leader's execution hash against a
+`.N.hash` sidecar; with `false` there is no sidecar and validators compare
+against the leader's runtime hash
 
-`--ignore-hash` skips hash comparison *and* sidecar creation (a new case does
-NOT need it — its hash is auto-created). Use it when hashes legitimately
-differ, e.g. **runner dev mode**
-([modify-runner.md](../extending/modify-runner.md)): a modified runner changes
-runner hashes and therefore every execution hash. An executor line can also
-disable hash checks wholesale via `integration()` in its `.genvm-tool.py`
-returning `{'ignore-hash': True}` — currently the case for v0.3.x.
+`--ignore-hash` skips both comparison and sidecar creation — needed in runner
+dev mode, where every execution hash moves
+([modify-runner.md](../extending/modify-runner.md)), not for a new case. A line
+can stop tracking sidecars altogether by returning `{'save-hashes': False}` from
+`integration()` in its `.genvm-tool.py`, as v0.3.x currently does while its
+hashes still move
+
+Neither switch turns off the leader-vs-validator/sync comparison: with sidecars
+disabled a non-main mode is compared against the main mode's hash from the same
+run instead. Only that comparison makes a determinism regression visible, and a
+non-main step has no semantics goldens of its own, so without it the step would
+assert nothing beyond "did not crash"
+
+## Debug Mode
+
+Cases run at `unsafe`, where `py-genlayer:test` resolves and wall-clock is
+exposed. A top-level `debug_mode` in the jsonnet lowers that to `safe`,
+`safe-unbounded` or raises it to `unsafe-tracing`; `disabled` is rejected,
+because `reroute_to` — what points a case at its own line's executor — is
+honored only from `safe` up. Below `unsafe` a contract must name its runner by
+hash instead of `:test`, read from
+`build/out/executor/<version>/data/latest.json`
 
 ## Services
 
-The manager, modules (LLM/web), and webdriver services start automatically;
-`--no-manager` / `--no-webdriver` use externally running ones instead. Manual
-webdriver: `bash webdriver/build-and-run.sh`. If WASM files changed,
-`./build/out/executor/<version>/bin/genvm precompile` saves test time.
+The manager, the modules and the webdriver start automatically; `--no-manager`
+and `--no-webdriver` reuse externally running ones (a manual webdriver is
+`bash webdriver/build-and-run.sh`). After WASM files change,
+`./build/out/executor/<version>/bin/genvm precompile` saves test time

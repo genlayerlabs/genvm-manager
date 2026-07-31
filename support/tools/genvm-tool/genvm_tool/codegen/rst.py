@@ -64,6 +64,8 @@ def render(defs: list[Definition], rst_anchor_ns: str = '', **_opts) -> str:
 				buf.append('~' * (len(path) + 4) + '\n\n')
 				if param is not None:
 					buf.append(f'Param: {param}\n\n')
+				if path in d.docs:
+					buf.append(d.docs[path].rstrip() + '\n\n')
 	# Sections are emitted blank-line-separated, so the last one leaves a trailing
 	# blank line that `end-of-file-fixer` would strip — permanent codegen drift.
 	return ''.join(buf).rstrip('\n') + '\n'

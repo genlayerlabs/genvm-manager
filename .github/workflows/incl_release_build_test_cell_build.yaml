@@ -68,6 +68,14 @@ jobs:
           job_json: ${{ inputs.job_json }}
           key: build
 
+      # Not `success()`: a cell that failed late still built most of the
+      # closure, and that is exactly the work the retry should not repeat.
+      - name: Push to nix cache
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/genlayerlabs-nix-cache-push
+        with:
+          token: ${{ secrets.NIX_CACHE_PUSH_TOKEN }}
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

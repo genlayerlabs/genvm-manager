@@ -57,8 +57,12 @@ AND = RawStr('&&')
 VAR_IN = RawStr('$in')
 VAR_OUT = RawStr('$out')
 
-# clippy/build runs are instrumented for coverage but discard the profile here.
-COVERAGE_ENV = RawStr('RUSTFLAGS="-C instrument-coverage" LLVM_PROFILE_FILE=/dev/null')
+# Env for every cargo edge. Coverage instrumentation is deliberately absent:
+# only `genvm-tool test run --coverage` builds instrumented, and it uses its own
+# RUSTFLAGS. Instrumenting here cost ~2x in every wasm compilation the debug
+# executor performs (`precompile`, first run of a contract) while the profile it
+# produced went to /dev/null.
+CARGO_ENV = RawStr('LLVM_PROFILE_FILE=/dev/null')
 
 # Ruby's Shellwords.escape leaves this set unescaped; everything else (including
 # spaces, quotes, `$`, `?`, `#`) gets a leading backslash.
@@ -332,7 +336,7 @@ class Ninja:
 		clippy.var('subcommand', 'clippy')
 		clippy.var('wd', crate_dir)
 		clippy.var('extra_args', extra_args + clippy_lints)
-		clippy.var('env', COVERAGE_ENV)
+		clippy.var('env', CARGO_ENV)
 		if target_dir is not None:
 			clippy.var('target_dir', str(td))
 		clippy.description('Run cargo clippy for ' + rel_path)
@@ -346,7 +350,7 @@ class Ninja:
 			'extra_args',
 			extra_args + ['--fix', '--allow-dirty', '--allow-staged'] + clippy_lints,
 		)
-		fix.var('env', COVERAGE_ENV)
+		fix.var('env', CARGO_ENV)
 		if target_dir is not None:
 			fix.var('target_dir', str(td))
 		fix.finish()
@@ -364,7 +368,7 @@ class Ninja:
 			build.add_dependency(files_trg)
 			build.var('wd', crate_dir)
 			build.var('extra_args', extra_args)
-			build.var('env', COVERAGE_ENV)
+			build.var('env', CARGO_ENV)
 			if target_dir is not None:
 				build.var('target_dir', str(td))
 			build.finish()

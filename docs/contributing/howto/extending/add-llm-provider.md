@@ -1,14 +1,16 @@
-# Adding an LLM provider
+# Adding an LLM Provider
 
-If the provider is OpenAI-API-compatible, no work is needed.
+An OpenAI-API-compatible provider needs no work at all — configure it as
+`openai-compatible`
 
-Otherwise (all in the manager's `implementation/src/llm/`):
+Otherwise:
 
-1. `providers.rs` — declare and implement the provider (`impl Provider`);
-   a separate json mode is recommended.
-2. `config.rs` — add a `Provider` enum value and a `BackendConfig::to_provider`
-   case.
+1. `implementation/src/llm/providers.rs` — declare the provider and
+   `impl Provider` for it; a separate json mode is recommended
+2. `implementation/src/llm/config.rs` — add a `Provider` enum value and the
+   matching `BackendConfig::to_provider` arm
+3. `docs/schemas/default-config.json` — add the id to the provider enum
 
-Test (optional): add a case to `implementation/src/llm/handler.rs`, patch
-`.github/workflows/queue.yaml` to pass the API-key secret, and provide the key
-to the repository owners.
+Testing is optional: add a case to `implementation/src/llm/handler.rs`, pass the
+API-key secret in `.github/workflows/queue_test_cell.yaml`, and hand the key to
+the repository owners

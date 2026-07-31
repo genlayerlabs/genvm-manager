@@ -23,7 +23,12 @@ python.pkgs.buildPythonApplication {
     questionary
   ];
 
-  nativeBuildInputs = [ pkgs.installShellFiles ];
+  nativeBuildInputs = [
+    pkgs.git
+    pkgs.installShellFiles
+    pkgs.pre-commit
+    python.pkgs.pytestCheckHook
+  ];
 
   # Generate the shell completions and man page from the freshly built binary
   # (shtab / argparse-manpage both walk the whole argparse command tree) and drop
@@ -37,7 +42,7 @@ python.pkgs.buildPythonApplication {
     installManPage genvm-tool.1
   '';
 
-  doCheck = false;
+  pytestFlags = [ "unit_tests" ];
 
   meta = {
     description = "GenVM monorepo git helper (build, tests, hooks, ls)";

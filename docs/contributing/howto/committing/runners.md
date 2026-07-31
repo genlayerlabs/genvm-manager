@@ -1,28 +1,28 @@
-# Committing runner changes
+# Committing Runner Changes
 
-Runner sources and version pins live inside the executor submodule
-(`executors/<line>.x/`). All paths below are relative to that submodule root.
-
-## Dev mode
+Runner sources and version pins live in the forward-rolling executor line,
+`executors/v0.3.x/`; every path below is relative to it. Frozen v0.2.x has no
+`runners/support/versions` tree — it ships a committed registry instead
 
 During development `runners/support/versions/dev-mode.nix` may be `true` and
-runner hashes in `runners/support/versions/current.nix` may be `"test"`.
-**Neither must reach a commit.**
+hashes in `runners/support/versions/current.nix` may be `"test"`. **Neither may
+reach a commit**; a pre-commit guard rejects dev-mode
 
 Before committing:
 
-1. Set `dev-mode.nix` back to `false`.
-2. Set "test" hash to `null` in `current.nix`.
-3. Run `runners/support/versions/hash-updater.py` (from anywhere inside the
-   repo) to recompute real hashes. It builds `#runners-all` with
-   `--keep-going`, writes every reported `got:` value back into `current.nix`,
-   and repeats until fixed point. Hashes are content-addressed and depend on
-   resolved dependency uids, so they must be discovered bottom-up — the script
-   handles that automatically.
-4. Commit once all hashes are real `sha256-…` values.
+1. Set `dev-mode.nix` back to `false`
+2. Set every `"test"` hash in `current.nix` to `null`
+3. Run `runners/support/versions/hash-updater.py`, from anywhere inside the
+   repo. It builds the umbrella's `#runners-all` with `--keep-going`, writes
+   every reported `got:` value back into `current.nix`, and repeats until a
+   fixed point. Hashes are content-addressed and depend on resolved dependency
+   uids, so they must be discovered bottom-up, which the script handles. It
+   needs the executor nested under the manager umbrella; a standalone checkout
+   cannot build `runners-all`
+4. Commit once every hash is a real `sha256-…` value
 
-**Never restore an old hash value manually.** It becomes wrong the moment any
-source or dependency changes; only `hash-updater.py` produces a correct value.
+**Never restore an old hash by hand.** It becomes wrong the moment any source or
+dependency changes, and only `hash-updater.py` produces a correct one
 
-See [modify-runner.md](../extending/modify-runner.md) for the full
-runner-modification workflow.
+The full modification workflow:
+[modify-runner.md](../extending/modify-runner.md)

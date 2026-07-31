@@ -14,7 +14,7 @@ carrying:
 	(``public_abi::memory_limiter_consts::RUNNER_LOAD_COST``);
 - ``size``        — the charged content size (archive ``total_size``);
 - ``status``      — ``"charged"`` (first load in this VM) or ``"cached"``
-					(already in the VM's loaded set — free).
+	(already in the VM's loaded set — free).
 
 This module is deliberately message-agnostic: a matcher's ``message`` defaults
 to ``"runner load"`` but may name any message, so the same machinery serves

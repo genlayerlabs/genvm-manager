@@ -76,6 +76,29 @@ def build_independent_info(monorepo_cfg, source_dir: Path) -> dict:
 	}
 
 
+def base_info(
+	monorepo_cfg, source_dir: Path, build_dir: Path, rust_target_dir: Path
+) -> dict:
+	"""Every ``info.json`` key that does not depend on having built anything.
+
+	Two commands write ``info.json``: ``configure``, and the test harness when it
+	finds none (so CI can run tests without configuring first, see the
+	manager-root ``.genvm-tool.py``). ``configure`` writes this plus whatever the
+	build teaches it; the harness writes exactly this. They share the function so
+	the two files cannot describe the same tree differently.
+	"""
+	return {
+		'coverage_dir': str(build_dir / 'cov'),
+		'build_dir': str(build_dir),
+		'rust_target_dir': str(rust_target_dir),
+		# The build passes `--target` explicitly; the test harness must pass the
+		# same one or it gets a second, unshared unit graph in the same dir.
+		'rust_target': detect_rust_target(),
+		**build_independent_info(monorepo_cfg, source_dir),
+		**rust_target_dirs_info(monorepo_cfg, source_dir, rust_target_dir),
+	}
+
+
 def rust_target_dirs_info(
 	monorepo_cfg, source_dir: Path, rust_target_dir: Path
 ) -> dict:
@@ -531,19 +554,7 @@ def main(ctx: common.Context, args) -> int:
 
 	(build_dir / 'cov').mkdir(parents=True, exist_ok=True)
 	(build_dir / 'build.ninja').write_text(''.join(n.buf))
-	info = {
-		'coverage_dir': str(build_dir / 'cov'),
-		'build_dir': str(build_dir),
-		'rust_target_dir': str(rust_target_dir),
-		# The build passes `--target` explicitly; the test harness must pass the
-		# same one or it gets a second, unshared unit graph in the same dir.
-		'rust_target': rust_target,
-		# executor_versions / primary_executor_version — derivable without a build;
-		# the test harness synthesizes the same keys from source when info.json is
-		# absent (see build_independent_info).
-		**build_independent_info(monorepo_cfg, source_dir),
-		**rust_target_dirs_info(monorepo_cfg, source_dir, rust_target_dir),
-	}
+	info = base_info(monorepo_cfg, source_dir, build_dir, rust_target_dir)
 	(build_dir / 'info.json').write_text(json.dumps(info, indent=2))
 
 	# The manager reads out/data/manifest.yaml at runtime; assemble it from the

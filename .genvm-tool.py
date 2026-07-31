@@ -3,13 +3,13 @@
 Loaded once by genvm-tool (``common.load_project``) before any subcommand runs;
 subcommands ask it for what they need:
 
-- ``tests(ctx)`` — the umbrella test suite (was the top-level ``.ya-test.py``):
+- ``tests(ctx)`` -- the umbrella test suite (was the top-level ``.ya-test.py``):
 	imports the plugins it needs and registers collectors + CLI args on the
 	runner's configuration ``Context``. This is the plugins' "initial run" hook;
 	plugins themselves are plain importable modules (no test-runner-specific
 	registry). Per-suite test definitions live next to the tests in
 	``tests/system/<name>/test.py`` and are pulled in via ``ctx.collect_dir``.
-	Heavy imports stay inside this function — they need the plugin search path
+	Heavy imports stay inside this function -- they need the plugin search path
 	(``extra_python_paths`` in ``.genvm-monorepo-root``), which the test command
 	applies before calling us.
 
@@ -34,31 +34,23 @@ def tests(ctx):
 
 	_info_path = ctx.shared.root_dir / 'build' / 'info.json'
 	if not _info_path.exists():
+		# CI runs tests without configuring first. `configure` writes this same
+		# base plus what the build teaches it, and both call base_info, so the
+		# two writers cannot disagree about the tree.
 		ctx.shared.logger.warning('build/info.json not found, generating default')
 		_build_dir = ctx.shared.root_dir / 'build'
 		_build_dir.mkdir(parents=True, exist_ok=True)
 		_monorepo_cfg = json.loads(
 			(ctx.shared.root_dir / genvm_tool.cmd_configure.MONOREPO_ROOT_FILE).read_text()
 		)
-		_rust_target_dir = _build_dir / 'ya-build' / 'rust-target'
 		_info_path.write_text(
 			json.dumps(
-				{
-					'coverage_dir': str(_build_dir / 'cov'),
-					'build_dir': str(_build_dir),
-					'rust_target_dir': str(_rust_target_dir),
-					'rust_target': genvm_tool.cmd_configure.detect_rust_target(),
-					# executor_versions / primary_executor_version: resolved from
-					# source (.genvm-monorepo-root + committed manifests), so a
-					# build-less test run still knows which out/executor/<real> dir
-					# to reroute to. configure emits the same keys.
-					**genvm_tool.cmd_configure.build_independent_info(
-						_monorepo_cfg, ctx.shared.root_dir
-					),
-					**genvm_tool.cmd_configure.rust_target_dirs_info(
-						_monorepo_cfg, ctx.shared.root_dir, _rust_target_dir
-					),
-				},
+				genvm_tool.cmd_configure.base_info(
+					_monorepo_cfg,
+					ctx.shared.root_dir,
+					_build_dir,
+					_build_dir / 'ya-build' / 'rust-target',
+				),
 				indent=2,
 			)
 			+ '\n'
@@ -195,7 +187,9 @@ def tests(ctx):
 		manager_port = genvm.get_manager_port(ctx.configuration)
 
 		if no_manager:
-			manager_impl = genvm.ExternalManagerService(port=manager_port)
+			manager_impl = genvm.ExternalManagerService(
+				port=manager_port,
+			)
 			webdriver_impl = genvm.NoOpService()
 			modules_impl = genvm.NoOpService()
 		else:
@@ -221,7 +215,10 @@ def tests(ctx):
 			name='manager',
 			manager=manager_impl,
 		)
-		manager_service.meta = {'port': manager_port, 'reroute_to': reroute_to}
+		manager_service.meta = {
+			'port': manager_port,
+			'reroute_to': reroute_to,
+		}
 
 		webdriver_service = ctx.new_service(
 			name='webdriver',

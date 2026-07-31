@@ -149,6 +149,15 @@ def _emit_param(node: TrieNode, root_name: str, buf: list[str]) -> None:
 		f'    pub fn val_{param_type}(&self, v: {_rust_param_type(param_type)}) '
 		f'-> {root_name} {{\n'
 	)
+	if param_type == 'str':
+		# `is_valid_` rejects an empty tail, so an empty argument would build a
+		# code the validator refuses. Callers pass a fixed description, never
+		# user input, which makes an empty one a bug in the caller.
+		# The message is a `format!` string, so braces in the path have to be
+		# doubled on top of the usual string-literal escaping.
+		msg = json.dumps(f'{" ".join(parts)} needs a non-empty description')
+		msg = msg.replace('{', '{{').replace('}', '}}')
+		buf.append(f'        debug_assert!(!v.is_empty(), {msg});\n')
 	buf.append(f'        {root_name}(Cow::Owned(format!("{fmt_str}")))\n')
 	buf.append('    }\n')
 	buf.append('}\n\n')

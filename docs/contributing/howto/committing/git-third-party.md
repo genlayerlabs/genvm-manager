@@ -1,54 +1,49 @@
-# git-third-party (vendored trees)
+# Vendored Trees (git-third-party)
 
-Vendored third-party sources (e.g. `executors/v0.3.x/executor/third-party/wasmtime`,
-`.../wasm-tools`) are **not** tracked by the executor repo — they are
-git-ignored (`executor/.gitignore: third-party`) and materialized on demand.
-What *is* tracked, per executor line, is `.git-third-party/`:
+Vendored sources such as `executors/v0.3.x/executor/third-party/wasmtime` are
+git-ignored and materialized on demand. Why patches rather than a fork:
+[vendored-trees.md](../../explanation/vendored-trees.md). What is tracked, per
+line, is `.git-third-party/`:
 
-- `.git-third-party/config.json` — per repo: upstream `url`, pinned base
-  `commit`, `patches` count, optional `submodules` list (absent = update all
-  submodules, `[]` = none, list = only those).
-- `.git-third-party/patches/<repo-path>/<n>` — numbered `git format-patch`
-  files (1-based, mbox format) applied on top of the base commit.
+1. `config.json` — per repo: upstream `url`, pinned base `commit`, `patches`
+   count, optional `submodules` list
+2. `patches/<repo-path>/<n>` — numbered `git format-patch` files, 1-based, mbox
+   format, applied on top of the base commit
 
-The tool is `support/tools/git-third-party/git-third-party` (single Python
-script; on PATH via `env.sh` and the dev shell; invoked as `git third-party`).
-It has **no `--help`** — running with no subcommand prints usage. Subcommands:
+The tool is `support/tools/git-third-party/git-third-party`, invoked as
+`git third-party`, on `PATH` in the dev shell and through `env.sh`. It has no
+`--help`; running it bare prints usage
 
 | Command | Effect |
 |---|---|
-| `git third-party add <PATH> <REPO_URL> <COMMIT>` | register a new vendored repo (path must already be git-ignored) and materialize it |
-| `git third-party update {--all \| <path>...}` | materialize: nested `git init`+fetch of the pinned commit, submodule update, then `git am` the patches |
-| `git third-party save {--all \| <path>...}` | regenerate patch files from commits above the base commit; updates the count in `config.json` |
+| `add <PATH> <REPO_URL> <COMMIT>` | register a vendored repo (the path must already be git-ignored) and materialize it |
+| `update {--all \| <path>...}` | materialize: nested `git init` + fetch of the pinned commit, submodule update, `git am` of the patches |
+| `save {--all \| <path>...}` | regenerate the patches from the commits above the base commit, updating the count |
 
-`update` refuses to run on a dirty vendored tree. The materialized tree is a
-real nested git repo whose history is `base commit` + one commit per patch.
+`update` refuses a dirty tree. The result is a real nested git repo: base commit
+plus one commit per patch. It always runs
+`git submodule update --init --recursive --depth 1` first, so `submodules: []`
+only skips the second pass and a list only adds a targeted one
 
-## Editing a vendored tree (e.g. a wasmtime patch)
+## Editing a Vendored Tree
 
-1. Edit files in `executors/<line>.x/executor/third-party/wasmtime` and
-   **commit inside that nested repo** (normal `git commit`; patches are derived
-   from history above the base commit).
-2. `git third-party save executor/third-party/wasmtime` (path relative to cwd) —
-   rewrites `.git-third-party/patches/...` deterministically
-   (`format-patch --zero-commit --no-signature --numbered-files`).
-3. In the executor repo: `git add .git-third-party/`, commit, push.
-4. In the manager: bump the gitlink ([submodules.md](submodules.md)).
+1. Edit, and **commit inside the nested repo** — patches come from the history
+   above the base commit
+2. `git third-party save executor/third-party/wasmtime`, path relative to the
+   current directory
+3. In the executor repo: `git add .git-third-party/`, commit, push
+4. Bump the gitlink in the manager ([submodules.md](submodules.md))
 
-The nested repo itself is never pushed — only the patch files persist.
+The nested repo is never pushed, only the patches persist. To bump upstream,
+edit `commit` in `config.json` and run `update`; on an `am` conflict fix up the
+nested repo's commits and `save`
 
-To bump the pinned upstream version: edit `commit` in `config.json`, then
-`git third-party update <path>` (patches are re-applied with `git am`; resolve
-conflicts by fixing up the nested repo's commits and running `save`).
+## Build Integration
 
-## Build integration
-
-- Local/CI checkouts run `git third-party update --all` **inside each executor
-  submodule** — the config is resolved from the current git toplevel, so running
-  it once at the manager root materializes nothing (CI:
-  `.github/actions/get-src/action.yaml`; local: [setup.md](../setup.md)).
-- Nix does **not** call the tool: `support/nix/git-third-party.nix` re-reads
-  `config.json` and uses `builtins.fetchGit` + `pkgs.applyPatches`, mounted into
-  the source layout by `support/default.nix`. So nix builds see exactly the
-  committed base commit + patches — another reason to `save` and commit before
-  building flake packages.
+1. Local and CI checkouts run `git third-party update --all` **inside each
+   executor submodule** — the config resolves from the current git toplevel, so
+   running it at the manager root materializes nothing
+2. Nix never calls the tool: `support/nix/git-third-party.nix` re-reads
+   `config.json` and uses `builtins.fetchGit` plus `pkgs.applyPatches`, ignoring
+   `submodules`. So nix sees the committed base plus patches — `save` and commit
+   before building any flake package

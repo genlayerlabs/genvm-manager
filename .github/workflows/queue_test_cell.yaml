@@ -112,6 +112,12 @@ jobs:
           job_json: ${{ inputs.job_json }}
           key: tool
 
+      - name: Push to nix cache
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/genlayerlabs-nix-cache-push
+        with:
+          token: ${{ secrets.NIX_CACHE_PUSH_TOKEN }}
+
       # Postmortem on the same runner the cell just used; see the action for
       # what it probes and why it is not an `incl_*` reusable workflow.
       # `failure()` covers any earlier step failing and is already false on a

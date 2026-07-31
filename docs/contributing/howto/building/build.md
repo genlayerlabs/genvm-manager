@@ -1,48 +1,45 @@
-# Build (debug)
+# Debug Build
 
-All commands assume the dev shell (`nix develop '.?submodules=1#full'`, usually
-via direnv) — it provides `genvm-tool`, `ninja`, `cargo`, `python3`.
-First-time clone: [setup.md](../setup.md).
+Everything assumes the dev shell, which provides `genvm-tool`, `ninja`, `cargo`
+and `python3`. First clone: [setup.md](../setup.md)
 
 ```bash
-genvm-tool configure   # generates build/build.ninja + build/info.json (like CMake)
+genvm-tool configure   # writes build/build.ninja and build/info.json, like CMake
 ninja -C build all/bin
 ```
 
-Outside the dev shell call `support/tools/genvm-tool/genvm-tool configure`.
-
-Re-run `genvm-tool configure` after adding/removing/renaming source files —
-symptom if you forget: ninja `missing and no known rule to make it`.
+Re-run `configure` after adding, removing or renaming a source file; forgetting
+shows up as ninja's `missing and no known rule to make it`
 
 | Ninja target | Builds |
 |---|---|
-| `all` | everything (incl. runners; x86_64 Linux only) |
-| `all/bin` | all Rust binaries |
+| `all` | `all/bin` + `all/data` |
+| `all/bin` | every Rust binary: the manager and each executor line |
+| `all/manager` | the manager binary only |
+| `all/executor/<line>` | one executor line |
 | `all/data` | runner data via nix |
-| `codegen` | code generation (see [genvm-tool.md](../genvm-tool.md)) |
+| `all/runners` | the runners themselves via nix, x86_64 Linux only |
+| `codegen` | generated sources ([genvm-tool.md](../genvm-tool.md)) |
 
-Outputs under `build/out`:
+Outputs land in `build/out`: `bin/genvm-modules`, `bin/genvm-manager`,
+`bin/genvm-post-install`, and `executor/<version>/bin/genvm` per built line,
+where the version comes from `executors/<line>.x/manifest.json` and is recorded
+in `build/info.json`
 
-- `bin/genvm-modules` — modules binary
-- `executor/<version>/bin/genvm` — one dir per built executor version; the
-  version comes from `executors/<line>.x/manifest.json` and is recorded in
-  `build/info.json`
+Release packages: [release-build.md](../releasing/release-build.md). Runners:
+[runners.md](runners.md)
 
-Release/nix packages: [release-build.md](../releasing/release-build.md).
-Getting or changing runners: [runners.md](runners.md), [modify-runner.md](../extending/modify-runner.md).
+## Cargo Notes
 
-## Cargo notes
-
-- Plain `cargo` inside a submodule needs the dev-shell env (lua, pkg-config, …);
-  prefer the ninja build.
-- In this nix environment, `cargo check` inside an executor's `executor/` dir
-  may need `LD_LIBRARY_PATH="$(nix eval --raw nixpkgs#zlib)/lib"` so rustc
-  finds libz.
-- Each executor line gets its own cargo target dir
-  (`build/ya-build/rust-target/<line>`, listed in `build/info.json` under
-  `rust_target_dirs`); crates outside a line use the parent dir. Lines ship
-  crates with identical names and versions, and cargo's artifact hash ignores
-  where a package came from, so a shared dir lets them overwrite each other.
-- Build and tests both pass `--target <host triple>` (`rust_target` in
-  `build/info.json`). Omitting it builds a second, unshared unit graph in the
-  same dir, so running cargo by hand without it recompiles everything.
+1. Prefer the ninja build — plain `cargo` in a submodule needs the dev-shell
+   environment (lua, pkg-config, …)
+2. `cargo check` in an executor's `executor/` may need
+   `LD_LIBRARY_PATH="$(nix eval --raw nixpkgs#zlib)/lib"` so rustc finds libz
+3. Each line has its own target directory
+   (`build/ya-build/rust-target/<line>`, in `build/info.json` under
+   `rust_target_dirs`); crates outside a line use the parent. Lines ship crates
+   with identical names and versions, and cargo's artifact hash ignores where a
+   package came from, so a shared directory would let them overwrite each other
+4. Build and tests pass `--target <host triple>` (`rust_target` in
+   `build/info.json`). Without it cargo builds a second, unshared unit graph in
+   the same directory and recompiles everything

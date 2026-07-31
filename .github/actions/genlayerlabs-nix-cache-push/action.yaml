@@ -1,0 +1,88 @@
+name: GenLayer nix cache push
+description: >-
+  Upload everything this job built locally to the attic binary cache, so the
+  next run substitutes it instead of rebuilding.
+inputs:
+  token:
+    description: >-
+      push token for the cache. Empty disables the step entirely: a pull request
+      from a fork gets no secrets, and such a run must still pass.
+    required: false
+    default: ""
+  cache:
+    description: cache name on the server
+    required: false
+    default: genlayer
+  endpoint:
+    description: attic server the cache lives on
+    required: false
+    default: https://nix-cache.ygr.ai
+  include:
+    description: >-
+      Regex matched against the store path name with its hash stripped. Narrows
+      the locally-built set to our own derivations: a build also realizes
+      third-party intermediates that upstream caches already serve.
+    required: false
+    default: genlayer|genvm
+  exclude:
+    description: regex matched against the full store path; empty disables
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    # No `-x`: the token is passed to `attic login` as an argument.
+    - shell: bash -eo pipefail {0}
+      if: ${{ inputs.token != '' }}
+      env:
+        NIX_CACHE_PUSH_TOKEN: ${{ inputs.token }}
+        CACHE: ${{ inputs.cache }}
+        ENDPOINT: ${{ inputs.endpoint }}
+        INCLUDE: ${{ inputs.include }}
+        EXCLUDE: ${{ inputs.exclude }}
+      run: |
+        cd "$GITHUB_WORKSPACE"
+
+        # A cache that refuses uploads must not turn a green build red, so every
+        # step of this script warns and gives up instead of failing the job.
+        attic_link="${RUNNER_TEMP:-/tmp}/attic-client"
+        # An out-link rather than `nix run`: it is a gcroot, and a second call
+        # in the same job skips both evaluation and substitution.
+        # `--inputs-from .` resolves `nixpkgs` through our flake lock, so the
+        # client comes from the pinned revision instead of the mutable registry.
+        if ! nix build --out-link "$attic_link" --inputs-from . nixpkgs#attic-client; then
+          echo "::warning::could not build the attic client; nothing pushed"
+          exit 0
+        fi
+
+        # `ultimate` is nix's own flag for "built on this machine", which is
+        # exactly the set worth uploading: everything else arrived from a
+        # substituter that already has it. It covers the intermediates the
+        # final artifact is assembled from, not just the artifact.
+        paths="${RUNNER_TEMP:-/tmp}/attic-paths"
+        nix path-info --all --json --json-format 1 \
+          | jq -r --arg inc "$INCLUDE" --arg exc "$EXCLUDE" '
+              to_entries[]
+              | select(.value.ultimate)
+              | select($inc == "" or (.key | sub("^/nix/store/[^-]+-"; "") | test($inc)))
+              | select(.key | test("(-|\\.)(source|socket|service|env|pam|drv)$") | not)
+              | select($exc == "" or (.key | test($exc) | not))
+              | .key' > "$paths" || echo "::error::failed to enumerate locally-built paths"
+
+        echo "::group::artifacts"
+        cat "$paths"
+        echo "::endgroup::"
+
+        if [ ! -s "$paths" ]; then
+          echo "nothing was built locally; nothing to push"
+          exit 0
+        fi
+        echo "pushing $(wc -l < "$paths") path(s) to $CACHE"
+
+        if ! "$attic_link/bin/attic" login ci "$ENDPOINT" "$NIX_CACHE_PUSH_TOKEN" --set-default; then
+          echo "::warning::attic login failed; nothing pushed"
+          exit 0
+        fi
+
+        xargs -a "$paths" "$attic_link/bin/attic" push --jobs 4 "$CACHE" \
+          || echo "::warning::attic push failed"

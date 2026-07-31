@@ -157,6 +157,23 @@ class ManagerService(genvm_tool.tests.exec.service.Service):
 			log_file = open(self._log_path, 'w')
 
 		port = get_manager_port(self._env)
+		config_dir = self._log_path.parent if self._log_path is not None else Path('/tmp')
+		config_dir.mkdir(parents=True, exist_ok=True)
+		config_path = config_dir / 'genvm-manager.yaml'
+		manifest_path = self._bin_path.parent.parent / 'data' / 'manifest.yaml'
+		config_path.write_text(
+			'\n'.join(
+				[
+					'threads: 4',
+					'blocking_threads: 48',
+					'log_disable: tracing*,polling*,tungstenite*,tokio_tungstenite*',
+					'log_level: info',
+					f'manifest_path: {json.dumps(str(manifest_path))}',
+					'permits: null',
+					'',
+				]
+			)
+		)
 
 		process = await asyncio.subprocess.create_subprocess_exec(
 			str(self._bin_path),
@@ -164,6 +181,8 @@ class ManagerService(genvm_tool.tests.exec.service.Service):
 			'--port',
 			str(port),
 			'--die-with-parent',
+			'--config',
+			str(config_path),
 			stdin=asyncio.subprocess.DEVNULL,
 			stdout=asyncio.subprocess.PIPE if use_pipe else asyncio.subprocess.DEVNULL,
 			stderr=asyncio.subprocess.PIPE if use_pipe else asyncio.subprocess.DEVNULL,
@@ -247,4 +266,9 @@ class ExternalManagerService(genvm_tool.tests.exec.service.Service):
 		self._port = port
 
 	async def start(self) -> ManagerHandle:
-		return ManagerHandle(self._port, process=None, log_file=None, log_tasks=None)
+		return ManagerHandle(
+			self._port,
+			process=None,
+			log_file=None,
+			log_tasks=None,
+		)

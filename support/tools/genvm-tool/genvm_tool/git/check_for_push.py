@@ -12,7 +12,6 @@ against your last-fetched `origin/<branch>` instead, with no network. This never
 fetches, resets, switches, or writes anything.
 """
 
-import os
 import shlex
 import subprocess
 
@@ -22,10 +21,6 @@ NAME = 'check-for-push'
 HELP = 'read-only pre-push status + suggested action across manager and submodules'
 
 REMOTE = 'origin'
-# `ls-remote` is a network round-trip; cap it so an unreachable remote can't hang
-# the survey, and never let git pop an interactive auth prompt.
-_LS_REMOTE_TIMEOUT = 20
-_NET_ENV = {'GIT_TERMINAL_PROMPT': '0'}
 
 
 def configure(parser):
@@ -43,11 +38,7 @@ def configure(parser):
 
 
 def _git(repo: common.Repo, *args: str) -> subprocess.CompletedProcess:
-	return subprocess.run(
-		['git', '-C', str(repo.path), *args],
-		capture_output=True,
-		text=True,
-	)
+	return common.git(repo, *args)
 
 
 def _current_branch(repo: common.Repo) -> str:
@@ -56,8 +47,7 @@ def _current_branch(repo: common.Repo) -> str:
 
 
 def _origin_url(repo: common.Repo) -> str:
-	r = _git(repo, 'config', '--get', f'remote.{REMOTE}.url')
-	return r.stdout.strip() if r.returncode == 0 else ''
+	return common.remote_url(repo, REMOTE)
 
 
 def _worktree_state(
@@ -114,7 +104,7 @@ def _launch_origin_queries(targets: list[tuple[common.Repo, str]]):
 		g['branches'].add(branch)
 		g['members'].append((repo, branch))
 
-	env = {**os.environ, **_NET_ENV}
+	env = common.git_env(**common.GIT_NETWORK_ENV)
 	procs = []
 	for g in groups.values():
 		refs = [f'refs/heads/{b}' for b in sorted(g['branches'])]
@@ -136,7 +126,7 @@ def _collect_origin_queries(launched) -> dict[str, tuple[str | None, bool]]:
 	procs, result = launched
 	for g, proc in procs:
 		try:
-			out, _ = proc.communicate(timeout=_LS_REMOTE_TIMEOUT)
+			out, _ = proc.communicate(timeout=common.GIT_REMOTE_TIMEOUT)
 			ok = proc.returncode == 0
 		except subprocess.TimeoutExpired:
 			proc.kill()

@@ -1,21 +1,22 @@
-# Adding a WASI function to an executor
+# Adding a WASI Function
 
-Paths are relative to `executors/<line>.x/`.
+Paths are relative to `executors/<line>.x/`
 
-## Via gl_call (preferred — no ABI surface change)
+## Through gl_call — Preferred
 
-1. `executor/crates/sdk-rs/src/abi/gl_call.rs` — add the message shape.
-2. `executor/src/wasi/genlayer_sdk.rs` — implement the handler; add a version
-   check so older contracts don't observe the new method.
+A new gl_call method is a minor-compatible ABI addition, see the
+[versioning spec](../../../website/src/spec/01-core-architecture/03-versioning.rst)
 
-New gl_call methods are a minor-compatible ABI addition — see the
-[versioning spec](../../../website/src/spec/01-core-architecture/03-versioning.rst).
+1. `executor/crates/sdk-rs/src/abi/gl_call.rs` — add the message shape
+2. `executor/src/wasi/genlayer_sdk/` — implement the handler, with a version
+   check so an older contract does not observe the new method
 
-## Raw WASI function (new ABI surface)
+## Raw WASI Function
 
-1. `executor/src/wasi/witx/genlayer_sdk.witx` — add the declaration.
-2. `executor/src/wasi/genlayer_sdk.rs` — add the implementation (under the
-   generated `impl` trait).
+This changes the ABI surface itself
+
+1. `executor/src/wasi/witx/genlayer_sdk.witx` — add the declaration
+2. `executor/src/wasi/genlayer_sdk/` — implement it under the generated trait
 3. `runners/cpython/modules/_genlayer_wasi/genlayer.c` — add the Python proxy.
-   This changes the cpython runner hash — refresh it per
-   [modify-runner.md](modify-runner.md).
+   This changes the cpython runner hash, so refresh it per
+   [modify-runner.md](modify-runner.md)

@@ -75,6 +75,7 @@ class StrTrie:
 	name: str
 	root: TrieNode
 	entries: list  # unfolded entries, kept for flat path enumeration (rst)
+	docs: dict[str, str]
 
 
 Definition = Enum | Const | Consts | StrTrie
@@ -178,7 +179,14 @@ def parse(data) -> list[Definition]:
 			defs.append(Consts(t['name'], t['repr'], t['values']))
 		elif kind == 'str_trie':
 			entries = [_unfold(e) for e in t['values']]
-			defs.append(StrTrie(t['name'], _build(entries, [], '', False), entries))
+			defs.append(
+				StrTrie(
+					t['name'],
+					_build(entries, [], '', False),
+					entries,
+					t.get('docs', {}),
+				)
+			)
 		else:
 			raise ValueError(f'unknown codegen type {kind!r}')
 	return defs

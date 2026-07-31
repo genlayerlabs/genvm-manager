@@ -43,6 +43,14 @@ jobs:
       - name: Run hooks
         run: ./support/ci/run.sh pipeline commit-hooks
 
+      # The hook toolchains are per-repo flake outputs, so this is the job that
+      # first realizes them after a `git-hooks.nix` bump.
+      - name: Push to nix cache
+        if: ${{ !cancelled() }}
+        uses: ./.github/actions/genlayerlabs-nix-cache-push
+        with:
+          token: ${{ secrets.NIX_CACHE_PUSH_TOKEN }}
+
   # `check-commit-message` is a commit-msg-stage hook, so the pre-commit run
   # above never fires it. Check every commit the PR adds, in the manager and in
   # each executor submodule that moved.

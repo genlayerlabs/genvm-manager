@@ -1,17 +1,16 @@
-# Runners
+# Getting Runners
 
-Runners build only on x86_64 Linux (part of the `all` ninja target /
-`#runners-all` nix attr). On other hosts, download them:
+Runners build only on x86_64 Linux — `ninja -C build all/runners`, or the
+`#runners-all` nix attribute. Never build them natively on macOS — deterministic
+runner artifacts require a Linux builder; use a remote nix builder or download:
 
 ```bash
-python3 build/out/bin/genvm-post-install --create-venv false --default-step false --runners-download true --error-on-missing-executor false
+python3 build/out/bin/genvm-post-install \
+    --default-steps false --runners-download true --error-on-missing-executor false
 ```
 
-or fetch `genvm-universal.tar.xz` from a
+Alternatively fetch `genvm-universal.tar.xz` from a
 [genvm-manager release](https://github.com/genlayerlabs/genvm-manager/releases)
-and extract it over `build/out`.
+and extract it over `build/out`
 
-Do **not** build runners natively on macOS — deterministic runner artifacts
-require a Linux builder (remote nix builder or download).
-
-Changing a runner: [modify-runner.md](../extending/modify-runner.md).
+Changing a runner: [modify-runner.md](../extending/modify-runner.md)
