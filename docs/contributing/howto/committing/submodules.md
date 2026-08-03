@@ -63,6 +63,25 @@ git push origin feat/<name>
 A rebased manager branch needs `--force-with-lease`; executor feature branches
 are normally ahead-only. Runner hash hygiene first: [runners.md](runners.md)
 
+## Executor PR linkage and cross-repo E2E
+
+Cross-repo E2E treats the **manager PR** as the GenVM change. It checks out the
+manager PR's synthetic merge commit, then materializes the exact executor
+commits pinned by its `executors/<line>.x` gitlinks. An executor PR is a mirror
+for review and coordinated landing; it is not an independent E2E input.
+
+CI-created executor PRs include a managed **Manager and cross-repo E2E** section
+that links back to the owning manager PR. The section starts with a
+`genvm-manager-link` HTML comment containing canonical JSON. Its schema includes
+the manager repository and PR, executor line and branches, gitlink path, and
+`"cross_repo_e2e_source":"manager-pr-gitlink"`. CI reconciles this section on
+both new and existing mirror PRs without changing unrelated PR-body text.
+
+An executor-only branch or manually opened executor PR is therefore **not** in
+cross-repo E2E. Commit and push the executor change, update the corresponding
+gitlink in a manager branch, and open the manager PR. E2E coverage begins from
+that manager PR; the linked executor mirror must not be merged independently.
+
 ## Why There Are Two Runner Trees
 
 Forward-rolling lines share the top-level `runners/<id>/<aa>/<rest>.tar` tree,

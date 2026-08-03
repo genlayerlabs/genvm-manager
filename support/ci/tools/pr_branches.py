@@ -2,6 +2,7 @@ import argparse
 import json
 
 import ci_lib
+import executor_pr_link
 import gh_common
 import pr_branches_info
 from pr_branches_info import RepoInfo
@@ -58,15 +59,13 @@ def open_pr(
 	title: str,
 	manager_repo: str,
 	manager_pr: str,
+	line: str,
 	token: str,
 ) -> str:
 	"""
 	Open the executor mirror PR `head -> base`, or reuse one that races in.
 	"""
-	body = (
-		f'Auto-opened executor mirror of {manager_repo}#{manager_pr}.\n\n'
-		f'Carries the executor-side work for that manager PR.'
-	)
+	body = executor_pr_link.render(manager_repo, manager_pr, line, head, base)
 	r = pr_branches_info.gh(
 		'pr',
 		'create',
@@ -159,7 +158,18 @@ class PrBranches(ci_lib.Tool):
 				title,
 				manager.repo,
 				pr_number,
+				info.line,
 				executor_token,
+			)
+			executor_pr_link.reconcile(
+				executor_repo=info.repo,
+				executor_pr_url=url,
+				manager_repo=manager.repo,
+				manager_pr=pr_number,
+				line=info.line,
+				head=info.head_ref,
+				base=info.base_ref,
+				token=executor_token,
 			)
 			print(f'{info.line}: PR {url}')
 		return 0

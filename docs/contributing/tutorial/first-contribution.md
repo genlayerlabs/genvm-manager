@@ -33,4 +33,6 @@ Each step links to the guide with the full details
    ```
 7. **Open one PR, in the manager only** ([pr.md](../howto/pr.md)), against the
    dev base. CI opens and links the matching executor PR for every line you
-   pushed a branch for
+   pushed a branch for. Each executor mirror links back to the manager PR and
+   states that the manager gitlink is its only cross-repo E2E entry point. An
+   executor-only PR is not covered until a manager PR pins it.

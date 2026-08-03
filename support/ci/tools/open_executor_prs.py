@@ -29,6 +29,7 @@ import argparse
 import json
 
 import ci_lib
+import executor_pr_link
 import gh_common
 from gh_common import gh
 
@@ -70,7 +71,7 @@ def existing_pr(ctx: gh_common.Ctx, head: str, base: str) -> str | None:
 	return url or None
 
 
-def open_pr(ctx: gh_common.Ctx, head: str, base: str) -> str:
+def open_pr(ctx: gh_common.Ctx, line: str, head: str, base: str) -> str:
 	title = gh(
 		'pr',
 		'view',
@@ -83,11 +84,7 @@ def open_pr(ctx: gh_common.Ctx, head: str, base: str) -> str:
 		'.title',
 		token=gh_common.manager_token(),
 	).stdout.strip()
-	body = (
-		f'Auto-opened executor mirror of {ctx.manager_repo}#{ctx.pr_number}.\n\n'
-		f'Carries the executor-side work for that manager PR. Auto-closed as merged '
-		f'when the manager PR lands (its `{head}` branch is moved onto `{base}`).'
-	)
+	body = executor_pr_link.render(ctx.manager_repo, ctx.pr_number, line, head, base)
 	r = gh(
 		'pr',
 		'create',
@@ -171,7 +168,17 @@ def open_executor_prs(ctx: gh_common.Ctx) -> None:
 		if not executor_branch_exists(ctx, head):
 			print(f'no executor branch `{head}`; skipping {line} (nothing pushed for it)')
 			continue
-		url = existing_pr(ctx, head, base) or open_pr(ctx, head, base)
+		url = existing_pr(ctx, head, base) or open_pr(ctx, line, head, base)
+		executor_pr_link.reconcile(
+			executor_repo=ctx.executor_repo,
+			executor_pr_url=url,
+			manager_repo=ctx.manager_repo,
+			manager_pr=ctx.pr_number,
+			line=line,
+			head=head,
+			base=base,
+			token=gh_common.executor_token(),
+		)
 		print(f'{line}: executor PR {url}')
 		lines.append(f'executor: {url}')
 	if lines:
