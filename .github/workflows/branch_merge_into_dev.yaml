@@ -10,7 +10,8 @@ name: branch / merge PR into dev
 # Gates (all required):
 #   1. base branch is a v<X>-dev branch
 #   2. a maintainer (push access) approved the head commit; pushing new commits
-#      revokes it, since the approval is matched against that exact sha
+#      revokes it, since the approval is matched against that exact sha. The
+#      `rtm` (ready-to-merge) label authorizes the merge in its place
 #   3. full GenVM CI (queue.yaml) concluded success on the head commit
 #   4. the cross-repo E2E check concluded success on the head commit
 #   5. the PR is 0 commits behind base (head already contains base tip)

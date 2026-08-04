@@ -108,22 +108,25 @@ def _first_match(patterns: list[re.Pattern], text: str) -> str | None:
 class CommitPart:
 	title: str
 	body: str = ''
+	bullet: bool = False
 
 
 def parse_commit(message: str) -> list[CommitPart]:
 	"""Split a commit message into parts to validate independently.
 
-	A squash/PR-merge commit (GitHub style) has bullet lines in the body that
-	are themselves conventional commit subjects.  Each becomes its own CommitPart;
-	the umbrella title becomes the first part with any non-bullet body text.
-	A regular commit returns a single CommitPart.
+	A squash carries a bullet per collapsed commit, each its own subject and
+	body; the umbrella takes what precedes the first bullet.
+
+	A `*` line is a bullet, full stop -- that is what lets squashing a squash
+	flatten rather than nest -- so one that is not a conventional subject is a
+	malformed bullet, not body text.
 	"""
 	lines = message.splitlines()
 	title = lines[0] if lines else ''
 	body_lines = lines[1:] if len(lines) > 1 else []
 
-	squash_parts: list[CommitPart] = []
-	non_bullet: list[str] = []
+	parts = [CommitPart(title=title)]
+	bodies: list[list[str]] = [[]]
 
 	for line in body_lines:
 		stripped = line.strip()
@@ -132,14 +135,14 @@ def parse_commit(message: str) -> list[CommitPart]:
 		m = SQUASH_BULLET_RE.match(stripped)
 		if m:
 			bullet = stripped[m.end() :]
-			clean, _ = _split_trailing_emojis(PR_REF_RE.sub('', bullet))
-			if COMMIT_FORMAT_RE.match(clean):
-				squash_parts.append(CommitPart(title=bullet))
-				continue
-		non_bullet.append(line)
+			parts.append(CommitPart(title=bullet, bullet=True))
+			bodies.append([])
+		else:
+			bodies[-1].append(line)
 
-	umbrella = CommitPart(title=title, body='\n'.join(non_bullet).strip())
-	return [umbrella, *squash_parts] if squash_parts else [umbrella]
+	for part, body in zip(parts, bodies):
+		part.body = '\n'.join(body).strip()
+	return parts
 
 
 def _check_subject(subject: str, errors: list[str], warnings: list[str]) -> None:
@@ -175,6 +178,11 @@ def validate_part(part: CommitPart) -> tuple[list[str], list[str]]:
 	warnings: list[str] = []
 
 	_check_subject(part.title, errors, warnings)
+	if errors and part.bullet:
+		errors.append(
+			'  A body line starting with `*` is a squash bullet, so it must be a '
+			'conventional commit subject.'
+		)
 
 	if hit := _first_match(AI_PATTERNS, part.title + '\n' + part.body):
 		errors.append(f"AI attribution detected: '{hit}'.")
@@ -202,9 +210,26 @@ def validate_part(part: CommitPart) -> tuple[list[str], list[str]]:
 	return errors, warnings
 
 
+def _check_control_chars(message: str, errors: list[str]) -> None:
+	"""Reject control characters: a message is text, newlines and tabs.
+
+	Anything else is invisible where the message is written and meaningful to
+	something downstream that reads it.
+	"""
+	for index, char in enumerate(message):
+		# `Cc` alone: emoji sequences are joined with `Cf`.
+		if char in '\n\t' or unicodedata.category(char) != 'Cc':
+			continue
+		errors.append(
+			f'Control character {char!r} at offset {index}; a commit message is '
+			f'text, newlines and tabs.'
+		)
+
+
 def validate(message: str) -> tuple[list[str], list[str]]:
 	all_errors: list[str] = []
 	all_warnings: list[str] = []
+	_check_control_chars(message, all_errors)
 	for part in parse_commit(message):
 		errors, warnings = validate_part(part)
 		all_errors.extend(errors)

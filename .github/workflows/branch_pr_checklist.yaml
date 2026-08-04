@@ -64,9 +64,23 @@ jobs:
           - [ ] Provision executor PRs <!-- action:provision -->
           - [ ] Merge into dev <!-- action:merge -->
 
-          <sub>Full GenVM CI runs only when **`run-full-tests`** is set — "Force run full tests" is a sticky toggle for it. **Merge** requires: an approving review from a maintainer on the head commit (pushing revokes it), green full tests, green E2E, and the branch 0 commits behind.</sub>
+          <details><summary><b>Merge</b></summary>
 
-          <sub>A **repo admin** can comment `/genvm-force-merge` to land the PR without the review, full-CI and E2E gates — for when those signals are unobtainable, not when they are red. The base, title and 0-behind checks still apply, and the skip is recorded on the PR.</sub>
+          Requires, on the exact head commit:
+
+          - an approving review from a maintainer (any push revokes it), or the **`rtm`** label
+          - linear history — 0 commits behind base
+          - green full GenVM CI and green cross-repo E2E
+
+          Full CI runs only when **`run-full-tests`** or **`rtm`** is set; "Force run full tests" is a sticky toggle for the former.
+
+          Every repo lands ONE squashed commit, subject `<PR title> (#N)`.
+          </details>
+
+          <details><summary><b>Commands</b></summary>
+
+          - `/genvm-force-merge` — **repo admin** only: land without the review, full-CI and E2E gates, for when those signals are unobtainable, not when they are red. Base, title and 0-behind still apply, and the skip is recorded on the PR.
+          </details>
           EOF
           )"
 

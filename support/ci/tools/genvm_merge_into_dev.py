@@ -10,7 +10,8 @@ and E2E validated.
 
 Gates (all required, all on the head commit):
 1. base branch is a v<X>-dev branch
-2. a maintainer (push access) approved the head commit — pushing revokes it
+2. a maintainer (push access) approved the head commit — pushing revokes it — or
+	the PR carries the `rtm` (ready-to-merge) label
 3. full GenVM CI (queue.yaml) concluded success
 4. the cross-repo E2E check (exact name, from the exact app) concluded success
 5. the PR is 0 commits behind base
@@ -57,7 +58,10 @@ pushes can leave the repos split, and they are reported with the exact ref
 update to replay.
 
 A squashed message is the PR title plus one `* <subject>` bullet per collapsed
-commit; the PR description never lands. Squashing also collapses several authors
+commit, each followed by that commit's own body; the PR description never lands.
+A collapsed commit that was itself a squash contributes its bullets to the same
+flat list, so squashing a squash lands what squashing the originals would have.
+Squashing also collapses several authors
 into one, so `Co-authored-by:` trailers are added for every other human author in
 the range (never tool/AI attribution — the commit-message hook rejects that).
 
@@ -102,6 +106,8 @@ import gh_common
 from gh_common import pr_number, repo
 
 from tools.versions import active_lines
+
+RTM_LABEL = 'rtm'
 
 # Scratch ref that carries a merge's objects to both remotes before any branch
 # moves; outside refs/heads so nothing watches it and no PR is opened for it.
@@ -266,14 +272,17 @@ def can_maintain(login):
 	return json.loads(out).get('permission') in ('admin', 'maintain', 'write')
 
 
-def check_approval(head_sha):
+def check_approval(head_sha, labels):
 	"""
-	Require a maintainer's approving review of the exact commit being merged.
+	Require a maintainer's approving review of the exact commit being merged, or
+	the `rtm` (ready-to-merge) label as the equivalent manual authorization.
 
-	This replaces the `rtm` label. A label is held by whoever can edit labels and
-	survives every subsequent push, so it could authorize code nobody looked at; an
-	approval is tied to the commit it was left on, so pushing new commits silently
-	revokes it here without needing branch protection to dismiss anything.
+	An approval is tied to the commit it was left on, so pushing new commits
+	silently revokes it here without needing branch protection to dismiss
+	anything. The label is the weaker of the two — it is held by whoever can edit
+	labels and survives every subsequent push — so it authorizes only what its
+	holder is willing to vouch for. It stands in for a missing approval, not for
+	an unwithdrawn objection.
 
 	Only the newest decision per reviewer counts, so a reviewer who approves and then
 	requests changes on the same commit does not still authorize it. Reviews are
@@ -323,11 +332,16 @@ def check_approval(head_sha):
 			f'approve, re-review, or dismiss before this can merge.'
 		)
 
+	if any(label['name'] == RTM_LABEL for label in labels):
+		print(f'authorized by the `{RTM_LABEL}` label')
+		return
+
 	approvers = sorted(login for login, state in decision.items() if state == 'APPROVED')
 	if not approvers:
 		block(
-			f'no approving review on `{head_sha[:12]}`. A maintainer must approve this '
-			f'exact commit — approvals of earlier commits do not carry over.'
+			f'no approving review on `{head_sha[:12]}`, and no `{RTM_LABEL}` label. A '
+			f'maintainer must approve this exact commit — approvals of earlier commits '
+			f'do not carry over — or set `{RTM_LABEL}`.'
 		)
 
 	maintainers = [login for login in approvers if can_maintain(login)]
@@ -450,8 +464,8 @@ def check_gates(pr):
 		print(f'forced by {actor}: skipping the review, CI and E2E gates')
 		return base, head_sha
 
-	# 2. a maintainer approved THIS commit
-	check_approval(head_sha)
+	# 2. a maintainer approved THIS commit, or the PR is labelled ready-to-merge
+	check_approval(head_sha, pr['labels'])
 
 	# 3. full GenVM CI (queue.yaml) green on the head commit. The same head may
 	# carry skipped runs (label events that didn't run full tests) alongside the
@@ -701,30 +715,86 @@ def pr_reference(qualified=True):
 	return f'({repo()}#{pr_number()})' if qualified else f'(#{pr_number()})'
 
 
-def commit_subjects(repo, rev_range):
+def commit_entries(repo, rev_range):
 	"""
-	Subjects of the commits in `rev_range`, oldest first, merges excluded.
+	`(subject, body)` per commit in `rev_range`, oldest first, merges excluded.
+
+	`-z` terminates the records, a body being able to contain anything. The two
+	halves need no separator: a subject is one line, so the first newline is it.
 	"""
-	args = ('log', '--reverse', '--no-merges', '--format=%s', rev_range)
+	args = ('log', '--reverse', '--no-merges', '-z', '--format=%s%n%b', rev_range)
 	out = (git(*args) if repo is None else egit(repo, *args)).stdout
-	return [line for line in out.split('\n') if line.strip()]
+	entries = []
+	for record in out.split('\x00'):
+		if not record.strip():
+			continue
+		subject, _, body = record.partition('\n')
+		entries.append((subject.strip(), body.strip('\n')))
+	return entries
+
+
+def flatten_body(body):
+	"""
+	A commit body as message lines, bullets kept at the top level.
+
+	A body line starting with `*` IS a bullet -- that is the invariant the format
+	rests on -- so an already-squashed commit's bullets continue the outer list
+	instead of nesting under it. Prose keeps its own paragraph breaks, and gains
+	the blank line on either side that separates it from the bullets around it.
+	"""
+	lines = []
+	prose = []
+
+	def flush():
+		while prose and not prose[0].strip():
+			prose.pop(0)
+		while prose and not prose[-1].strip():
+			prose.pop()
+		if prose:
+			lines.extend(['', *prose, ''])
+			prose.clear()
+
+	for line in body.split('\n'):
+		# Indentation stripped, as the commit-message hook does.
+		if line.strip().startswith('*'):
+			flush()
+			lines.append(line.strip())
+		else:
+			prose.append(line)
+	flush()
+	return lines
 
 
 def compose_message(pr, submodule, rev_range, author, *, qualified=True):
 	"""
 	The squash message for `rev_range`: the PR title, one `* <subject>` bullet
-	per squashed commit, then `Co-authored-by:` for every other author.
+	per squashed commit, each followed by that commit's own body, then
+	`Co-authored-by:` for every other author.
 
-	The bullets are the whole body. They are already conventional commits (the
-	commit-message hook saw them) and are what `make_release_notes` promotes into
-	the changelog, whereas a PR description is written for reviewers and only rots
-	on a dev branch. A range whose one commit already says the title gets no
-	bullets — the umbrella would just repeat it.
+	The bullets are already conventional commits (the commit-message hook saw
+	them) and are what `make_release_notes` promotes into the changelog, whereas a
+	PR description is written for reviewers and only rots on a dev branch. Bodies
+	carry the `why`, which nothing else preserves once the originals are gone. A
+	range whose one commit already says the title gets no bullets, only its body.
+
+	Squashing a squash flattens the inner bullets into the outer list instead of
+	nesting them, so every real entry stays at the level both readers of this
+	format look at. The inner umbrella subject rides along as one extra bullet,
+	and the changelog gains that one redundant line.
 	"""
-	subjects = commit_subjects(submodule, rev_range)
+	entries = commit_entries(submodule, rev_range)
+	if [subject for subject, _ in entries] == [pr['title']]:
+		lines = flatten_body(entries[0][1])
+	else:
+		lines = []
+		for subject, body in entries:
+			lines.append(f'* {subject}')
+			lines.extend(flatten_body(body))
+
 	message = f'{pr["title"]} {pr_reference(qualified)}\n'
-	if subjects != [pr['title']]:
-		message += '\n' + ''.join(f'* {subject}\n' for subject in subjects)
+	body = '\n'.join(lines).strip('\n')
+	if body:
+		message += f'\n{body}\n'
 	trailers = coauthor_trailers(submodule, rev_range, author)
 	if trailers:
 		message += '\n' + '\n'.join(trailers) + '\n'
@@ -1092,6 +1162,7 @@ def merge_into_dev():
 		'headRefName',
 		'headRefOid',
 		'commits',
+		'labels',
 		'state',
 		'isDraft',
 		'title',

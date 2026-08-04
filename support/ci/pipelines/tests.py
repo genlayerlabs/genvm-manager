@@ -224,11 +224,11 @@ TEST_RUST_MANAGER = DefaultStepInfo(
 	),
 )
 
-TEST_PYTHON = DefaultStepInfo(
+TEST_OTHER = DefaultStepInfo(
 	tool_step=Stage(
 		data=ToolTest(
 			tests_name_filter_for_or=None,
-			tests_tags_filter_for_or='python',
+			tests_tags_filter_for_or='!rust & !integration',
 		),
 	)
 )
@@ -297,7 +297,7 @@ def _cell(
 
 
 QUEUE_CELLS = [
-	_cell('python', TEST_PYTHON),
+	_cell('other', TEST_OTHER),
 	_cell('rust-executors', TEST_RUST_EXECUTORS, fuzz_host=True, disk_reclaim=True),
 	_cell('rust-manager', TEST_RUST_MANAGER, fuzz_host=True, disk_reclaim=True),
 	_cell(
@@ -316,8 +316,8 @@ class PlanQueueMatrix(ci_lib.Pipeline):
 	Emit queue.yaml's test matrix as a GitHub `matrix` output.
 
 	The heavy cells run only when a marker is set (RUN_FULL_TESTS, from the
-	run-full-tests label or a manual dispatch); otherwise the matrix is empty and
-	matrix-tests is skipped.
+	run-full-tests / rtm labels or a manual dispatch); otherwise the matrix is
+	empty and matrix-tests is skipped.
 	"""
 
 	def name(self) -> str:

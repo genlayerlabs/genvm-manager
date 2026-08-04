@@ -33,7 +33,9 @@ def _add_case(
 	artifacts_dir: Path,
 ) -> None:
 	name = f'tests/system/parse_version/{wat_file.stem}'
-	desc = genvm_tool.tests.test.Description(name).with_tags(['parse_version'])
+	desc = genvm_tool.tests.test.Description(name).with_tags(
+		['integration', 'parse_version']
+	)
 
 	test_env = _default_env()
 

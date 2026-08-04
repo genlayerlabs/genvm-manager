@@ -10,8 +10,9 @@ name: GenVM full
 #     executor landability precondition) ALWAYS run, in parallel;
 #   - `gate-check` aggregates them and plans the test matrix (plan-queue-matrix);
 #     the heavy `matrix-tests` cells run only when a run-full-tests marker is set
-#     — the `run-full-tests` label ("Force run full tests" sets it). Without a
-#     marker the plan is empty, so matrix-tests is skipped;
+#     — the `run-full-tests` label ("Force run full tests" sets it) or the `rtm`
+#     label, which marks the PR ready to merge and so needs the full run anyway.
+#     Without a marker the plan is empty, so matrix-tests is skipped;
 #   - without a marker `validate-end` fails, so the CI check stays red
 #     until a full run has happened.
 #
@@ -33,7 +34,10 @@ on:
   workflow_dispatch:
     inputs:
       pr:
-        description: PR number this manual run validates (used only for the run name)
+        description: >-
+          PR number this manual run validates. Without it the PR gates below
+          have nothing to read and are skipped, leaving a green run that only
+          the heavy tests earned — pass it to authorize a merge.
         type: string
         required: false
 
@@ -134,7 +138,7 @@ jobs:
         env:
           # Heavy cells run only with a marker; without one the plan is empty and
           # matrix-tests is skipped.
-          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') || contains(github.event.pull_request.labels.*.name, 'rtm') }}
         run: ./support/ci/run.sh pipeline plan-queue-matrix
 
   matrix-tests:
@@ -175,7 +179,7 @@ jobs:
       - gate-check
       - matrix-tests
     env:
-      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') || contains(github.event.pull_request.labels.*.name, 'rtm') }}
     steps:
       - name: check
         run: |
@@ -187,7 +191,7 @@ jobs:
           # No run-full-tests marker -> heavy tests were skipped; keep the
           # gate red so the PR is not mergeable until they run.
           if [ "$HAS_MARKER" != "true" ]; then
-            echo "::error::full tests have not run — check 'Force run full tests' on the action panel or add the 'run-full-tests' label"
+            echo "::error::full tests have not run — check 'Force run full tests' on the action panel or add the 'run-full-tests' or 'rtm' label"
             exit 1
           fi
           results="${{ needs.matrix-tests.result }}"

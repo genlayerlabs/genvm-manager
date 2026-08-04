@@ -6,6 +6,7 @@ It uses the same MockHost/base_host infrastructure as the old runner.
 """
 
 import base64
+import contextlib
 import difflib
 import gzip
 import hashlib
@@ -16,7 +17,10 @@ import os
 import pickle
 import re
 import shutil
+import sqlite3
 import sys
+import threading
+import time
 import typing
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +37,9 @@ from genvm_tool.tests.exec.command import Command, RunMode
 from gvm_extra.mock_host import MockHost as MockHost
 from gvm_extra.mock_host import MockStorage as MockStorage
 from origin.calldata import Address
+
+if typing.TYPE_CHECKING:
+	import _jsonnet
 
 # Get the local context
 local_ctx = genvm_tool.tests.stage.configuration.current_context()
@@ -1011,6 +1018,215 @@ def integration_test(
 		)
 
 
+class RWLock:
+	"""
+	Many concurrent readers or a single writer, writers taking priority.
+
+	A reader that arrives while a writer waits queues behind it, so a steady
+	stream of lookups cannot starve a store.
+	"""
+
+	def __init__(self) -> None:
+		self._cond = threading.Condition()
+		self._readers = 0
+		self._writer = False
+		self._writers_waiting = 0
+
+	@contextlib.contextmanager
+	def read(self) -> typing.Iterator[None]:
+		with self._cond:
+			self._cond.wait_for(lambda: not self._writer and not self._writers_waiting)
+			self._readers += 1
+		try:
+			yield
+		finally:
+			with self._cond:
+				self._readers -= 1
+				if self._readers == 0:
+					self._cond.notify_all()
+
+	@contextlib.contextmanager
+	def write(self) -> typing.Iterator[None]:
+		with self._cond:
+			self._writers_waiting += 1
+			try:
+				self._cond.wait_for(lambda: not self._writer and not self._readers)
+			finally:
+				self._writers_waiting -= 1
+			self._writer = True
+		try:
+			yield
+		finally:
+			with self._cond:
+				self._writer = False
+				self._cond.notify_all()
+
+
+def _jsonnet_lib_dirs() -> list[str]:
+	"""The search path a jsonnet vm starts with, in the order it is seeded."""
+	return [
+		f'/usr/share/jsonnet-{_jsonnet.version}/',
+		f'/usr/local/share/jsonnet-{_jsonnet.version}/',
+	]
+
+
+def _digest_file(path: Path) -> str:
+	"""Digest of ``path``'s contents, or '' when it is gone."""
+	try:
+		return hashlib.sha3_256(path.read_bytes()).hexdigest()
+	except OSError:
+		return ''
+
+
+def _resolve_import(base: str, rel: str, jpathdir: list[str]) -> Path:
+	"""Where jsonnet would find ``rel``, imported from a file in ``base``.
+
+	Unresolved: a nested import resolves against this path.
+	"""
+	if os.path.isabs(rel):
+		candidates = [Path(rel)]
+	else:
+		candidates = [Path(base) / rel]
+		candidates.extend(Path(d) / rel for d in reversed(jpathdir))
+		candidates.extend(Path(d) / rel for d in reversed(_jsonnet_lib_dirs()))
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate
+	raise RuntimeError(f'no such file to import: {rel} (from {base})')
+
+
+class JsonnetCache:
+	"""
+	Memoizes jsonnet evaluation in a sqlite file among the test artifacts.
+
+	Keyed by the case file's path and contents, carrying every import it read so
+	that editing one of those misses too. Entries older than a day are dropped.
+	"""
+
+	MAX_AGE = 24 * 60 * 60
+	COLUMNS = {'digest', 'stored_at', 'deps', 'result'}
+
+	def __init__(self) -> None:
+		# A native callback rewritten here, or a jsonnet upgrade, changes results
+		# with no input file changing.
+		self._evaluator_digest = hashlib.sha3_256(
+			_jsonnet.version.encode('utf-8') + Path(__file__).read_bytes()
+		).digest()
+
+		artifacts_dir = local_ctx.shared.artifacts_dir
+		artifacts_dir.mkdir(exist_ok=True, parents=True)
+		self._path = artifacts_dir / 'jsonnet-cache.sqlite'
+		self._lock = RWLock()
+		# One connection per thread: a shared one would serialize the readers
+		# that the lock lets run together.
+		self._local = threading.local()
+
+		with self._lock.write():
+			db = self._connection()
+			db.execute('PRAGMA journal_mode=WAL')
+			columns = {
+				row[1] for row in db.execute('PRAGMA table_info(evaluated)').fetchall()
+			}
+			if columns and columns != self.COLUMNS:
+				db.execute('DROP TABLE evaluated')
+			db.execute(
+				'CREATE TABLE IF NOT EXISTS evaluated ('
+				'digest BLOB PRIMARY KEY, stored_at REAL NOT NULL, '
+				'deps TEXT NOT NULL, result TEXT NOT NULL'
+				') WITHOUT ROWID'
+			)
+			db.execute(
+				'DELETE FROM evaluated WHERE stored_at < ?', (time.time() - self.MAX_AGE,)
+			)
+			db.commit()
+
+	def _connection(self) -> sqlite3.Connection:
+		db = getattr(self._local, 'db', None)
+		if db is None:
+			db = sqlite3.connect(self._path)
+			# Per connection, unlike the journal mode. Losing the tail of a cache
+			# to a power cut costs a re-evaluation.
+			db.execute('PRAGMA synchronous=NORMAL')
+			self._local.db = db
+		return db
+
+	@staticmethod
+	def _deps_hold(deps: list[list[str]], jpathdir: list[str]) -> bool:
+		"""Whether every import still resolves where it did, to the same bytes.
+
+		Re-resolved, not just re-digested: a new file of that name beside the
+		case steals an import that fell through to the search path.
+		"""
+		for base, rel, found, digest in deps:
+			try:
+				if str(_resolve_import(base, rel, jpathdir)) != found:
+					return False
+			except RuntimeError:
+				return False
+			if _digest_file(Path(found)) != digest:
+				return False
+		return True
+
+	def eval(self, path: Path, *args, jpathdir: list[str], **kwargs) -> str:
+		# Keyed on the path too: two identical cases in different directories
+		# import different files under the same relative names.
+		full_digest = hashlib.sha3_256(
+			self._evaluator_digest
+			+ str(path.resolve()).encode('utf-8')
+			+ b'\0'
+			+ path.read_bytes()
+		).digest()
+
+		eval_start = time.monotonic()
+
+		with self._lock.read():
+			row = (
+				self._connection()
+				.execute('SELECT deps, result FROM evaluated WHERE digest = ?', (full_digest,))
+				.fetchone()
+			)
+		cache_check_end = time.monotonic()
+		local_ctx.shared.bump_metric(
+			'jsonnet_cache_check_time', 0.0, cache_check_end - eval_start
+		)
+
+		if row is not None and self._deps_hold(json.loads(row[0]), jpathdir):
+			return row[1]
+
+		deps: list[list[str]] = []
+
+		def import_callback(base: str, rel: str) -> tuple[str, bytes]:
+			found = _resolve_import(base, rel, jpathdir)
+			content = found.read_bytes()
+			deps.append([base, rel, str(found), hashlib.sha3_256(content).hexdigest()])
+			return str(found), content
+
+		# Replaces the importer wholesale, `jpathdir` included.
+		result = _jsonnet.evaluate_file(
+			str(path),
+			*args,
+			import_callback=import_callback,
+			**kwargs,
+		)
+
+		eval_end = time.monotonic()
+		local_ctx.shared.bump_metric('jsonnet_eval_time', 0.0, eval_end - cache_check_end)
+
+		with self._lock.write():
+			db = self._connection()
+			db.execute(
+				'INSERT OR REPLACE INTO evaluated (digest, stored_at, deps, result) '
+				'VALUES (?, ?, ?, ?)',
+				(full_digest, time.time(), json.dumps(deps), result),
+			)
+			db.commit()
+
+		write_end = time.monotonic()
+		local_ctx.shared.bump_metric('jsonnet_cache_write_time', 0.0, write_end - eval_end)
+
+		return result
+
+
 def integration_test_single_executor(
 	ctx: genvm_tool.tests.stage.collection.Context,
 	*,
@@ -1029,6 +1245,10 @@ def integration_test_single_executor(
 
 	Steps depend on /prepare, and child steps depend on their parent step.
 	"""
+
+	import _jsonnet
+
+	globals()['_jsonnet'] = _jsonnet  # type: ignore
 
 	import genvm_tool.common
 
@@ -1053,14 +1273,18 @@ def integration_test_single_executor(
 		'save-hashes', not executor_integration_conf.get('ignore-hash', False)
 	)
 
+	glob_start = time.monotonic()
 	jsonnet_files = list(
 		x for x in CASES_DIR.glob('**/*.jsonnet') if not x.name.startswith('_')
 	)
+	glob_end = time.monotonic()
+	# Bumped, not assigned: this runs once per executor line.
+	local_ctx.shared.bump_metric('jsonnet_glob_time', 0.0, glob_end - glob_start)
 	jsonnet_files.sort()
 
-	# pre-import
-
 	from concurrent.futures import ThreadPoolExecutor, as_completed
+
+	jsonnet_cache = JsonnetCache()
 
 	with ThreadPoolExecutor(thread_name_prefix='integration-test-collector') as executor:
 		futures = {
@@ -1068,6 +1292,7 @@ def integration_test_single_executor(
 				_single_integration_test,
 				ctx,
 				jsonnet_file,
+				jsonnet_cache,
 				cases_dir=CASES_DIR,
 				reroute_to=reroute_to,
 				save_hashes=save_hashes,
@@ -1090,6 +1315,7 @@ def _gvm32_of_str(text: str) -> str:
 def _single_integration_test(
 	ctx: genvm_tool.tests.stage.collection.Context,
 	jsonnet_file: Path,
+	jsonnet_cache: JsonnetCache,
 	*,
 	cases_dir: Path,
 	reroute_to: str,
@@ -1099,8 +1325,6 @@ def _single_integration_test(
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
 	ci: bool,
 ) -> None:
-	import _jsonnet
-
 	rel_path = jsonnet_file.relative_to(cases_dir)
 
 	# Determine stability tag from path
@@ -1141,8 +1365,8 @@ def _single_integration_test(
 	# Note the binding only marshals *primitives* — passing an array or object
 	# to a native function is a jsonnet runtime error, so anything structured
 	# has to cross as a JSON string.
-	jsonnet_result = _jsonnet.evaluate_file(
-		str(jsonnet_file),
+	jsonnet_result = jsonnet_cache.eval(
+		jsonnet_file,
 		jpathdir=[str(TEMPLATES_DIR.parent)],
 		native_callbacks={
 			# std.native('gvm32')('...') -> gvm32(sha3_256(utf8(s))), the id form
@@ -1150,6 +1374,7 @@ def _single_integration_test(
 			'gvm32': (('text',), _gvm32_of_str),
 		},
 	)
+
 	jsonnet_parsed = json.loads(jsonnet_result)
 	extra_tags = jsonnet_parsed.get('tags', [])
 	if extra_tags:

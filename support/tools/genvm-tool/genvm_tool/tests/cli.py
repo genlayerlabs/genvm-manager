@@ -440,4 +440,5 @@ def run(
 		else:
 			func(shared_context, conf_env)
 	finally:
+		shared_context.logger.debug('metrics', **shared_context.metrics)
 		shared_context.watchdog.stop()

@@ -49,4 +49,5 @@ a task has a how-to, a design question has an explanation
 - [docs-layout.md](docs/contributing/explanation/docs-layout.md) — the 4 kinds of page and where each belongs
 - [executor-lines.md](docs/contributing/explanation/executor-lines.md) — why several executor lines ship side by side, and what it costs
 - [merge-model.md](docs/contributing/explanation/merge-model.md) — why merging is a maintainer panel rather than a merge queue
+- [shared-submodule-cache.md](docs/contributing/explanation/shared-submodule-cache.md) — why submodules are worktrees of one cache repo, not clones
 - [vendored-trees.md](docs/contributing/explanation/vendored-trees.md) — why third-party sources are patch series, not forks

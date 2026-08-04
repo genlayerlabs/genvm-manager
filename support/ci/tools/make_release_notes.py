@@ -94,11 +94,13 @@ def parse_git_log(rev_range: str, *, dir: Path | None = None) -> list[CommitEntr
 		lines = [l.strip() for l in body.strip().splitlines() if l.strip()]
 		if not lines:
 			continue
-		# body lines starting with * may carry their own conventional prefix
+		# Bullets only: a squashed message carries bodies too, and prose that
+		# reads like a subject is not a changelog entry.
 		promoted = [
 			CommitEntry(cleaned, email)
 			for line in lines[1:]
-			if COMMIT_RE.match(cleaned := re.sub(r'^\*\s*', '', line))
+			if line.startswith('*')
+			and COMMIT_RE.match(cleaned := re.sub(r'^\*\s*', '', line))
 		]
 		if promoted:
 			entries.extend(promoted)

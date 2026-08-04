@@ -62,6 +62,7 @@ jobs:
         with:
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
 
       - name: Build docs
         run: ./support/ci/run.sh pipeline docs

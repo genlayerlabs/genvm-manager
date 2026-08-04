@@ -35,6 +35,7 @@ jobs:
         with:
           with_nix: "true"
           github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
       # Each repo (manager + every executor submodule) supplies its own
       # pre-commit binary + generated config from its flake (git-hooks.nix),
       # with tools pinned per repo — so no separate toolchain setup is needed.
@@ -47,7 +48,7 @@ jobs:
       # first realizes them after a `git-hooks.nix` bump.
       - name: Push to nix cache
         if: ${{ !cancelled() }}
-        uses: ./.github/actions/genlayerlabs-nix-cache-push
+        uses: genlayerlabs/github-actions/nix-cache-push@39b0a0d5e9bb27a1612d2e98b0f8509d31745157 # main
         with:
           token: ${{ secrets.NIX_CACHE_PUSH_TOKEN }}
 

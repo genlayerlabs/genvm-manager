@@ -50,6 +50,8 @@ class SharedContext:
 	logger: Formatter
 	printer: Sink
 	watchdog: Watchdog = field(default_factory=Watchdog.start)
+	metrics: dict[str, Any] = field(default_factory=dict)
+	_metrics_lock: threading.Lock = field(default_factory=threading.Lock)
 
 	# When running a test case, this points to that case's per-test artifact
 	# directory. ``None`` outside of a test case.
@@ -65,6 +67,11 @@ class SharedContext:
 	_git_files: list[Path] | None = None
 	_interrupted: threading.Event = field(default_factory=threading.Event)
 	_config: dict[str, Any] | None = None
+
+	def bump_metric[T](self, name: str, initial: T, delta: T) -> None:
+		"""Increment a named metric by ``delta``, locked: collectors are threads."""
+		with self._metrics_lock:
+			self.metrics[name] = self.metrics.setdefault(name, initial) + delta
 
 	@property
 	def config(self) -> dict[str, Any]:

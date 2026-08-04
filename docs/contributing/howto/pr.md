@@ -31,11 +31,13 @@ reading the diff
 `queue.yaml` always runs the pre-commit hooks. On a `pull_request` event it also
 requires 0 commits behind base and the executor precondition — every repo
 rebased, every pinned executor commit pushed — which is skipped for fork PRs.
-The heavy matrix runs only with the `run-full-tests` marker; without it the
-check stays red on purpose
+The heavy matrix runs only with the `run-full-tests` or `rtm` marker; without
+one the check stays red on purpose
 
 Merging re-verifies against the **exact head sha**: maintainer approval (any
-push revokes it), green full CI, green cross-repo E2E, 0 behind. Merges are
+push revokes it) or the `rtm` label (which survives pushes, so it authorizes
+whatever lands next), green full CI, green cross-repo E2E, 0 behind. An
+unwithdrawn *changes requested* blocks either way. Merges are
 serialised repository-wide, so a tick may wait for another PR to land first
 
 Each repo gains one commit per PR. Executor lines are always squashed onto
@@ -50,5 +52,5 @@ manager PR that is a single commit and rewrites no gitlink keeps its sha
 | `full tests have not run` | tick *Force run full tests* |
 | `... commit(s) behind base` | rebase, `push --force-with-lease` |
 | `pinned commit ... is not on the executor repo` | push it, or tick *Provision executor PRs* |
-| Approval revoked | you pushed after the review, re-request it |
+| Approval revoked | you pushed after the review, re-request it or set `rtm` |
 | Merge run cancelled before it started | another merge was already queued, tick *Merge into dev* again |

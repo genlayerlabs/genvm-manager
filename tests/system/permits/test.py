@@ -275,7 +275,7 @@ def collect(
 	desc = genvm_tool.tests.test.Description(
 		name='tests/system/permits',
 		needed_services=frozenset({manager_service}),
-		tags=frozenset({'stable', 'permits'}),
+		tags=frozenset({'integration', 'stable', 'permits'}),
 		console_pool=True,
 	)
 	ctx.add_case(

@@ -15,6 +15,20 @@ Active lines and the manager version live in `.genvm-monorepo-root`
 `commit-hooks` pipeline model the manager and the active lines only. Branches:
 manager `feat/<name>` on `v<X>-dev`, each line `pr/<line>/feat/<name>`
 
+## Materializing A Checkout
+
+`python3 support/scripts/get-all-git.py` — never `git submodule update`, which
+would clone over the worktree each path actually is
+([shared-submodule-cache.md](../../explanation/shared-submodule-cache.md)). Run
+it after any gitlink bump; it fetches what is missing and parks each checkout on
+the gitlink, exactly as `git submodule update` did. `origin` inside an executor
+is the executor repo, so `git fetch` / `git push` work as usual
+
+An older checkout is converted on the spot, keeping every file and uncommitted
+edit, and its branch when that branch is already at the gitlink. It refuses when
+something is staged there, and when the path holds a standalone clone rather
+than a submodule checkout — move that aside and re-run
+
 ## The Critical Nix Flag
 
 Every manager flake ref needs `?submodules=1`, as `.envrc` does. Flake packages

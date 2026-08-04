@@ -7,8 +7,10 @@
    python3 support/scripts/get-all-git.py
    ```
 
-   The defaults fetch every unique submodule remote once into a local cache,
-   initialize the submodules from it, and materialize all third-party trees
+   The defaults fetch every unique submodule remote once into a local cache
+   repo, check each submodule out of it as a git worktree, and materialize all
+   third-party trees. Re-run it after a gitlink bump; never
+   `git submodule update` ([submodules.md](committing/submodules.md))
 2. Enter the dev shell — normally direnv does this, `.envrc` is
    `use flake '.?submodules=1#full'`:
 

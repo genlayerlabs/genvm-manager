@@ -123,6 +123,17 @@ def tests(ctx):
 			project_root_dir=p,
 		)
 
+		ci = ctx.shared.root_dir.joinpath('support', 'ci')
+		pytest.pytest(
+			ctx,
+			genvm_tool.tests.test.Description(
+				str(ci.relative_to(ctx.shared.root_dir)),
+				console_pool=True,
+				tags=frozenset({'unit'}),
+			),
+			project_root_dir=ci,
+		)
+
 		fuzz_files = list(p.glob('fuzz/src/*.py'))
 		fuzz_files.sort()
 		for fuzz_file in fuzz_files:
