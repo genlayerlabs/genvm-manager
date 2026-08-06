@@ -433,29 +433,28 @@ async function renderPageWithBrowser(
 			return { status: statusCode, body: data };
 		});
 	} catch (e) {
-		// Both are reported through the status body rather than as transport
-		// failures, because both are properties of the page itself: any host
-		// with the same configuration reaches the same verdict, so it is a real
-		// observation the contract is entitled to see and handle. Contrast the
-		// saturation checks in `renderPage`, which depend on this host's load
-		// and so must never reach the contract.
+		// These escape as transport failures rather than render results. The
+		// tempting reading is that they describe the page — but the test is not
+		// "the page is big", it is "the page is bigger than *this host's*
+		// limit", and that threshold is local configuration. Letting it reach
+		// the contract would make hosts with different settings answer the same
+		// request differently, each answer looking legitimate, and would hand
+		// anyone who knows the spread a way to craft a page that lands in the
+		// gap.
 		//
-		// This does mean the two limits have to be configured identically
-		// everywhere; a host that disagrees about them disagrees about results.
+		// They could become contract-visible, but only once the values are
+		// agreed protocol constants rather than per-host settings.
 		if (e instanceof HeapLimitExceeded) {
 			logger.log('warn', 'page heap limit exceeded', {
 				url: targetUrl,
 				error: e.message,
 			});
-			return { status: STATUS_INSUFFICIENT_STORAGE, body: e.message };
-		}
-		if (e instanceof ResponseLimitExceeded) {
+		} else if (e instanceof ResponseLimitExceeded) {
 			logger.log('warn', 'rendered response limit exceeded', {
 				url: targetUrl,
 				mode,
 				error: e.message,
 			});
-			return { status: STATUS_INSUFFICIENT_STORAGE, body: e.message };
 		}
 		throw e;
 	} finally {
@@ -554,6 +553,21 @@ async function handleRenderRequest(
 			res.end(
 				JSON.stringify({
 					error: 'Service unavailable',
+					message: (error as Error).message,
+				}),
+			);
+			return;
+		}
+		if (
+			error instanceof HeapLimitExceeded ||
+			error instanceof ResponseLimitExceeded
+		) {
+			res.writeHead(STATUS_INSUFFICIENT_STORAGE, {
+				'Content-Type': 'application/json',
+			});
+			res.end(
+				JSON.stringify({
+					error: 'Resource limit exceeded',
 					message: (error as Error).message,
 				}),
 			);
