@@ -307,8 +307,13 @@ async function renderPage(
 	try {
 		await renderSlots.acquire(RENDER_QUEUE_TIMEOUT_MS, signal);
 	} catch (e) {
-		// Saturation is reported through the status body, not as a transport
-		// failure, so the caller can retry rather than aborting its execution.
+		// Saturation escapes as a transport failure rather than a render result,
+		// and the distinction is deliberate. How busy this host happens to be is
+		// not a property of the page, so it must not reach the contract: two
+		// hosts under different load would otherwise return different answers
+		// for the same request and each would look legitimate. Failing at the
+		// transport level keeps the outcome an honest "this host could not run
+		// it" instead of a fabricated observation about the web.
 		if (e instanceof SemaphoreTimeout || e instanceof SemaphoreQueueFull) {
 			logger.log('warn', 'render rejected: saturated', {
 				url: targetUrl,
@@ -317,12 +322,8 @@ async function renderPage(
 				queued: renderSlots.queued,
 				timeout: formatDurationMs(RENDER_QUEUE_TIMEOUT_MS),
 			});
-			return { status: STATUS_SERVICE_UNAVAILABLE, body: e.message };
-		}
-		if (e instanceof SemaphoreAborted) {
-			// Nobody is left to read a reply; the status is for the log only.
+		} else if (e instanceof SemaphoreAborted) {
 			logger.log('debug', 'render abandoned while queued', { url: targetUrl });
-			return { status: STATUS_SERVICE_UNAVAILABLE, body: e.message };
 		}
 		throw e;
 	}
@@ -422,8 +423,14 @@ async function renderPageWithBrowser(
 		});
 	} catch (e) {
 		// Both are reported through the status body rather than as transport
-		// failures: the caller maps a bad `Resulting-Status` to a recoverable
-		// error, whereas an HTTP-level failure aborts its whole execution.
+		// failures, because both are properties of the page itself: any host
+		// with the same configuration reaches the same verdict, so it is a real
+		// observation the contract is entitled to see and handle. Contrast the
+		// saturation checks in `renderPage`, which depend on this host's load
+		// and so must never reach the contract.
+		//
+		// This does mean the two limits have to be configured identically
+		// everywhere; a host that disagrees about them disagrees about results.
 		if (e instanceof HeapLimitExceeded) {
 			logger.log('warn', 'page heap limit exceeded', {
 				url: targetUrl,
@@ -522,6 +529,25 @@ async function handleRenderRequest(
 		}
 		res.end(result.body);
 	} catch (error) {
+		if (error instanceof SemaphoreAborted) {
+			// The caller hung up while queued; there is nobody left to answer.
+			return;
+		}
+		if (
+			error instanceof SemaphoreTimeout ||
+			error instanceof SemaphoreQueueFull
+		) {
+			res.writeHead(STATUS_SERVICE_UNAVAILABLE, {
+				'Content-Type': 'application/json',
+			});
+			res.end(
+				JSON.stringify({
+					error: 'Service unavailable',
+					message: (error as Error).message,
+				}),
+			);
+			return;
+		}
 		res.writeHead(500, { 'Content-Type': 'application/json' });
 		res.end(
 			JSON.stringify({
@@ -588,6 +614,13 @@ async function handleHealthcheck(
 			res.end('unhealthy');
 		}
 	} catch (error) {
+		if (error instanceof SemaphoreAborted) {
+			return;
+		}
+		// Saturation lands here too, and reporting unhealthy is right: the probe
+		// only renders when nothing has succeeded for the cache duration, so a
+		// host that is both saturated and has completed nothing in that window
+		// genuinely is not serving.
 		logger.log('error', 'healthcheck error', {
 			error: (error as Error).message,
 		});
