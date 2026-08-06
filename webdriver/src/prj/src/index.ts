@@ -6,6 +6,7 @@ import * as logger from './logging.js';
 import * as chromeBrowser from './browser/chrome.js';
 import * as ssrf from './ssrf.js';
 import { envDurationMs, envInt, formatDurationMs } from './duration.js';
+import { Semaphore, SemaphoreTimeout } from './semaphore.js';
 
 interface NavigationOptions {
 	waitUntil?: pup.PuppeteerLifeCycleEvent;
@@ -17,6 +18,7 @@ interface RenderOptions {
 	waitAfterLoaded?: number;
 	waitUntil?: pup.PuppeteerLifeCycleEvent;
 	maxPageHeapMB?: number;
+	maxResponseChars?: number;
 }
 
 const program = new Command();
@@ -30,8 +32,36 @@ program
 const options = program.opts();
 
 const STATUS_I_AM_A_TEAPOT = 418;
+const STATUS_INSUFFICIENT_STORAGE = 507;
+const STATUS_SERVICE_UNAVAILABLE = 503;
 
 const DEFAULT_MAX_PAGE_HEAP_MB = envInt('GVM_WEBDRIVER_MAX_PAGE_HEAP_MB', 1024);
+
+// Peak memory of this service is bounded by the product of the two limits
+// below, so both have to exist for either to mean anything:
+//
+//   peak ~= MAX_CONCURRENT_RENDERS * (page heap + extracted response) + browser baseline
+//
+// Every in-flight render is guaranteed its full per-request allocation. A
+// caller that has a slot is never squeezed by how many other callers are
+// active; callers beyond the limit queue instead.
+const MAX_CONCURRENT_RENDERS = envInt('GVM_WEBDRIVER_MAX_CONCURRENT_RENDERS', 4);
+
+// Counted in characters, which is what bounds the string materialized in this
+// process. One character encodes to at most 4 UTF-8 bytes on the wire, and
+// occupies 2 bytes in V8 for the common (BMP) case.
+const MAX_RESPONSE_MB = envInt('GVM_WEBDRIVER_MAX_RESPONSE_MB', 32);
+const MAX_RESPONSE_CHARS = MAX_RESPONSE_MB * 1024 * 1024;
+
+// Kept well below the caller's own transport timeout: a queue wait that
+// outlives it converts a condition we can report cleanly into a transport
+// failure, which callers treat far more harshly.
+const RENDER_QUEUE_TIMEOUT_MS = envDurationMs(
+	'GVM_WEBDRIVER_RENDER_QUEUE_TIMEOUT',
+	'120s',
+);
+
+const renderSlots = new Semaphore(MAX_CONCURRENT_RENDERS);
 
 const MAX_WAIT_AFTER_LOADED_MS = envDurationMs(
 	'GVM_WEBDRIVER_MAX_WAIT_AFTER_LOADED',
@@ -119,27 +149,66 @@ async function navigateToPage(
 	}
 }
 
-async function asText(page: pup.Page) {
-	const bodyText = await page.evaluate(() => {
-		return document.body.innerText;
-	});
+/**
+ * Read `innerText` or `innerHTML`, rejecting oversized documents *in the page*.
+ *
+ * The size test has to happen on the browser side. Pulling the string across
+ * first and measuring it here would already have paid the memory cost we are
+ * trying to avoid — this process would hold the whole document no matter what
+ * any downstream limit says.
+ */
+async function extractBounded(
+	page: pup.Page,
+	kind: 'innerText' | 'innerHTML',
+	maxChars: number,
+): Promise<string> {
+	const extracted = await page.evaluate(
+		(k, limit) => {
+			const raw =
+				k === 'innerText' ? document.body.innerText : document.body.innerHTML;
+			return raw.length > limit
+				? { tooLarge: true as const, length: raw.length }
+				: { tooLarge: false as const, content: raw };
+		},
+		kind,
+		maxChars,
+	);
 
-	return normalizeWhitespace(bodyText);
+	if (extracted.tooLarge) {
+		throw new ResponseLimitExceeded(extracted.length, maxChars);
+	}
+	return extracted.content;
 }
 
-async function asHTML(page: pup.Page) {
-	return await page.evaluate(() => {
-		return document.body.innerHTML;
-	});
+async function asText(page: pup.Page, maxChars: number) {
+	return normalizeWhitespace(
+		await extractBounded(page, 'innerText', maxChars),
+	);
 }
 
-async function asScreenshot(page: pup.Page) {
-	return await page.screenshot();
+async function asHTML(page: pup.Page, maxChars: number) {
+	return await extractBounded(page, 'innerHTML', maxChars);
+}
+
+async function asScreenshot(page: pup.Page, maxChars: number) {
+	// Screenshots are viewport-sized rather than full-page, so this is a
+	// backstop rather than a limit anyone should reach.
+	const image = await page.screenshot();
+	if (image.length > maxChars) {
+		throw new ResponseLimitExceeded(image.length, maxChars);
+	}
+	return image;
 }
 
 class HeapLimitExceeded extends Error {
 	constructor(heapMB: number, maxHeapMB: number) {
 		super(`Page JS heap ${heapMB.toFixed(1)}MB exceeds limit ${maxHeapMB}MB`);
+	}
+}
+
+class ResponseLimitExceeded extends Error {
+	constructor(size: number, maxSize: number) {
+		super(`Rendered response ${size} exceeds limit ${maxSize}`);
 	}
 }
 
@@ -213,17 +282,38 @@ async function renderPage(
 	mode: 'text' | 'html' | 'screenshot',
 	options: RenderOptions = {},
 ): Promise<{ status: number; body: any }> {
-	const browserManager = await chromeBrowser.INSTANCE;
-	const browserInstance = browserManager.getBrowser();
+	// The slot is taken before the browser is touched, so a queued request costs
+	// nothing but the open connection.
 	try {
-		return renderPageWithBrowser(
-			browserInstance.get(),
-			targetUrl,
-			mode,
-			options,
-		);
+		await renderSlots.acquire(RENDER_QUEUE_TIMEOUT_MS);
+	} catch (e) {
+		if (e instanceof SemaphoreTimeout) {
+			logger.log('warn', 'render queue timeout', {
+				url: targetUrl,
+				inFlight: renderSlots.inFlight,
+				queued: renderSlots.queued,
+				timeout: formatDurationMs(RENDER_QUEUE_TIMEOUT_MS),
+			});
+			return { status: STATUS_SERVICE_UNAVAILABLE, body: e.message };
+		}
+		throw e;
+	}
+
+	try {
+		const browserManager = await chromeBrowser.INSTANCE;
+		const browserInstance = browserManager.getBrowser();
+		try {
+			return await renderPageWithBrowser(
+				browserInstance.get(),
+				targetUrl,
+				mode,
+				options,
+			);
+		} finally {
+			browserInstance.close();
+		}
 	} finally {
-		browserInstance.close();
+		renderSlots.release();
 	}
 }
 
@@ -238,6 +328,7 @@ async function renderPageWithBrowser(
 		waitAfterLoaded = 0,
 		waitUntil = 'domcontentloaded',
 		maxPageHeapMB = DEFAULT_MAX_PAGE_HEAP_MB,
+		maxResponseChars = MAX_RESPONSE_CHARS,
 	} = options;
 
 	// Each render runs in its own browser context so cookies, localStorage,
@@ -287,13 +378,13 @@ async function renderPageWithBrowser(
 			let data;
 			switch (mode) {
 				case 'text':
-					data = await asText(page);
+					data = await asText(page, maxResponseChars);
 					break;
 				case 'html':
-					data = await asHTML(page);
+					data = await asHTML(page, maxResponseChars);
 					break;
 				case 'screenshot':
-					data = await asScreenshot(page);
+					data = await asScreenshot(page, maxResponseChars);
 					break;
 				default:
 					data = 'Invalid mode';
@@ -302,12 +393,23 @@ async function renderPageWithBrowser(
 			return { status: statusCode, body: data };
 		});
 	} catch (e) {
+		// Both are reported through the status body rather than as transport
+		// failures: the caller maps a bad `Resulting-Status` to a recoverable
+		// error, whereas an HTTP-level failure aborts its whole execution.
 		if (e instanceof HeapLimitExceeded) {
 			logger.log('warn', 'page heap limit exceeded', {
 				url: targetUrl,
 				error: e.message,
 			});
-			return { status: 507, body: e.message };
+			return { status: STATUS_INSUFFICIENT_STORAGE, body: e.message };
+		}
+		if (e instanceof ResponseLimitExceeded) {
+			logger.log('warn', 'rendered response limit exceeded', {
+				url: targetUrl,
+				mode,
+				error: e.message,
+			});
+			return { status: STATUS_INSUFFICIENT_STORAGE, body: e.message };
 		}
 		throw e;
 	} finally {
