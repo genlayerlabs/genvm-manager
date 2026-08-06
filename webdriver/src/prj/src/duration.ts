@@ -67,6 +67,21 @@ export function envInt(envName: string, defaultValue: number): number {
 	return result;
 }
 
+/**
+ * Like `envInt`, but for limits where a non-positive value is nonsense rather
+ * than merely unusual — a zero response cap, for instance, would reject every
+ * page. Fails at startup instead of silently disabling the feature.
+ */
+export function envPositiveInt(envName: string, defaultValue: number): number {
+	const value = envInt(envName, defaultValue);
+	if (!Number.isInteger(value) || value < 1) {
+		throw new Error(
+			`env ${envName} must be a positive integer, got "${process.env[envName]}"`,
+		);
+	}
+	return value;
+}
+
 export function envStr(envName: string, defaultValue: string): string {
 	const raw = process.env[envName];
 	const value = raw !== undefined && raw !== '' ? raw : defaultValue;

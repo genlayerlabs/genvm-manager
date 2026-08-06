@@ -5,8 +5,18 @@ import { Command } from 'commander';
 import * as logger from './logging.js';
 import * as chromeBrowser from './browser/chrome.js';
 import * as ssrf from './ssrf.js';
-import { envDurationMs, envInt, formatDurationMs } from './duration.js';
-import { Semaphore, SemaphoreTimeout } from './semaphore.js';
+import {
+	envDurationMs,
+	envInt,
+	envPositiveInt,
+	formatDurationMs,
+} from './duration.js';
+import {
+	Semaphore,
+	SemaphoreAborted,
+	SemaphoreQueueFull,
+	SemaphoreTimeout,
+} from './semaphore.js';
 
 interface NavigationOptions {
 	waitUntil?: pup.PuppeteerLifeCycleEvent;
@@ -45,13 +55,21 @@ const DEFAULT_MAX_PAGE_HEAP_MB = envInt('GVM_WEBDRIVER_MAX_PAGE_HEAP_MB', 1024);
 // Every in-flight render is guaranteed its full per-request allocation. A
 // caller that has a slot is never squeezed by how many other callers are
 // active; callers beyond the limit queue instead.
-const MAX_CONCURRENT_RENDERS = envInt('GVM_WEBDRIVER_MAX_CONCURRENT_RENDERS', 4);
+const MAX_CONCURRENT_RENDERS = envPositiveInt(
+	'GVM_WEBDRIVER_MAX_CONCURRENT_RENDERS',
+	4,
+);
 
 // Counted in characters, which is what bounds the string materialized in this
 // process. One character encodes to at most 4 UTF-8 bytes on the wire, and
 // occupies 2 bytes in V8 for the common (BMP) case.
-const MAX_RESPONSE_MB = envInt('GVM_WEBDRIVER_MAX_RESPONSE_MB', 32);
+const MAX_RESPONSE_MB = envPositiveInt('GVM_WEBDRIVER_MAX_RESPONSE_MB', 32);
 const MAX_RESPONSE_CHARS = MAX_RESPONSE_MB * 1024 * 1024;
+
+// Waiting callers are cheap but not free: each holds a live connection. Past
+// this depth the service is not going to work through the backlog before
+// callers give up anyway, so refusing immediately beats refusing slowly.
+const MAX_RENDER_QUEUE = envInt('GVM_WEBDRIVER_MAX_RENDER_QUEUE', 64);
 
 // Kept well below the caller's own transport timeout: a queue wait that
 // outlives it converts a condition we can report cleanly into a transport
@@ -61,7 +79,10 @@ const RENDER_QUEUE_TIMEOUT_MS = envDurationMs(
 	'120s',
 );
 
-const renderSlots = new Semaphore(MAX_CONCURRENT_RENDERS);
+const renderSlots = new Semaphore({
+	permits: MAX_CONCURRENT_RENDERS,
+	maxQueued: MAX_RENDER_QUEUE,
+});
 
 const MAX_WAIT_AFTER_LOADED_MS = envDurationMs(
 	'GVM_WEBDRIVER_MAX_WAIT_AFTER_LOADED',
@@ -281,19 +302,28 @@ async function renderPage(
 	targetUrl: string,
 	mode: 'text' | 'html' | 'screenshot',
 	options: RenderOptions = {},
+	signal?: AbortSignal,
 ): Promise<{ status: number; body: any }> {
 	// The slot is taken before the browser is touched, so a queued request costs
 	// nothing but the open connection.
 	try {
-		await renderSlots.acquire(RENDER_QUEUE_TIMEOUT_MS);
+		await renderSlots.acquire(RENDER_QUEUE_TIMEOUT_MS, signal);
 	} catch (e) {
-		if (e instanceof SemaphoreTimeout) {
-			logger.log('warn', 'render queue timeout', {
+		// Saturation is reported through the status body, not as a transport
+		// failure, so the caller can retry rather than aborting its execution.
+		if (e instanceof SemaphoreTimeout || e instanceof SemaphoreQueueFull) {
+			logger.log('warn', 'render rejected: saturated', {
 				url: targetUrl,
+				reason: e.name,
 				inFlight: renderSlots.inFlight,
 				queued: renderSlots.queued,
 				timeout: formatDurationMs(RENDER_QUEUE_TIMEOUT_MS),
 			});
+			return { status: STATUS_SERVICE_UNAVAILABLE, body: e.message };
+		}
+		if (e instanceof SemaphoreAborted) {
+			// Nobody is left to read a reply; the status is for the log only.
+			logger.log('debug', 'render abandoned while queued', { url: targetUrl });
 			return { status: STATUS_SERVICE_UNAVAILABLE, body: e.message };
 		}
 		throw e;
@@ -419,6 +449,23 @@ async function renderPageWithBrowser(
 	}
 }
 
+/**
+ * Fires when the caller goes away before it has been answered, so a request
+ * nobody is waiting for stops occupying a queue slot.
+ */
+function disconnectSignal(
+	req: http.IncomingMessage,
+	res: http.ServerResponse,
+): AbortSignal {
+	const controller = new AbortController();
+	req.on('close', () => {
+		if (!res.writableEnded) {
+			controller.abort();
+		}
+	});
+	return controller.signal;
+}
+
 async function handleRenderRequest(
 	parsedUrl: URL,
 	req: http.IncomingMessage,
@@ -457,7 +504,12 @@ async function handleRenderRequest(
 				: {}),
 		};
 
-		const result = await renderPage(targetUrl, mode, options);
+		const result = await renderPage(
+			targetUrl,
+			mode,
+			options,
+			disconnectSignal(req, res),
+		);
 
 		if (statusIsGood(result.status)) {
 			updateLastSuccessfulRenderTime();
@@ -482,7 +534,11 @@ async function handleRenderRequest(
 	}
 }
 
-async function handleHealthcheck(parsedUrl: URL, res: http.ServerResponse) {
+async function handleHealthcheck(
+	parsedUrl: URL,
+	req: http.IncomingMessage,
+	res: http.ServerResponse,
+) {
 	const now = Date.now();
 	const sinceLastSuccessMs = now - lastSuccessfulRenderTime;
 	if (sinceLastSuccessMs < HEALTHCHECK_CACHE_DURATION_MS) {
@@ -517,7 +573,12 @@ async function handleHealthcheck(parsedUrl: URL, res: http.ServerResponse) {
 		cacheDuration: formatDurationMs(HEALTHCHECK_CACHE_DURATION_MS),
 	});
 	try {
-		const result = await renderPage(targetUrl, mode, {});
+		const result = await renderPage(
+			targetUrl,
+			mode,
+			{},
+			disconnectSignal(req, res),
+		);
 		if (statusIsGood(result.status)) {
 			updateLastSuccessfulRenderTime();
 			logger.log('info', 'healthcheck ok', { status: result.status });
@@ -544,7 +605,7 @@ const server = http.createServer(async (req, res) => {
 	if (pathname === '/render') {
 		await handleRenderRequest(parsedUrl, req, res);
 	} else if (pathname === '/healthcheck') {
-		await handleHealthcheck(parsedUrl, res);
+		await handleHealthcheck(parsedUrl, req, res);
 	} else if (pathname === '/log-level') {
 		if (req.method === 'GET') {
 			res.writeHead(200, { 'Content-Type': 'text/plain' });
