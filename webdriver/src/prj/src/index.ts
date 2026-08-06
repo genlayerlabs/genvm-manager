@@ -202,9 +202,7 @@ async function extractBounded(
 }
 
 async function asText(page: pup.Page, maxChars: number) {
-	return normalizeWhitespace(
-		await extractBounded(page, 'innerText', maxChars),
-	);
+	return normalizeWhitespace(await extractBounded(page, 'innerText', maxChars));
 }
 
 async function asHTML(page: pup.Page, maxChars: number) {
