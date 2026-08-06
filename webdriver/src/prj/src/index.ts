@@ -364,7 +364,18 @@ async function renderPageWithBrowser(
 	// IndexedDB, service workers and HSTS state never leak between tenants
 	// sharing this long-lived browser.
 	const context = await browserInstance.createBrowserContext();
-	const page = await context.newPage();
+
+	// `newPage` fails when the shared browser is under pressure, and the cleanup
+	// below only runs once execution is inside the try. Without this the context
+	// survives for the browser's whole lifetime — and since pressure is exactly
+	// what makes `newPage` fail, the response to it would be to leak more.
+	let page: pup.Page;
+	try {
+		page = await context.newPage();
+	} catch (e) {
+		await context.close().catch(() => {});
+		throw e;
+	}
 
 	try {
 		await ssrf.installSsrfGuard(page);
