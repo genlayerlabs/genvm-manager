@@ -26,5 +26,11 @@ This is the price of the guarantee, not complexity to be simplified away
 ## Lines Are Not Peers
 
 `active-versions` is ordered: the first entry is the current line, the rest are
-kept so existing work keeps running. `support-only-versions` goes further — still
-shipped, no longer built from full sources
+kept so existing work keeps running. Where 2 lines cannot agree, the loss is
+taken on the older side ([ADR-015](<../../adr/015. cross-major contract calls.md>)).
+`support-only-versions` goes further — still shipped, no longer built from full
+sources
+
+A major bump would be worthless if it cut new contracts off from existing ones,
+so a call crossing majors is delegated to the callee's executor rather than
+rejected. Where that boundary falls is specified, not explained here

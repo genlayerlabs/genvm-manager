@@ -9,6 +9,23 @@ yields a `<name>/prepare` case plus one per step (`/0l`, `/0v`, `/0s`, …), and
 a sibling `.skip` file marks a case skipped. Every line in `active-versions`
 runs its own cases against its own built executor, via `build/info.json`
 
+A step may declare `executor_routes: {'<address>': <route>}` to send a
+`CallContract` on that address to another executor line instead of running it
+in-process — the mock host answers `resolve_callcontract_executor` with that
+route, and the manager spawns the nested run. A route is a major (an integer,
+resolved by the manifest's rules) or a version string naming the line outright,
+`re:`-prefixed to match manifest keys rather than name a directory. Prefer a
+version: every released line is semver major `0`, so a major cannot pick
+between them and resolves to the newest one. Omit the whole key and every call
+stays in-process, which is what all other cases do. A routed callee must pin
+its runner by hash: the nested executor runs with debug mode disabled, where
+`:test` does not resolve. See `misc/routed_call` on v0.3.x
+
+A step's declared public-ABI `major` is read from the contract's root slot, so
+the manager routes it the way a real host would. A step may set `major`
+explicitly when its subject is what the executor does with a major the manager
+would otherwise refuse to route — see `runner/major_mismatch`
+
 ## Tags
 
 | Tag | Meaning |

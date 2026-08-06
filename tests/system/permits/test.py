@@ -78,100 +78,121 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 		bg_tasks: list[asyncio.Task] = []
 
 		shut_downer = asyncio.Event()
+		async with base_host.ManagerClient(manager_uri) as manager_client:
+			try:
+				# Set permits to N * 2
+				await self._set_permits(manager_uri, num_permits)
+				logger.debug('permits set', permits=num_permits)
 
-		try:
-			# Set permits to N * 2
-			await self._set_permits(manager_uri, num_permits)
-			logger.debug('permits set', permits=num_permits)
+				# Start N*2 background genvms (each sync, 1 permit)
+				tmp_dir = shared.artifacts_dir / 'permits_test'
+				tmp_dir.mkdir(parents=True, exist_ok=True)
 
-			# Start N*2 background genvms (each sync, 1 permit)
-			tmp_dir = shared.artifacts_dir / 'permits_test'
-			tmp_dir.mkdir(parents=True, exist_ok=True)
+				code = BUSY_CONTRACT.read_bytes()
 
-			code = BUSY_CONTRACT.read_bytes()
+				for i in range(num_permits):
+					sock_path = f'/tmp/genvm-test-permits-{i}.sock'
+					storage_path = tmp_dir / f'storage_{i}.pickle'
 
-			for i in range(num_permits):
-				sock_path = f'/tmp/genvm-test-permits-{i}.sock'
-				storage_path = tmp_dir / f'storage_{i}.pickle'
+					# Create empty storage
+					with open(storage_path, 'wb') as f:
+						pickle.dump(MockStorage(), f)
 
-				# Create empty storage
-				with open(storage_path, 'wb') as f:
-					pickle.dump(MockStorage(), f)
-
-				host = MockHost(
-					path=sock_path,
-					storage_path_pre=storage_path,
-					storage_path_post=storage_path,
-					balances={},
-					running_address=Address('0x' + '00' * 20),
-				)
-
-				ctx = _TestContext(logger)
-				task = asyncio.create_task(
-					self._run_background_genvm(
-						host, manager_uri, ctx, code, sock_path, genvm_ids, shut_downer
+					ctx = _TestContext(logger)
+					host = MockHost(
+						path=sock_path,
+						storage_path_pre=storage_path,
+						storage_path_post=storage_path,
+						balances={},
+						running_address=Address('0x' + '00' * 20),
+						ctx=ctx,
 					)
+
+					task = asyncio.create_task(
+						self._run_background_genvm(
+							host,
+							manager_uri,
+							manager_client,
+							ctx,
+							code,
+							sock_path,
+							genvm_ids,
+							shut_downer,
+						)
+					)
+					bg_tasks.append(task)
+
+				# Wait for permits to be consumed
+				for _ in range(30):
+					status = await self._get_status(manager_uri)
+					current = status['permits']['current']
+					logger.trace('polling permits', current=current)
+					if current == 0:
+						break
+					await asyncio.sleep(0.5)
+				else:
+					return genvm_tool.tests.test.Result(
+						passed=False,
+						context={'reason': 'permits were not consumed within timeout'},
+						elapsed_seconds=0,
+					)
+
+				logger.debug('all permits consumed, testing blocking behavior')
+
+				# Try to start another genvm; it should block on semaphore.
+				blocked = await self._assert_blocks(manager_uri, code)
+				if not blocked:
+					return genvm_tool.tests.test.Result(
+						passed=False,
+						context={'reason': 'POST /genvm/run did not block when permits exhausted'},
+						elapsed_seconds=0,
+					)
+
+				socket_cancelled = await self._assert_socket_cancel_queued(
+					manager_uri, manager_client, code
 				)
-				bg_tasks.append(task)
+				if not socket_cancelled:
+					return genvm_tool.tests.test.Result(
+						passed=False,
+						context={
+							'reason': 'socket cancel while queued consumed a permit or missed terminal event'
+						},
+						elapsed_seconds=0,
+					)
 
-			# Wait for permits to be consumed
-			for _ in range(30):
-				status = await self._get_status(manager_uri)
-				current = status['permits']['current']
-				logger.trace('polling permits', current=current)
-				if current == 0:
-					break
-				await asyncio.sleep(0.5)
-			else:
-				return genvm_tool.tests.test.Result(
-					passed=False,
-					context={'reason': 'permits were not consumed within timeout'},
-					elapsed_seconds=0,
-				)
+				logger.info('permits test passed')
+				return genvm_tool.tests.test.Result(passed=True, context={}, elapsed_seconds=0)
 
-			logger.debug('all permits consumed, testing blocking behavior')
-
-			# Try to start another genvm — should block on semaphore
-			blocked = await self._assert_blocks(manager_uri, code)
-			if not blocked:
-				return genvm_tool.tests.test.Result(
-					passed=False,
-					context={'reason': 'POST /genvm/run did not block when permits exhausted'},
-					elapsed_seconds=0,
-				)
-
-			logger.info('permits test passed')
-			return genvm_tool.tests.test.Result(passed=True, context={}, elapsed_seconds=0)
-
-		finally:
-			shut_downer.set()
-			# Shut down running genvms
-			for gid in genvm_ids:
-				try:
-					async with aiohttp.request(
-						'DELETE',
-						f'{manager_uri}/genvm/{gid}',
-						timeout=aiohttp.ClientTimeout(total=10),
-					):
+			finally:
+				shut_downer.set()
+				# Shut down running genvms
+				for gid in genvm_ids:
+					try:
+						async with aiohttp.request(
+							'DELETE',
+							f'{manager_uri}/genvm/{gid}',
+							timeout=aiohttp.ClientTimeout(total=10),
+						):
+							pass
+					except Exception as e:
+						logger.warning('failed to delete genvm', genvm_id=gid, error=e)
 						pass
-				except Exception as e:
-					logger.warning('failed to delete genvm', genvm_id=gid, error=e)
-					pass
 
-			for task in bg_tasks:
-				try:
-					await task
-				except (asyncio.CancelledError, Exception):
-					pass
+				for task in bg_tasks:
+					try:
+						await task
+					except (asyncio.CancelledError, Exception):
+						pass
 
-			# Restore permits
-			await self._set_permits(manager_uri, original_permits)
-			logger.debug('permits restored', permits=original_permits)
+				# Restore permits
+				await self._set_permits(manager_uri, original_permits)
+				logger.debug('permits restored', permits=original_permits)
 
 	async def _run_background_genvm(
 		self,
 		host: MockHost,
 		manager_uri: str,
+		manager_client: base_host.ManagerClient,
 		ctx: _TestContext,
 		code: bytes,
 		sock_path: str,
@@ -185,6 +206,7 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 				await base_host.run_genvm(
 					mock_host,
 					manager_uri=manager_uri,
+					manager_client=manager_client,
 					ctx=ctx,
 					is_sync=True,
 					message=FAKE_MESSAGE,
@@ -194,7 +216,9 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 					calldata=gvm_calldata.encode({}),
 					timeout=300,
 					debug_mode='unsafe',
-					reroute_to=getattr(self, '_reroute_to', ''),
+					unsafe_overrides=base_host.UnsafeOverrides(
+						reroute_to=getattr(self, '_reroute_to', ''),
+					),
 					request_extra={'no_modules': True},
 					shutdown_early=shut_downer,
 					bucket_totals=[2**200] * 20,
@@ -206,7 +230,7 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 		"""Make a raw POST /genvm/run and assert it blocks (times out)."""
 		data = gvm_calldata.encode(
 			{
-				'major': 0,
+				'selector': {'kind': 'major', 'major': base_host.UNDEPLOYED_MAJOR},
 				'message': FAKE_MESSAGE,
 				'is_sync': True,
 				'host_data': '{"node_address":"test","tx_id":"test"}',
@@ -247,6 +271,50 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 					return False
 		except (asyncio.TimeoutError, TimeoutError):
 			return True
+
+	async def _assert_socket_cancel_queued(
+		self,
+		manager_uri: str,
+		client: base_host.ManagerClient,
+		code: bytes,
+	) -> bool:
+		payload = {
+			'selector': {'kind': 'major', 'major': base_host.UNDEPLOYED_MAJOR},
+			'message': FAKE_MESSAGE,
+			'is_sync': True,
+			'debug_mode': 'unsafe',
+			'host_data': '{"node_address":"test","tx_id":"test"}',
+			'max_execution_minutes': 20,
+			'timestamp': '2024-11-26T06:42:42.424242Z',
+			'host': 'unix:///tmp/genvm-test-permits-socket-cancel.sock',
+			'extra_args': [],
+			'code': code,
+			'calldata': gvm_calldata.encode({}),
+			'bucket_totals': [2**200] * 20,
+			'no_modules': True,
+			'leader_nondet_results': [],
+			'initial_time_units_allocation': 60,
+			'unsafe_overrides': base_host.UnsafeOverrides(
+				reroute_to=self._reroute_to,
+			).as_request_field(),
+			'deadline': '30s',
+		}
+		state = await client.run(payload)
+		before = await self._get_status(manager_uri)
+		if before['permits']['current'] != 0:
+			return False
+		await client.cancel(state.boot_id, state.genvm_id)
+		terminal = await client.wait_terminal(state)
+		after = await self._get_status(manager_uri)
+		await client.ack(state.boot_id, state.genvm_id)
+		if 'finished' not in terminal:
+			return False
+		finished = terminal['finished']
+		return (
+			finished['cause'] == 'cancelled'
+			and finished['exit_code'] is None
+			and after['permits']['current'] == 0
+		)
 
 	async def _get_permits(self, manager_uri: str) -> int:
 		async with aiohttp.request('GET', f'{manager_uri}/permits') as resp:

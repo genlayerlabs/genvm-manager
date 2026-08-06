@@ -78,6 +78,14 @@ Requirements
 
 Creates a :term:`sub-VM`. See :ref:`gvm-meta-property-derivation`.
 
+Before every call, :term:`GenVM` asks the :term:`host` whether to delegate the
+callee to another executor. A null answer preserves the local path, including
+:ref:`gvm-def-str-trie-value-vm-error-invalid-contract-major-mismatch`. A
+non-null answer executes the same derived :term:`sub-VM` in the selected
+executor. The call result and its contribution to the execution hash are the
+same kinds of observable output in either path. Routing cycles are permitted
+and remain bounded by :ref:`gvm-def-consts-value-top-limits-vm-recursion`.
+
 The calling convention is checked in the calling :term:`sub-VM`, before the
 callee is spawned. A violation is the caller's own malformed argument, so it is
 answered with ``Errno::Inval`` like the other argument checks and the caller can

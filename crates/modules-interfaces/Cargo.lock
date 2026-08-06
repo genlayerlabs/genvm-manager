@@ -293,6 +293,7 @@ dependencies = [
  "serde_bytes",
  "serde_derive",
  "serde_json",
+ "sha3",
  "tokio",
 ]
 

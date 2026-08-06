@@ -30,7 +30,7 @@ Generated, never edited by hand:
 
 | Page | Generator |
 |---|---|
-| `spec/appendix/constants.rst` | codegen ([genvm-tool.md](../genvm-tool.md)) |
+| `spec/appendix/constants.rst`, `impl-spec/appendix/manager-socket-consts.rst` | codegen ([genvm-tool.md](../genvm-tool.md)) |
 | `available-runners.rst`, `runners-versions.json`, SDK `changelog.rst`, in the primary line | `docs/website/generate.py` |
 | `overview/executor-lines_generated.rst` | `docs/website/generate.py` |
 

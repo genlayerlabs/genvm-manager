@@ -170,6 +170,8 @@ class ManagerService(genvm_tool.tests.exec.service.Service):
 					'log_level: info',
 					f'manifest_path: {json.dumps(str(manifest_path))}',
 					'permits: null',
+					'execution_retention: 5m',
+					'max_message_bytes: 67108864',
 					'',
 				]
 			)

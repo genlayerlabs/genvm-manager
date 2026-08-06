@@ -18,11 +18,12 @@ has no wrapper
 ## Codegen
 
 `ninja -C build codegen` regenerates from data JSON; never edit an output by
-hand. Host protocol data is per line, public ABI data comes from the primary one
+hand. Host protocol data is shared, public ABI data comes from the primary line
 
 | Data | Generated |
 |---|---|
-| `executors/<line>.x/executor/codegen/data/host-fns.json` | that line's `executor/crates/common/src/host_fns.rs`, `tests/runner/origin/host_fns.py` |
+| `crates/modules-interfaces/codegen/data/host-fns.json` | `…/src/host_fns.rs`, `tests/runner/origin/host_fns.py` |
+| `crates/modules-interfaces/codegen/data/manager-api.json` | `…/src/manager_api.rs`, `tests/runner/origin/manager_api.py`, `docs/website/src/impl-spec/appendix/manager-socket-consts.rst` |
 | `executors/<primary>.x/executor/codegen/data/public-abi.json` | `tests/runner/origin/public_abi.py`, `docs/website/src/spec/appendix/constants.rst` |
 
 ## Suite Layout

@@ -302,10 +302,17 @@ def main(ctx: common.Context, args) -> int:
 
 	codegen_phony = n.build('phony', 'codegen')
 
-	# Manager-global generated files (test fixtures + docs) have a single output,
-	# so generate them from the primary line's codegen data.
+	# Manager-global generated files have a single output. Host protocol data is
+	# shared; public ABI data still comes from the primary line.
 	p_data = primary_exec_root / 'executor' / 'codegen' / 'data'
+	shared_data = source_dir / 'crates/modules-interfaces/codegen/data'
+	host_fns_rs = source_dir / 'crates/modules-interfaces/src/host_fns.rs'
 	host_fns_py = source_dir / 'tests/runner/origin/host_fns.py'
+	manager_api_rs = source_dir / 'crates/modules-interfaces/src/manager_api.rs'
+	manager_api_py = source_dir / 'tests/runner/origin/manager_api.py'
+	manager_socket_consts_rst = (
+		source_dir / 'docs/website/src/impl-spec/appendix/manager-socket-consts.rst'
+	)
 	public_abi_py = source_dir / 'tests/runner/origin/public_abi.py'
 	constants_rst = source_dir / 'docs/website/src/spec/appendix/constants.rst'
 	# Pending public-abi constants (ADR-012): documented in their own appendix
@@ -315,7 +322,11 @@ def main(ctx: common.Context, args) -> int:
 		source_dir / 'docs/website/src/spec/appendix/constants-pending.rst'
 	)
 
-	n.codegen(host_fns_py, 'python', p_data / 'host-fns.json')
+	n.codegen(host_fns_rs, 'rust', shared_data / 'host-fns.json')
+	n.codegen(host_fns_py, 'python', shared_data / 'host-fns.json')
+	n.codegen(manager_api_rs, 'rust', shared_data / 'manager-api.json')
+	n.codegen(manager_api_py, 'python', shared_data / 'manager-api.json')
+	n.codegen(manager_socket_consts_rst, 'rst', shared_data / 'manager-api.json')
 	n.codegen(public_abi_py, 'python', p_data / 'public-abi.json')
 	n.codegen(constants_rst, 'rst', p_data / 'public-abi.json')
 	n.codegen(
@@ -324,7 +335,16 @@ def main(ctx: common.Context, args) -> int:
 		p_data / 'public-abi-pending.json',
 		['--rst-anchor-ns=pending'],
 	)
-	for out in (host_fns_py, public_abi_py, constants_rst, constants_pending_rst):
+	for out in (
+		host_fns_rs,
+		host_fns_py,
+		manager_api_rs,
+		manager_api_py,
+		manager_socket_consts_rst,
+		public_abi_py,
+		constants_rst,
+		constants_pending_rst,
+	):
 		codegen_phony.add_dependency(out)
 
 	cargo_cmd = [common.command_to_executable('cargo')]

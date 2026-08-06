@@ -519,6 +519,8 @@ Param: i32
 ``invalid_contract major_mismatch``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+This error remains terminal for top-level and runner loads. During :ref:`gvm-def-gl-call-call-contract`, the host may select another executor before the local major check.
+
 .. _gvm-def-str-trie-value-vm-error-invalid-contract-wasm-validating:
 
 ``invalid_contract wasm validating``

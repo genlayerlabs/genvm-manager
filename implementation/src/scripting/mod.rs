@@ -162,7 +162,8 @@ impl<T, R, E> UserVM<T, R, E> {
             | StdLib::IO
             | StdLib::STRING
             | StdLib::MATH
-            | StdLib::PACKAGE;
+            | StdLib::PACKAGE
+            | StdLib::OS;
 
         let vm = mlua::Lua::new_with(lua_libs, mlua::LuaOptions::default())?;
 

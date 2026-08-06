@@ -17,8 +17,12 @@ pub trait Web {
 
 pub mod abi_stub;
 pub mod domain;
+pub mod host_fns;
+pub mod manager_api;
+pub mod nested;
 pub use abi_stub::*;
 pub use domain::*;
+pub use nested::*;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(untagged)]

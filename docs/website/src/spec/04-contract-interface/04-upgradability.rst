@@ -51,9 +51,12 @@ Contract Major Version
 ----------------------
 
 The ``major`` field of :ref:`genvm-def-root-slot` is at
-:ref:`gvm-def-consts-value-root-offsets-major` and stores the public-ABI major version that the
-contract was built against. On every load :term:`GenVM` compares this byte to its own
-``CURRENT_MAJOR`` constant and refuses to execute a contract whose major differs.
+:ref:`gvm-def-consts-value-root-offsets-major` and stores the public-ABI major
+version that the contract was built against. Top-level and runner loads compare
+this byte to ``CURRENT_MAJOR`` and fail with
+:ref:`gvm-def-str-trie-value-vm-error-invalid-contract-major-mismatch` when it
+differs. :ref:`gvm-def-gl-call-call-contract` may instead delegate the callee to
+another executor selected by the host.
 
 The value is **not** modifiable by the contract itself: it is written once at deploy time by
 the host from a value detected in the contract package (a ``genvm.version`` custom WASM

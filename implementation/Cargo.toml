@@ -30,13 +30,13 @@ genvm_modules_interfaces = { path = "../executors/v0.3.x/executor/crates/modules
 
 anyhow = { version = "1.0.98", features = [] }
 async-trait = "0.1.88"
+axum = { version = "0.8", features = ["ws"] }
 base64 = "0.22.1"
 bytes = "1.10.1"
 clap = { version = "4.5.35", features = ["derive"] }
 crossbeam = "0.8.4"
 futures-util = "0.3.31"
 hex = "0.4.3"
-hyper = { version = "0.14", features = ["server", "http1", "tcp"] }
 image = { version = "0.25.8", features = ["png", "jpeg", "webp"] }
 libc = "0.2"
 num-bigint = { version = "0.4.6", features = ["serde"] }
@@ -62,7 +62,6 @@ tokio-tungstenite = "0.26.2"
 unicode-normalization = "0.1.20"
 unicode-width = "0.2.1"
 url = { version = "2.5.4", features = ["serde"] }
-warp = "0.3.7"
 # kept in sync with the version reqwest depends on, to avoid a duplicate hickory
 # in the tree
 hickory-resolver = { version = "0.25", features = ["tokio"] }
@@ -79,7 +78,16 @@ version = "0.12.15"
 
 [dependencies.tokio]
 default-features = false
-features = ["rt", "rt-multi-thread", "net", "time", "macros", "sync", "process"]
+features = [
+    "rt",
+    "rt-multi-thread",
+    "net",
+    "time",
+    "macros",
+    "sync",
+    "process",
+    "fs",
+]
 version = "1.44.1"
 
 # we do not use anyhow feature because it does not work with boxed downcast_ref

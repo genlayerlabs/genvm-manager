@@ -16,7 +16,9 @@ Before executing the root :term:`sub-VM`, :term:`GenVM`:
 
 #. Validates the entry payload against :ref:`gvm-def-contract-call-conv` (see
    below).
-#. Reads the contract's locked slots and root-slot data.
+#. Reads the contract's root-slot data, and its locked slots when the run may
+   write storage. Locked slots only constrain writes, so a run without that
+   permission does not read them.
 #. Resolves the contract code from deployment input or from the contract's
    configured code slot.
 #. Checks upgrade and ABI-major compatibility as specified in
@@ -158,7 +160,9 @@ The child is read-only.
   writes (see :ref:`contract-execution-flow`).
 - :ref:`gvm_vm_field_topmost_runner_id` is the callee's contract runner.
 - :ref:`gvm_vm_field_granted_custom` is the caller's entire loaded
-  custom-runner set (see `Custom-Runner Grants`_).
+  custom-runner set (see `Custom-Runner Grants`_). A call the host delegates to
+  another executor cannot carry them, so it is rejected instead --- see
+  `Custom-Runner Grants`_.
 - The child's startup message is a copy of the caller's, except:
 
   - ``contract_address`` is the callee's address
@@ -229,7 +233,11 @@ the caller's loaded custom-runner set
     the caller and is granted implicitly.
 
 - :ref:`gvm-def-gl-call-call-contract` children receive the caller's entire
-  custom set.
+  custom set. Grants are process-local, so this holds only for a child the
+  executor runs itself: when the host delegates the callee to another executor
+  (see :ref:`gvm-def-contract-version`) and the caller has any custom runner
+  loaded, the call fails with the ``error_inval`` code instead, rather than
+  running the callee with a set that depends on the route.
 
 Each grant is a load action in the child, charged against the child's RAM
 budget. Grants are applied before the entry-runner load, so a ``custom:``

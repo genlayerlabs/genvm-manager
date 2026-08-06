@@ -8,3 +8,5 @@ log_level: info
 
 manifest_path: ${exeDir}/../data/manifest.yaml
 permits: null # if null will be auto-discovered; full VM takes 2, sync VM takes 1
+execution_retention: 5m # finished executions are retained until ack or this TTL
+max_message_bytes: 67108864 # 64 MiB manager websocket message cap

@@ -252,6 +252,9 @@ def tests(ctx):
 		)
 
 		ctx.collect_dir('tests/system/permits', manager_service=manager_service)
+		ctx.collect_dir('tests/system/manager-socket')
+		ctx.collect_dir('tests/system/cross-major')
+		ctx.collect_dir('tests/system/cross-major-observability')
 
 	ctx.add_collector(collect_integration)
 

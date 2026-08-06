@@ -158,6 +158,12 @@ Non-deterministic sub-calls do not contribute. A run with no deterministic sub-c
 finalizes its accumulator to a fixed digest, so that error and edge results hash
 uniformly.
 
+The small hash of a sub-VM the host delegated to another executor
+(see :ref:`gvm-def-contract-version`) is computed the same way, from the values
+that executor reports. Where the callee ran is not an input: a call that a host
+routes to another executor MUST fold the same value it would have folded had the
+callee run in-process.
+
 Post-Execution Result Validation
 --------------------------------
 

@@ -123,6 +123,11 @@ Requires :ref:`gvm-perm-deterministic`.
 Allows spawning :ref:`gvm-def-non-det-mode` :term:`sub-VM` instances via
 :ref:`gvm-def-gl-call-run-nondet`.
 
+A :term:`sub-VM` that a host delegated to another executor (see
+:ref:`gvm-def-contract-version`) never holds this permission, whatever its
+caller holds. Such a :term:`sub-VM` has no connection to the non-deterministic
+modules, so the permission cannot be served there.
+
 .. _gvm-perm-register-runners:
 
 ``register_runners``

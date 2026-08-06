@@ -10,7 +10,6 @@ import contextlib
 import difflib
 import gzip
 import hashlib
-import io
 import itertools
 import json
 import os
@@ -217,6 +216,18 @@ def _unfold_conf(x: typing.Any, vars: dict[str, str]) -> typing.Any:
 	if isinstance(x, dict):
 		return {k: _unfold_conf(v, vars) for k, v in x.items()}
 	return x
+
+
+def _routing_payload(route: int | str) -> bytes:
+	"""Where a host places a callee: a major, or a version naming a line.
+
+	A major is resolved by the manifest's rules, which cannot separate the live
+	lines while every one of them is semver major 0 — a version string is what
+	names one of those.
+	"""
+	if isinstance(route, str):
+		return gvm_calldata.encode({'kind': 'version', 'version': route})
+	return gvm_calldata.encode({'kind': 'major', 'major': route})
 
 
 def _flatten_tree(
@@ -450,15 +461,6 @@ def _get_diffs[T](exp: T, got: T, dump: typing.Callable[[T], str]) -> dict | Non
 	}
 
 
-def _calldata_to_fancy_str(calldata: bytes) -> str:
-	cd = gvm_calldata.decode(calldata)
-	buf = io.StringIO()
-	genvm_tool.formatter.TextFormatter(genvm_tool.formatter.NoLockTextIO(buf)).dump(
-		genvm_tool.formatter.Formatter.Level.ERROR, 'calldata', calldata=cd
-	)
-	return buf.getvalue()
-
-
 class Context(base_host.Context):
 	logger: base_host.Logger
 
@@ -471,12 +473,8 @@ class Context(base_host.Context):
 	def add_stat(self, key: str, value: typing.Any):
 		self.logger.debug('stat', key=key, val=value)
 
-	def get_timeout(
-		self, action: base_host.TimeoutAction, type: base_host.TimeoutType
-	) -> float | None:
-		if type == base_host.TimeoutType.CONNECT_S:
-			return 5.0
-		return None
+	def get_manager_connect_timeout(self) -> float | None:
+		return 5.0
 
 
 class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
@@ -693,12 +691,27 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 
 		# Create mock host
 		running_address = single_conf['message']['contract_address']
+		ctx = Context(logger)
+		# A case may declare `executor_routes` to send a callee across a major
+		# boundary; without one the hook answers null and every call stays
+		# in-process. `hook_cross_contract_calls` asks for the hook on its own,
+		# so a case can cover a host that is consulted and declines to route.
+		# A route is a major (int) or a version string (`re:` prefixed to match
+		# manifest keys rather than name a directory).
+		routes = {Address(k): v for k, v in single_conf.get('executor_routes', {}).items()}
+		hook_calls = routes != {} or single_conf.get('hook_cross_contract_calls', False)
 		host = MockHost(
 			path=str(mock_sock_path),
 			storage_path_post=post_storage,
 			storage_path_pre=pre_storage,
 			balances={Address(k): v for k, v in single_conf.get('balances', {}).items()},
 			running_address=running_address,
+			ctx=ctx,
+			resolve_callcontract_executor_hook=(
+				lambda address, _state, _major: (
+					_routing_payload(routes[address]) if address in routes else None
+				)
+			),
 		)
 
 		host.balances.setdefault(running_address, 0)
@@ -726,6 +739,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				case_permissions = single_conf.get('permissions')
 				if case_permissions is not None:
 					request_extra['permissions'] = case_permissions
+				if hook_calls:
+					request_extra['hook_cross_contract_calls'] = True
 				dflt_bucket = 2**200
 				bucket_totals: list[int] = single_conf.get('bucket_totals', [dflt_bucket] * 10)
 
@@ -742,26 +757,37 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				if not single_conf['message'].get('is_init', False):
 					code = None
 				mode = single_conf.get('mode', 'l')
-				ctx = Context(logger)
-				res = await base_host.run_genvm(
-					mock_host,
-					manager_uri=manager_uri,
-					message=single_conf['message'],
-					timeout=single_conf.get('deadline', 10 * 60),
-					is_sync=(mode == 's'),
-					host_data=host_data,
-					ctx=ctx,
-					host='unix://' + mock_host.path,
-					debug_mode=self._debug_mode,
-					code=code,
-					calldata=calldata_bytes,
-					bucket_totals=bucket_totals,
-					gas_data=single_conf.get('gas_data'),
-					leader_nondet_results=leader_nondet,
-					message_fee_allocation=message_fee_allocation,
-					reroute_to=reroute_to,
-					request_extra=request_extra,
-				)
+				async with base_host.ManagerClient(
+					manager_uri,
+					connect_timeout=ctx.get_manager_connect_timeout(),
+				) as manager_client:
+					res = await base_host.run_genvm(
+						mock_host,
+						manager_uri=manager_uri,
+						manager_client=manager_client,
+						message=single_conf['message'],
+						timeout=single_conf.get('deadline', 10 * 60),
+						is_sync=(mode == 's'),
+						host_data=host_data,
+						ctx=ctx,
+						host='unix://' + mock_host.path,
+						debug_mode=self._debug_mode,
+						code=code,
+						calldata=calldata_bytes,
+						bucket_totals=bucket_totals,
+						gas_data=single_conf.get('gas_data'),
+						leader_nondet_results=leader_nondet,
+						message_fee_allocation=message_fee_allocation,
+						unsafe_overrides=base_host.UnsafeOverrides(reroute_to=reroute_to),
+						request_extra=request_extra,
+						# A case may state the major the host claims, for the
+						# cases whose subject is what the executor does with a
+						# major the manager would otherwise refuse to route.
+						major=single_conf.get('major'),
+					)
+				# Nested executors dial the same listener; wind their loops down
+				# so a failure on that side surfaces here.
+				await mock_host.stop_connections()
 				return_part = ''
 				if res.result_kind == public_abi.ResultCode.RETURN:
 					return_part += (
@@ -841,27 +867,17 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				},
 			}
 
-		result_events: list[list[bytes]] = []
-
 		messages_content = []
 		for em in res.result_emissions:
-			if em['type'] == 'EmitEvent':
-				tem = typing.cast(base_host.EmitEventInner, em)
-				blob = gvm_calldata.encode(tem['blob'])
-				result_events.append([*tem['topics'], blob])
 			messages_content.append(gvm_calldata.to_str(em))
 			messages_content.append('\n')
 
-		# Write hash file (calldata-encoded deterministic result fields)
-		hash_data = gvm_calldata.encode(
-			[
-				int(res.result_kind),
-				res.result_data,
-				res.result_fingerprint,
-				res.result_storage_changes,
-				result_events,
-			]
-		)
+		# The executor's own execution hash, i.e. the value consensus actually
+		# compares. It folds kind, data, backtrace, storage changes, sub-VM
+		# hashes, wasm store hashes and both fee buckets. Emissions are not in
+		# it; those are covered by the `messages` semantics component, which
+		# only runs in the main mode.
+		hash_data = res.execution_hash
 
 		semantics_parts = {
 			'stdout': res.stdout,
@@ -952,9 +968,9 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			if expected_hash_path.exists():
 				original_hash = base64.b64decode(expected_hash_path.read_text().strip())
 
-				diff = _get_diffs(original_hash, hash_data, _calldata_to_fancy_str)
-
-				if diff is not None:
+				# An opaque digest: there is nothing to diff, only the two
+				# values and the semantics/stdout goldens to reason from.
+				if original_hash != hash_data:
 					return {
 						'passed': False,
 						'context': {
@@ -966,7 +982,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 							else 'this run of the main mode',
 							'hash_path': str(expected_hash_path),
 							'tree_path': tree_path,
-							**diff,
+							'exp': original_hash.hex(),
+							'got': hash_data.hex(),
 						},
 					}
 			elif not compares_golden:
@@ -1386,9 +1403,9 @@ def _single_integration_test(
 			f'{jsonnet_file}: unknown debug_mode {debug_mode!r}, expected one of {_DEBUG_MODES}'
 		)
 	if debug_mode == 'disabled':
-		# `reroute_to` is honored only from `safe` up, and that is what points a
-		# case at its own line's executor. Below it the case would silently run
-		# whatever the manifest resolves to.
+		# `unsafe_overrides.reroute_to` is honored only from `safe` up, and that
+		# is what points a case at its own line's executor. Below it the case
+		# would silently run whatever the manifest resolves to.
 		raise ValueError(f'{jsonnet_file}: debug_mode "disabled" cannot reroute')
 
 	# Recompute needed_services after tags update

@@ -435,11 +435,6 @@ class LineContext:
 			'python',
 			data / 'public-abi.json',
 		)
-		self.codegen(
-			self.exec_root / 'executor/crates/common/src/host_fns.rs',
-			'rust',
-			data / 'host-fns.json',
-		)
 		pending_abi = self.exec_root / 'executor/codegen/data/public-abi-pending.json'
 		if pending_abi.exists():
 			self.codegen(
