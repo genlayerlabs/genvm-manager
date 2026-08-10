@@ -16,7 +16,17 @@ function Render(ctx, payload)
 		.. "&waitAfterLoaded="
 		.. tostring(payload.wait_after_loaded or 0)
 
-	local result = lib.rs.request(ctx, {
+	-- This hop goes to *our own* webdriver sidecar, never to the contract's URL,
+	-- so the extent of this `pcall` is exactly the trust boundary: everything it
+	-- can catch is this node's environment failing, and nothing it catches is an
+	-- observation about the page. `lib.rs.request` cannot make that distinction
+	-- itself -- it sees only a URL -- so the fatality decision belongs here.
+	--
+	-- Re-raised non-fatally so the contract gets a catchable nondeterministic
+	-- exception instead of the run being aborted as an internal error. Mirrors
+	-- `Request` below. The page's own outcome is reported by the sidecar as a
+	-- `200` plus a `resulting-status` header, and is handled further down.
+	local success, result = pcall(lib.rs.request, ctx, {
 		method = "GET",
 		url = web.rs.config.webdriver_host .. "/render" .. url_params,
 		headers = {},
@@ -24,6 +34,10 @@ function Render(ctx, payload)
 		response_body_max_size = payload.size_limit,
 		unfiltered = true,
 	})
+
+	if not success then
+		lib.reraise_with_fatality(result, false)
+	end
 
 	lib.log {
 		level = "debug",
