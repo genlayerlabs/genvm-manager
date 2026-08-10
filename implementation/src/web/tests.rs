@@ -63,6 +63,23 @@ async fn serve_sidecar_internal_error() -> std::net::SocketAddr {
     .await
 }
 
+/// The one navigation failure the sidecar refuses to report:
+/// `net::ERR_INTERNET_DISCONNECTED` means the request never left the host, so
+/// there is no observation to report and `render.ts` throws instead of
+/// returning a status. The outer catch turns that into the same bare `500`,
+/// byte-accurate down to the message, which is the only thing that crosses.
+///
+/// Its wording is the point. The browser and the sidecar answered normally, so
+/// an operator told "webdriver unavailable" would go and stare at a working
+/// browser; the text has to say the local network is what broke.
+async fn serve_sidecar_local_network_unavailable() -> std::net::SocketAddr {
+    serve_sidecar(
+        "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\n",
+        br#"{"error":"Internal server error","message":"Local network fault: this host has no network route (net::ERR_INTERNET_DISCONNECTED). The browser answered, so it is the local network that failed rather than the webdriver, and nothing about the page was observed."}"#,
+    )
+    .await
+}
+
 /// The sidecar's parameter validation (`handleRenderRequest`): a `400` when
 /// `url` is missing or `mode` is not one of text/html/screenshot. Reachable
 /// whenever the module and the sidecar disagree about the query format, e.g.
@@ -95,6 +112,29 @@ async fn serve_sidecar_page_unreachable() -> std::net::SocketAddr {
     serve_sidecar(
         "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nResulting-Status: 503\r\n",
         b"Connection refused",
+    )
+    .await
+}
+
+/// A name that did not resolve, which `getNavigationErrorStatus` reports as a
+/// `502` on the observation channel. Paired with
+/// [`serve_sidecar_local_network_unavailable`]: both are network failures, and
+/// they are classified oppositely on purpose. See
+/// [`render_remote_page_name_not_resolved_is_not_fatal`]
+async fn serve_sidecar_page_name_not_resolved() -> std::net::SocketAddr {
+    serve_sidecar(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nResulting-Status: 502\r\n",
+        b"DNS resolution failed",
+    )
+    .await
+}
+
+/// A navigation that ran out of time, reported as a `408` on the observation
+/// channel. See [`render_remote_page_navigation_timeout_is_not_fatal`]
+async fn serve_sidecar_page_navigation_timeout() -> std::net::SocketAddr {
+    serve_sidecar(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nResulting-Status: 408\r\n",
+        b"Navigation timeout",
     )
     .await
 }
@@ -344,6 +384,29 @@ async fn render_sidecar_unhealthy_is_fatal() {
     );
 }
 
+/// The host this validator runs on has no network at all. The sidecar throws
+/// rather than reporting a status, because a request that never left the
+/// machine is not an observation about the page, and the outer catch turns
+/// that into the same bare `500`.
+///
+/// It travels the webdriver hop, so it collects the same `WEBDRIVER_UNAVAILABLE`
+/// label; that label names the hop, not the diagnosis. Which box actually broke
+/// is carried by the sidecar's own message, pinned by
+/// [`render_sidecar_local_network_fault_names_the_local_network_on_the_wire`]
+#[tokio::test]
+async fn render_sidecar_local_network_fault_is_fatal() {
+    common::tests::setup();
+
+    let addr = serve_sidecar_local_network_unavailable().await;
+    let err = assert_sidecar_failure_is_fatal(addr, "a local network fault").await;
+
+    assert!(
+        err.causes.contains(&"STATUS_NOT_OK".to_owned()),
+        "unexpected causes: {:?}",
+        err.causes
+    );
+}
+
 /// The other half of that pair. A `503` in `Resulting-Status` on an otherwise
 /// good `200` is the sidecar telling us the *page's* host refused the
 /// connection -- something we did observe -- so it stays catchable. The two
@@ -372,6 +435,88 @@ async fn render_remote_page_unreachable_is_not_fatal() {
         !err.causes.contains(&"WEBDRIVER_UNAVAILABLE".to_owned()),
         "a working sidecar must not be blamed: {:?}",
         err.causes
+    );
+}
+
+/// A name that does not resolve stays on the observation channel, and this
+/// test exists to keep it there.
+///
+/// It is genuinely ambiguous -- the domain may not exist, or *our* resolver may
+/// be broken -- and one validator cannot tell those apart. That is precisely
+/// what several validators and an equivalence principle are for: deciding it
+/// here, the way `net::ERR_INTERNET_DISCONNECTED` is decided, would suppress
+/// the disagreement consensus exists to reconcile. So it stays catchable, the
+/// contract sees it, and the vote records what this node saw
+#[tokio::test]
+async fn render_remote_page_name_not_resolved_is_not_fatal() {
+    common::tests::setup();
+
+    let addr = serve_sidecar_page_name_not_resolved().await;
+    let config = sync::DArc::new(test_config(format!("http://{addr}")));
+
+    let err = render_err(&config, "https://example.com/").await;
+
+    assert!(
+        err.causes.contains(&"WEBPAGE_LOAD_FAILED".to_owned()),
+        "unexpected causes: {:?}",
+        err.causes
+    );
+    assert!(
+        !err.fatal,
+        "a name that does not resolve is ambiguous between the site and us, and \
+         that ambiguity is for the validators to settle, not for this node to \
+         pre-judge by abstaining: {err:?}"
+    );
+    assert!(
+        !err.causes.contains(&"WEBDRIVER_UNAVAILABLE".to_owned()),
+        "a working sidecar must not be blamed: {:?}",
+        err.causes
+    );
+    // not vacuous: this really is the 502 branch, not some other failure
+    assert!(
+        matches!(
+            err.ctx.get("status"),
+            Some(genvm_modules_interfaces::GenericValue::Number(s)) if *s == 502.0
+        ),
+        "expected the reported page status in ctx: {:?}",
+        err.ctx
+    );
+}
+
+/// The same guard for the other ambiguous case. A navigation timeout is either
+/// a slow site or a browser of ours that wedged, and a validator cannot tell
+/// which; it stays a contract-visible observation for the same reason
+#[tokio::test]
+async fn render_remote_page_navigation_timeout_is_not_fatal() {
+    common::tests::setup();
+
+    let addr = serve_sidecar_page_navigation_timeout().await;
+    let config = sync::DArc::new(test_config(format!("http://{addr}")));
+
+    let err = render_err(&config, "https://example.com/").await;
+
+    assert!(
+        err.causes.contains(&"WEBPAGE_LOAD_FAILED".to_owned()),
+        "unexpected causes: {:?}",
+        err.causes
+    );
+    assert!(
+        !err.fatal,
+        "a navigation timeout is ambiguous between the site and us, and stays \
+         catchable so the validators can disagree about it: {err:?}"
+    );
+    assert!(
+        !err.causes.contains(&"WEBDRIVER_UNAVAILABLE".to_owned()),
+        "a working sidecar must not be blamed: {:?}",
+        err.causes
+    );
+    assert!(
+        matches!(
+            err.ctx.get("status"),
+            Some(genvm_modules_interfaces::GenericValue::Number(s)) if *s == 408.0
+        ),
+        "expected the reported page status in ctx: {:?}",
+        err.ctx
     );
 }
 
@@ -448,6 +593,45 @@ async fn render_remote_page_load_failure_reaches_the_wire_as_user_error() {
         genvm_modules_interfaces::Result::UserError(_) => {}
         genvm_modules_interfaces::Result::FatalError(msg) => {
             panic!("a page that 404s must stay catchable, not abort the run: {msg}")
+        }
+        genvm_modules_interfaces::Result::Ok(_) => panic!("expected Render to fail"),
+    }
+}
+
+/// The other thing the abort string has to carry. `WEBDRIVER_UNAVAILABLE` is
+/// the name of the hop that failed, and for a machine with no network it is the
+/// wrong diagnosis: the browser and the sidecar answered normally, so an
+/// operator following that word alone goes and stares at a working browser.
+///
+/// The sidecar's own message is what distinguishes them, and this pins that it
+/// survives all the way to the string an operator reads. The body arrives from
+/// the transport as bytes, but the `pcall` round trip through Lua turns it into
+/// a string, so it lands in [`ModuleError`]'s JSON as readable text rather than
+/// a byte array
+#[tokio::test]
+async fn render_sidecar_local_network_fault_names_the_local_network_on_the_wire() {
+    common::tests::setup();
+
+    let addr = serve_sidecar_local_network_unavailable().await;
+    let config = sync::DArc::new(test_config(format!("http://{addr}")));
+
+    let err = render_raw_err(&config, "https://example.com/").await;
+    let wire: genvm_modules_interfaces::Result<String> =
+        crate::common::module_error_to_wire(err, common::tests::get_hello().genvm_id);
+
+    match wire {
+        genvm_modules_interfaces::Result::FatalError(msg) => {
+            assert!(
+                msg.contains("local network"),
+                "the abort must say which part of this node broke: {msg}"
+            );
+            assert!(
+                msg.contains("WEBDRIVER_UNAVAILABLE"),
+                "the hop is still named, so the two live side by side: {msg}"
+            );
+        }
+        genvm_modules_interfaces::Result::UserError(v) => {
+            panic!("a host with no network observed nothing, so the contract must not act on it: {v:?}")
         }
         genvm_modules_interfaces::Result::Ok(_) => panic!("expected Render to fail"),
     }

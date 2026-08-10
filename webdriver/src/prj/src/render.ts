@@ -10,7 +10,9 @@
  * alongside a `200`, which the module surfaces to the contract as a catchable
  * `WEBPAGE_LOAD_FAILED`. Everything it *throws* is this sidecar failing. The
  * caller turns a throw into a `500`, which the module classifies as fatal, so
- * the validator abstains rather than voting on a page it never observed.
+ * the validator abstains rather than voting on a page it never observed. "This
+ * sidecar failing" includes the host it runs on: a machine with no network is
+ * ours too, and `LocalNetworkUnavailable` below is that case.
  *
  * The two channels must not be mixed. Folding a sidecar failure into a
  * `Resulting-Status` -- 503 is the tempting one, since a page whose host
@@ -53,17 +55,57 @@ function normalizeWhitespace(contents: string): string {
 		.replace(/\n{2,}/g, '\n\n');
 }
 
+/**
+ * This machine has no network at all, which is not something we observed about
+ * the page: `net::ERR_INTERNET_DISCONNECTED` is Chrome saying the request never
+ * left the host.
+ *
+ * It is the one navigation error that leaves through the thrown channel. The
+ * others are ambiguous between the site and us, and stay returned: a name that
+ * does not resolve is either a domain that does not exist or a resolver of ours
+ * that is broken, and a timeout is either a slow site or a browser of ours that
+ * is wedged. Settling that is what several validators and an equivalence
+ * principle are for, so deciding it here would suppress the very disagreement
+ * consensus exists to reconcile. This case is different only because it is
+ * unambiguous -- there is no observation to reconcile.
+ *
+ * The wording says *local network* rather than *webdriver*: the browser and
+ * this sidecar are answering normally, and the `500` the caller sends carries
+ * only this text.
+ */
+export class LocalNetworkUnavailable extends Error {
+	constructor() {
+		super(
+			'Local network fault: this host has no network route ' +
+				'(net::ERR_INTERNET_DISCONNECTED). The browser answered, so it is ' +
+				'the local network that failed rather than the webdriver, and ' +
+				'nothing about the page was observed.',
+		);
+		this.name = 'LocalNetworkUnavailable';
+	}
+}
+
+/**
+ * What we observed happening to the page, as a status for `Resulting-Status`.
+ *
+ * `net::ERR_INTERNET_DISCONNECTED` is deliberately absent: it is ours rather
+ * than the page's, so `navigateToPage` throws it before reaching here. See
+ * [`LocalNetworkUnavailable`] for why the neighbouring cases are NOT treated
+ * the same way.
+ */
 function getNavigationErrorStatus(error: any): number {
 	if (error.name === 'TimeoutError') {
+		// Ambiguous on purpose: a slow site and a browser of ours that wedged
+		// are indistinguishable here, so the validators settle it, not us.
 		return 408; // Request Timeout
 	} else if (error.message?.includes('net::ERR_NAME_NOT_RESOLVED')) {
+		// Ambiguous in the same way: a domain that does not exist and a broken
+		// resolver of ours look identical from this side.
 		return 502; // Bad Gateway
 	} else if (error.message?.includes('net::ERR_CONNECTION_REFUSED')) {
 		return 503; // Service Unavailable
 	} else if (error.message?.includes('net::ERR_CERT_')) {
 		return 495; // SSL Certificate Error
-	} else if (error.message?.includes('net::ERR_INTERNET_DISCONNECTED')) {
-		return 503; // Service Unavailable
 	} else if (error.message?.includes('net::ERR_BLOCKED_BY_CLIENT')) {
 		return 403; // Forbidden (SSRF guard)
 	}
@@ -79,8 +121,6 @@ function getNavigationErrorMessage(error: any): string {
 		return 'Connection refused';
 	} else if (error.message?.includes('net::ERR_CERT_')) {
 		return 'SSL certificate error';
-	} else if (error.message?.includes('net::ERR_INTERNET_DISCONNECTED')) {
-		return 'No internet connection';
 	} else if (error.message?.includes('net::ERR_BLOCKED_BY_CLIENT')) {
 		return 'Blocked by SSRF guard: address not allowed';
 	}
@@ -110,6 +150,12 @@ async function navigateToPage(
 		return { status: response.status(), response };
 	} catch (navigationError: any) {
 		logger.log('error', 'navigation Error', navigationError);
+		if (navigationError.message?.includes('net::ERR_INTERNET_DISCONNECTED')) {
+			// Thrown, not returned: this one is our fault, and the caller's `500`
+			// is what makes the module abort, so the validator abstains rather
+			// than voting on a page the request never reached.
+			throw new LocalNetworkUnavailable();
+		}
 		const statusCode = getNavigationErrorStatus(navigationError);
 		const errorMessage = getNavigationErrorMessage(navigationError);
 		return { status: statusCode, error: errorMessage };
