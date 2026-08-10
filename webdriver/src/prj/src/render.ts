@@ -5,11 +5,17 @@
  * binding a port: importing `index.ts` starts the HTTP server, and importing
  * `browser/chrome.js` launches a browser at module scope.
  *
- * The contract this file upholds: everything it returns is an observation
- * about the *page*, reported as a status the caller puts in `Resulting-Status`
- * alongside a `200`. A failure of the sidecar itself is reported the same way
- * rather than raised, because the caller turns a raised error into a `500`,
- * and the module classifies a `500` from us as fatal.
+ * The contract this file upholds: everything it *returns* is an observation
+ * about the page, reported as a status the caller puts in `Resulting-Status`
+ * alongside a `200`, which the module surfaces to the contract as a catchable
+ * `WEBPAGE_LOAD_FAILED`. Everything it *throws* is this sidecar failing. The
+ * caller turns a throw into a `500`, which the module classifies as fatal, so
+ * the validator abstains rather than voting on a page it never observed.
+ *
+ * The two channels must not be mixed. Folding a sidecar failure into a
+ * `Resulting-Status` -- 503 is the tempting one, since a page whose host
+ * refused the connection already reports 503 -- would make a broken sidecar
+ * indistinguishable from a real observation, and let the validator vote on it.
  */
 
 import type * as pup from 'puppeteer-core';
@@ -31,14 +37,6 @@ export interface RenderOptions {
 }
 
 const STATUS_I_AM_A_TEAPOT = 418;
-
-/**
- * Reported when this sidecar cannot render at all, as opposed to the page
- * failing to load. It joins the codes `getNavigationErrorStatus` already
- * returns for an unreachable target, so the module treats it as a non-fatal
- * `WEBPAGE_LOAD_FAILED` and the contract can catch it.
- */
-export const STATUS_SERVICE_UNAVAILABLE = 503;
 
 const DEFAULT_MAX_PAGE_HEAP_MB = envInt('GVM_WEBDRIVER_MAX_PAGE_HEAP_MB', 1024);
 
@@ -212,7 +210,8 @@ export function statusIsGood(status: number): boolean {
  *
  * Both calls are CDP round-trips (`Target.createBrowserContext`,
  * `Target.createTarget`) that can hang or fail on their own, so they are kept
- * in one place with the context closed if the page never materializes.
+ * in one place with the context closed if the page never materializes. The
+ * failure itself is re-raised, not translated -- see the file header.
  */
 async function newRenderTarget(
 	browserInstance: pup.Browser,
@@ -225,6 +224,13 @@ async function newRenderTarget(
 		return { context, page: await context.newPage() };
 	} catch (error) {
 		await context.close().catch(() => {});
+		// Logged here as well as re-raised: this is the last point that still
+		// knows the failure was ours rather than the page's, and the `500` the
+		// caller sends carries only a message.
+		logger.log('error', 'could not open a page for rendering', {
+			name: (error as Error).name,
+			error: (error as Error).message,
+		});
 		throw error;
 	}
 }
@@ -244,25 +250,12 @@ export async function renderPageWithBrowser(
 
 	// No contract input reaches `newRenderTarget` -- the target URL is not
 	// passed to it -- so anything it throws is this sidecar failing, never an
-	// observation about the page. Reported on the same channel a failed page
-	// load uses (a `200` carrying `Resulting-Status`) rather than being left to
-	// escape into the caller's `500` handler, because a `500` from us is
-	// classified as a fatal internal error that aborts the whole contract run.
-	let renderTarget: { context: pup.BrowserContext; page: pup.Page };
-	try {
-		renderTarget = await newRenderTarget(browserInstance);
-	} catch (error) {
-		logger.log('error', 'could not open a page for rendering', {
-			url: targetUrl,
-			name: (error as Error).name,
-			error: (error as Error).message,
-		});
-		return {
-			status: STATUS_SERVICE_UNAVAILABLE,
-			body: `Webdriver unavailable: ${(error as Error).message}`,
-		};
-	}
-	const { context, page } = renderTarget;
+	// observation about the page. It is therefore allowed to propagate: the
+	// caller turns it into a `500`, which the module classifies as fatal, and
+	// the validator abstains instead of reporting a page outcome it never
+	// observed. It must NOT be folded into a `Resulting-Status`, which is the
+	// channel reserved for what actually happened to the page.
+	const { context, page } = await newRenderTarget(browserInstance);
 
 	try {
 		await ssrf.installSsrfGuard(page);

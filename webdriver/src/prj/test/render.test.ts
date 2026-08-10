@@ -1,13 +1,18 @@
 /**
- * Failures of this sidecar must not leave `renderPageWithBrowser` by being
- * thrown.
+ * Failures of this sidecar must leave `renderPageWithBrowser` by being thrown,
+ * and must not be dressed up as a page status.
  *
  * `handleRenderRequest` turns anything thrown out of here into a bare `500`,
  * and the module classifies a `500` from its own webdriver as a fatal
- * `STATUS_NOT_OK`, which aborts the whole contract run as an internal error.
- * A page that merely fails to load takes a different route: it comes back as a
- * status the caller puts in `Resulting-Status` next to a `200`, which the
- * module reports as a catchable, non-fatal `WEBPAGE_LOAD_FAILED`.
+ * `WEBDRIVER_UNAVAILABLE`. That is the intended outcome: a validator whose own
+ * sidecar is broken has no observation of the page, so it must abstain (the
+ * node votes Timeout) rather than assert a result it never computed.
+ *
+ * A page that merely fails to load is the opposite case -- a real observation.
+ * It comes back as a *returned* status the caller puts in `Resulting-Status`
+ * next to a `200`, which the module reports as a catchable, non-fatal
+ * `WEBPAGE_LOAD_FAILED`. The pairs below pin both directions, so reclassifying
+ * either one fails the suite.
  *
  * The browser is faked outright: no Chromium is launched and nothing leaves
  * the process. `render.ts` is imported directly rather than through
@@ -20,11 +25,7 @@ import assert from 'node:assert/strict';
 import type * as pup from 'puppeteer-core';
 import { ProtocolError, TimeoutError } from 'puppeteer-core';
 
-import {
-	renderPageWithBrowser,
-	statusIsGood,
-	STATUS_SERVICE_UNAVAILABLE,
-} from '../src/render.js';
+import { renderPageWithBrowser, statusIsGood } from '../src/render.js';
 
 interface FakeContext {
 	closes: number;
@@ -69,57 +70,44 @@ async function render(browser: pup.Browser) {
 	return renderPageWithBrowser(browser, 'https://example.com/', 'text');
 }
 
-// -- a broken sidecar reports, it does not raise ----------------------
+// -- a broken sidecar raises, it does not report ----------------------
 
-test('a protocol timeout opening a page is reported, not thrown', async () => {
+test('a protocol timeout opening a page is thrown, not reported', async () => {
 	// what puppeteer raises once `Target.createTarget` exceeds protocolTimeout
 	const { browser, context } = browserFailingOn(
 		'newPage',
 		new ProtocolError('Target.createTarget timed out'),
 	);
 
-	const result = await render(browser);
-
-	assert.equal(result.status, STATUS_SERVICE_UNAVAILABLE);
-	assert.match(String(result.body), /Webdriver unavailable/);
+	await assert.rejects(render(browser), /Target.createTarget timed out/);
 	assert.equal(context.closes, 1, 'the browser context must not be leaked');
 });
 
-test('a TimeoutError opening a page is reported, not thrown', async () => {
+test('a TimeoutError opening a page is thrown, not reported', async () => {
 	const { browser, context } = browserFailingOn(
 		'newPage',
 		new TimeoutError('waiting for target failed'),
 	);
 
-	const result = await render(browser);
-
-	assert.equal(result.status, STATUS_SERVICE_UNAVAILABLE);
+	await assert.rejects(render(browser), /waiting for target failed/);
 	assert.equal(context.closes, 1, 'the browser context must not be leaked');
 });
 
-test('a failure creating the context is reported, not thrown', async () => {
+test('a failure creating the context is thrown, not reported', async () => {
 	const { browser } = browserFailingOn(
 		'createBrowserContext',
 		new ProtocolError('Target.createBrowserContext timed out'),
 	);
 
-	const result = await render(browser);
-
-	assert.equal(result.status, STATUS_SERVICE_UNAVAILABLE);
+	await assert.rejects(
+		render(browser),
+		/Target.createBrowserContext timed out/,
+	);
 });
-
-test('the reported status is one the module treats as a failed load', () => {
-	// `statusIsGood` is what both this sidecar and `Render` in
-	// `genvm-web-default.lua` use to decide whether a render succeeded
-	assert.equal(statusIsGood(STATUS_SERVICE_UNAVAILABLE), false);
-});
-
-// -- and the mapping stays scoped to setup ----------------------------
 
 test('a failure after the page exists still propagates', async () => {
-	// Not vacuous: the change must not swallow every error. `installSsrfGuard`
-	// is the first thing done with a live page, and a page that cannot be
-	// guarded is a bug, not an environment blip
+	// `installSsrfGuard` is the first thing done with a live page, and a page
+	// that cannot be guarded is this sidecar failing too
 	const closes = { page: 0, context: 0 };
 	const page = {
 		setRequestInterception: async () => {
@@ -147,4 +135,49 @@ test('a failure after the page exists still propagates', async () => {
 		{ page: 1, context: 1 },
 		'the page and its context must still be torn down',
 	);
+});
+
+// -- and a failing remote page still reports, it does not raise -------
+
+/**
+ * The other half of the pair, so the tests above are not satisfied by "throw
+ * everything". A site that refuses the connection is something we *did*
+ * observe, so it comes back as a status rather than an exception -- and it is
+ * a 503, the very code the sidecar-failure path must not borrow.
+ */
+test('an unreachable remote site is reported, not thrown', async () => {
+	const closes = { page: 0, context: 0 };
+	const page = {
+		setRequestInterception: async () => {},
+		goto: async () => {
+			throw new Error('net::ERR_CONNECTION_REFUSED at https://example.com/');
+		},
+		evaluate: async () => 0,
+		close: async () => {
+			closes.page++;
+		},
+		on: () => {},
+		off: () => {},
+		setViewport: () => {},
+	};
+	const browser = {
+		createBrowserContext: async () => ({
+			newPage: async () => page,
+			close: async () => {
+				closes.context++;
+			},
+			on: () => {},
+		}),
+	} as unknown as pup.Browser;
+
+	const result = await render(browser);
+
+	assert.equal(result.status, 503);
+	assert.match(String(result.body), /Connection refused/);
+	assert.equal(
+		statusIsGood(result.status),
+		false,
+		'the module must see this as a failed load',
+	);
+	assert.deepEqual(closes, { page: 1, context: 1 });
 });

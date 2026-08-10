@@ -103,6 +103,14 @@ async function handleRenderRequest(
 		}
 		res.end(result.body);
 	} catch (error) {
+		// Everything reaching here is this sidecar failing, not the page: page
+		// outcomes are *returned* as a status. The module reads this `500` as a
+		// fatal `WEBDRIVER_UNAVAILABLE` and the validator abstains, so leave a
+		// local trace -- otherwise the only record is the message below.
+		logger.log('error', 'render request failed', {
+			url: query.get('url') ?? '',
+			error: (error as Error).message,
+		});
 		res.writeHead(500, { 'Content-Type': 'application/json' });
 		res.end(
 			JSON.stringify({

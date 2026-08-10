@@ -255,8 +255,19 @@ where
 ///    representation, so the whole contract run is aborted and the contract
 ///    cannot catch it. Downstream, a node turns any GenVM error into a Timeout
 ///    vote
-/// 2. `UserError` is handed to the runner as `{"error": …}`, which
+/// 2. `UserError` is handed to the runner as `{"error": ...}`, which
 ///    `genlayer-py-std` raises as a catchable `NondetException`
+///
+/// Which one an infrastructure fault deserves is settled: (1). If this node's
+/// own environment failed, it has no valid observation of the world, and a
+/// `UserError` would let it assert to the contract -- and then vote on -- a claim
+/// it never observed. The Timeout vote is the truthful "I could not do the
+/// work", and consensus has that vote for exactly this case. (2) is for things
+/// the run genuinely observed, such as a page that failed to load.
+///
+/// The cost of (1) is diagnostic, not semantic: `FatalError` carries only a
+/// string, so a raiser that wants to stay distinguishable must put a cause in
+/// it. [`ModuleError`]'s `Display` is its JSON, so `causes` survives.
 ///
 /// An error that is not a [`ModuleError`] is fatal, so "not a `ModuleError`"
 /// and "`fatal: true`" are indistinguishable past this point

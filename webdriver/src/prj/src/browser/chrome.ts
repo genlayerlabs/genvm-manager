@@ -168,9 +168,9 @@ class ChromeBrowserManager implements browser.Manager {
 	 * Arm the next rotation check. Uses a self-rescheduling timeout instead of
 	 * setInterval so the next check is only scheduled once the current one has
 	 * fully settled (in `finally`). This structurally prevents overlapping
-	 * rotations from interleaving holder swaps / closes — which could otherwise
+	 * rotations from interleaving holder swaps / closes -- which could otherwise
 	 * orphan a freshly launched browser (process leak) or close one still
-	 * serving a render — and avoids interval backlog under sustained load.
+	 * serving a render -- and avoids interval backlog under sustained load.
 	 */
 	private scheduleRotationCheck(): void {
 		setTimeout(() => {

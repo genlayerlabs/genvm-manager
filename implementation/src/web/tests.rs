@@ -52,7 +52,7 @@ async fn serve_sidecar_page_not_found() -> std::net::SocketAddr {
 
 /// The sidecar's outer `catch` (`webdriver/src/prj/src/index.ts`,
 /// `handleRenderRequest`): a bare `500` with no `Resulting-Status`, which is
-/// what an exception thrown *outside* the per-page `try` becomes — e.g.
+/// what an exception thrown *outside* the per-page `try` becomes -- e.g.
 /// `newPage()` exceeding puppeteer's `protocolTimeout` on
 /// `Target.createTarget`.
 async fn serve_sidecar_internal_error() -> std::net::SocketAddr {
@@ -82,6 +82,19 @@ async fn serve_sidecar_unhealthy() -> std::net::SocketAddr {
     serve_sidecar(
         "HTTP/1.1 503 Service Unavailable\r\nContent-Type: text/plain\r\n",
         b"unhealthy",
+    )
+    .await
+}
+
+/// The same number on the other channel: the sidecar itself answered fine
+/// (`200`) and is telling us the *page's* host refused the connection, which
+/// `getNavigationErrorStatus` reports as `503`. Paired with
+/// [`serve_sidecar_unhealthy`] on purpose -- the two differ only in which
+/// channel carries the 503, and they must be classified oppositely
+async fn serve_sidecar_page_unreachable() -> std::net::SocketAddr {
+    serve_sidecar(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nResulting-Status: 503\r\n",
+        b"Connection refused",
     )
     .await
 }
@@ -155,7 +168,7 @@ async fn create_test_vm(config: &sync::DArc<config::Config>) -> TestVM {
 }
 
 /// Same context as `HandlerProvider::create_execution_context`, including
-/// `filter_dns = true` — the webdriver host is an IP literal, which reqwest
+/// `filter_dns = true` -- the webdriver host is an IP literal, which reqwest
 /// never sends through the resolver, so the SSRF guard stays out of the way.
 fn create_test_ctx(config: &sync::DArc<config::Config>) -> sync::DArc<WebSubContext> {
     let hello = common::tests::get_hello();
@@ -218,25 +231,35 @@ async fn render_err(config: &sync::DArc<config::Config>, url: &str) -> ModuleErr
     scripting::try_unwrap_any_err(err).expect("expected a module error")
 }
 
-/// Asserts that talking to the sidecar described by `addr` fails non-fatally,
-/// i.e. as something the contract can catch rather than as an internal error
-async fn assert_sidecar_failure_is_not_fatal(
-    addr: std::net::SocketAddr,
-    what: &str,
-) -> ModuleError {
+/// Asserts that talking to the sidecar described by `addr` fails fatally and is
+/// labelled as a webdriver fault.
+///
+/// Fatal is the point, not an accident. A broken sidecar means this validator
+/// never observed the page, so it must not hand the contract a result: the run
+/// is aborted as an internal error and the node votes Timeout, which is the
+/// truthful "I could not do the work". The label is what lets an operator tell
+/// this apart from a genuine internal error, and it survives into the
+/// `FatalError` string because [`ModuleError`]'s `Display` is its JSON.
+async fn assert_sidecar_failure_is_fatal(addr: std::net::SocketAddr, what: &str) -> ModuleError {
     let config = sync::DArc::new(test_config(format!("http://{addr}")));
 
     let err = render_err(&config, "https://example.com/").await;
 
     assert!(
-        !err.fatal,
-        "{what} from our own webdriver sidecar must be non-fatal, got {err:?}"
+        err.fatal,
+        "{what} from our own webdriver sidecar must stay fatal so the validator \
+         abstains rather than voting on a page it never observed, got {err:?}"
+    );
+    assert!(
+        err.causes.contains(&"WEBDRIVER_UNAVAILABLE".to_owned()),
+        "{what} must be labelled as a webdriver fault, got causes {:?}",
+        err.causes
     );
 
     err
 }
 
-// ── a failing sidecar is an environment fault, not a verdict ──────────
+// -- a failing sidecar is an environment fault, so we abstain ----------
 
 /// Control. When the *page* fails, the sidecar still answers `200` and puts
 /// the page status in `Resulting-Status`; `Render` turns that into a
@@ -259,26 +282,26 @@ async fn render_remote_page_load_failure_is_not_fatal() {
     assert!(!err.fatal, "page load failure must be non-fatal: {err:?}");
 }
 
-/// A 5xx from our *own* webdriver sidecar says nothing about the page — it
-/// is this node's environment failing. It must travel the same non-fatal
-/// channel as the control above instead of aborting the whole contract run
-/// with an internal error.
+/// A 5xx from our *own* webdriver sidecar says nothing about the page -- it is
+/// this node's environment failing, so there is no observation to report and
+/// nothing legitimate to vote on. It must stay fatal, which the executor turns
+/// into `ResultCode::InternalError` and the node into a Timeout vote.
 ///
-/// `send_request_get_lua_compatible_response_bytes` raises `STATUS_NOT_OK`
-/// as fatal, because it sees only a URL and cannot tell our sidecar from a
-/// contract-controlled site. `Render` is the caller that does know, so it
-/// wraps the sidecar hop in a `pcall` and re-raises non-fatally, the way
-/// `Request` already did
+/// `Render` is the caller that knows which endpoint it is talking to, so it
+/// wraps the sidecar hop in a `pcall` -- not to soften the failure, but to
+/// label it and to pin fatality here rather than inherit whatever the generic
+/// transport decided.
 #[tokio::test]
-async fn render_sidecar_internal_error_is_not_fatal() {
+async fn render_sidecar_internal_error_is_fatal() {
     common::tests::setup();
 
     let addr = serve_sidecar_internal_error().await;
-    let err = assert_sidecar_failure_is_not_fatal(addr, "a 5xx").await;
+    let err = assert_sidecar_failure_is_fatal(addr, "a 5xx").await;
 
     // Not vacuous: the failure really is the status error raised on the
     // sidecar hop, not the `WEBPAGE_LOAD_FAILED` branch further down, which
-    // this response never reaches
+    // this response never reaches. The transport's own cause is kept as the
+    // underlying detail rather than replaced
     assert!(
         err.causes.contains(&"STATUS_NOT_OK".to_owned()),
         "unexpected causes: {:?}",
@@ -290,11 +313,11 @@ async fn render_sidecar_internal_error_is_not_fatal() {
 /// kind of fault: a `400` means the module and the sidecar disagree about the
 /// query format, which is a deployment problem, not a statement about the page
 #[tokio::test]
-async fn render_sidecar_bad_request_is_not_fatal() {
+async fn render_sidecar_bad_request_is_fatal() {
     common::tests::setup();
 
     let addr = serve_sidecar_bad_request().await;
-    let err = assert_sidecar_failure_is_not_fatal(addr, "a 400").await;
+    let err = assert_sidecar_failure_is_fatal(addr, "a 400").await;
 
     assert!(
         err.causes.contains(&"STATUS_NOT_OK".to_owned()),
@@ -304,13 +327,15 @@ async fn render_sidecar_bad_request_is_not_fatal() {
 }
 
 /// A `503`, as answered by the sidecar's healthcheck path or by whatever
-/// proxies it while it is down
+/// proxies it while it is down. Half of a pair with
+/// [`render_remote_page_unreachable_is_not_fatal`]: same number, opposite
+/// verdict, because here it is the sidecar's own HTTP status
 #[tokio::test]
-async fn render_sidecar_unhealthy_is_not_fatal() {
+async fn render_sidecar_unhealthy_is_fatal() {
     common::tests::setup();
 
     let addr = serve_sidecar_unhealthy().await;
-    let err = assert_sidecar_failure_is_not_fatal(addr, "a 503").await;
+    let err = assert_sidecar_failure_is_fatal(addr, "a 503").await;
 
     assert!(
         err.causes.contains(&"STATUS_NOT_OK".to_owned()),
@@ -319,16 +344,47 @@ async fn render_sidecar_unhealthy_is_not_fatal() {
     );
 }
 
+/// The other half of that pair. A `503` in `Resulting-Status` on an otherwise
+/// good `200` is the sidecar telling us the *page's* host refused the
+/// connection -- something we did observe -- so it stays catchable. The two
+/// tests differ only in which channel carries the 503, which is exactly the
+/// distinction a fix is most likely to erase
+#[tokio::test]
+async fn render_remote_page_unreachable_is_not_fatal() {
+    common::tests::setup();
+
+    let addr = serve_sidecar_page_unreachable().await;
+    let config = sync::DArc::new(test_config(format!("http://{addr}")));
+
+    let err = render_err(&config, "https://example.com/").await;
+
+    assert!(
+        err.causes.contains(&"WEBPAGE_LOAD_FAILED".to_owned()),
+        "unexpected causes: {:?}",
+        err.causes
+    );
+    assert!(
+        !err.fatal,
+        "a 503 the sidecar *reports* is an observation about the page, and must \
+         stay catchable: {err:?}"
+    );
+    assert!(
+        !err.causes.contains(&"WEBDRIVER_UNAVAILABLE".to_owned()),
+        "a working sidecar must not be blamed: {:?}",
+        err.causes
+    );
+}
+
 /// The sidecar being *gone* is the same class of fault as it answering badly,
 /// and it arrives on a different path: `map_send_error` raises a fatal
 /// `SENDING_REQUEST` before any status exists. The `pcall` covers the whole
-/// hop, so this is non-fatal too
+/// hop, so this is labelled too
 #[tokio::test]
-async fn render_sidecar_unreachable_is_not_fatal() {
+async fn render_sidecar_unreachable_is_fatal() {
     common::tests::setup();
 
     let addr = sidecar_down().await;
-    let err = assert_sidecar_failure_is_not_fatal(addr, "a refused connection").await;
+    let err = assert_sidecar_failure_is_fatal(addr, "a refused connection").await;
 
     assert!(
         err.causes.contains(&"SENDING_REQUEST".to_owned()),
@@ -337,15 +393,20 @@ async fn render_sidecar_unreachable_is_not_fatal() {
     );
 }
 
-// ── the classification as the executor reads it ──────────────────────
+// -- the classification as the executor reads it ----------------------
 
 /// The end the property is really about. `ModuleError.fatal` is only a flag
 /// until [`crate::common::module_error_to_wire`] spends it: `FatalError` is
 /// what the executor turns into a bare `anyhow` and finally
 /// `ResultCode::InternalError`, which the contract cannot catch and which a
-/// node reports as a Timeout vote. A sidecar 5xx must not take that path
+/// node reports as a Timeout vote. That is where a sidecar 5xx has to land --
+/// abstaining is the honest answer when we never ran the render.
+///
+/// The label has to survive the trip, because `FatalError` carries only a
+/// string: without it an operator cannot tell an outage of our own webdriver
+/// from a genuine internal error in the contract's execution
 #[tokio::test]
-async fn render_sidecar_internal_error_reaches_the_wire_as_user_error() {
+async fn render_sidecar_internal_error_reaches_the_wire_as_fatal_error() {
     common::tests::setup();
 
     let addr = serve_sidecar_internal_error().await;
@@ -356,43 +417,38 @@ async fn render_sidecar_internal_error_reaches_the_wire_as_user_error() {
         crate::common::module_error_to_wire(err, common::tests::get_hello().genvm_id);
 
     match wire {
-        genvm_modules_interfaces::Result::UserError(_) => {}
-        genvm_modules_interfaces::Result::FatalError(msg) => {
-            panic!("a sidecar 5xx must not abort the run as an internal error: {msg}")
+        genvm_modules_interfaces::Result::FatalError(msg) => assert!(
+            msg.contains("WEBDRIVER_UNAVAILABLE"),
+            "the abort must name the webdriver so it is not mistaken for a \
+             contract-level internal error: {msg}"
+        ),
+        genvm_modules_interfaces::Result::UserError(v) => {
+            panic!("a sidecar 5xx must not become a result the contract can act on: {v:?}")
         }
         genvm_modules_interfaces::Result::Ok(_) => panic!("expected Render to fail"),
     }
 }
 
-/// Companion to the above, so it is not vacuous: the fatal path is still
-/// reachable and still ends in `FatalError`. A malformed URL never reaches the
-/// sidecar at all
+/// Companion to the above, so it is not vacuous: the non-fatal path is still
+/// reachable and still ends in `UserError`. The sidecar here is working, and
+/// what failed is the page -- a real observation the contract may catch and act
+/// on
 #[tokio::test]
-async fn a_genuinely_fatal_failure_still_reaches_the_wire_as_fatal_error() {
+async fn render_remote_page_load_failure_reaches_the_wire_as_user_error() {
     common::tests::setup();
 
     let addr = serve_sidecar_page_not_found().await;
     let config = sync::DArc::new(test_config(format!("http://{addr}")));
 
-    let err = anyhow::anyhow!("not a module error at all");
+    let err = render_raw_err(&config, "https://example.com/").await;
     let wire: genvm_modules_interfaces::Result<String> =
         crate::common::module_error_to_wire(err, common::tests::get_hello().genvm_id);
 
     match wire {
-        genvm_modules_interfaces::Result::FatalError(msg) => assert!(
-            msg.contains("not a module error at all"),
-            "unexpected message: {msg}"
-        ),
-        genvm_modules_interfaces::Result::Ok(_)
-        | genvm_modules_interfaces::Result::UserError(_) => {
-            panic!("an unclassified error must stay fatal")
+        genvm_modules_interfaces::Result::UserError(_) => {}
+        genvm_modules_interfaces::Result::FatalError(msg) => {
+            panic!("a page that 404s must stay catchable, not abort the run: {msg}")
         }
+        genvm_modules_interfaces::Result::Ok(_) => panic!("expected Render to fail"),
     }
-
-    // and the config above is a working one, so the fatality is not an
-    // artifact of a broken fixture
-    assert!(
-        render(&config, "https://example.com/").await.is_err(),
-        "a 404 page is still an error, just a catchable one"
-    );
 }

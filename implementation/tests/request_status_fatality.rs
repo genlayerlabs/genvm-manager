@@ -3,18 +3,18 @@
 //!
 //! `send_request_get_lua_compatible_response_bytes` and its JSON twin are
 //! generic: they are given a URL and a flag, and cannot tell this node's own
-//! webdriver sidecar from a site the contract named. A non-200 from the latter
-//! is a legitimate observation, a non-200 from the former never is -- so the
-//! helpers do not decide fatality on their own, they keep raising `STATUS_NOT_OK`
-//! as fatal and leave the exception to the caller that knows which endpoint it
-//! is talking to.
+//! webdriver sidecar from a site the contract named. Fatal is the safe default
+//! for that ambiguity, and it is what both keep raising for a bad status.
 //!
-//! Today the only caller that lowers it is `Render` in
-//! `install/config/genvm-web-default.lua`, which wraps the sidecar hop in a
-//! `pcall`; see `web::tests` in the library. The LLM providers
-//! (`src/llm/providers.rs`) all pass `error_on_status = true` and rely on the
-//! fatal classification pinned here, so a change to the default would move them
-//! too.
+//! Callers that know which endpoint they are talking to adjust it, in one
+//! direction only. `Request` in `install/config/genvm-web-default.lua` lowers
+//! it, because its URL is contract-controlled and a failure there is a real
+//! observation. `Render` keeps it fatal for the sidecar hop and only adds a
+//! `WEBDRIVER_UNAVAILABLE` label, because a broken sidecar means the validator
+//! observed nothing and must abstain rather than vote; see `web::tests` in the
+//! library. The LLM providers (`src/llm/providers.rs`) all pass
+//! `error_on_status = true` and rely on the fatal classification pinned here,
+//! so a change to the default would move them too.
 
 use genvm_common::*;
 
