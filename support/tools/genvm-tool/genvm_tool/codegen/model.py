@@ -27,6 +27,7 @@ class Enum:
 	name: str
 	repr: str
 	values: dict[str, object]
+	aliases: dict[str, str]
 
 
 @dataclasses.dataclass
@@ -172,7 +173,20 @@ def parse(data) -> list[Definition]:
 	for t in data:
 		kind = t['type']
 		if kind == 'enum':
-			defs.append(Enum(t['name'], t['repr'], t['values']))
+			values = t['values']
+			aliases = t.get('aliases', {})
+			if not isinstance(aliases, dict):
+				raise ValueError(f"enum {t['name']!r} aliases must be an object")
+			for alias, target in aliases.items():
+				if alias in values:
+					raise ValueError(
+						f"enum {t['name']!r} alias {alias!r} conflicts with a value"
+					)
+				if target not in values:
+					raise ValueError(
+						f"enum {t['name']!r} alias {alias!r} targets unknown value {target!r}"
+					)
+			defs.append(Enum(t['name'], t['repr'], values, aliases))
 		elif kind == 'const':
 			defs.append(Const(t['name'], t['repr'], t['value']))
 		elif kind == 'consts':

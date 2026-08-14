@@ -85,6 +85,10 @@ def render(defs: list[Definition], *, go_package: str = 'genvm', **_opts) -> str
 			buf.append('const (\n')
 			for k, v in d.values.items():
 				buf.append(f'\t{name}{to_camel(k)} {name} = {_dump(v)}\n')
+			for alias, target in d.aliases.items():
+				buf.append(
+					f'\t{name}{to_camel(alias)} {name} = {name}{to_camel(target)}\n'
+				)
 			buf.append(')\n')
 		elif isinstance(d, Const):
 			buf.append(f'const {to_camel(d.name)} = {_dump(d.value)}\n')

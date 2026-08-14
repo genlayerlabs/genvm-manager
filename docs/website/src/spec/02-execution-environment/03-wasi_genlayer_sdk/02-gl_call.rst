@@ -65,7 +65,7 @@ Payload
      "CallContract": {
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
-       "state": Number          // Storage type: 0=default, 1=latest_final, 2=latest_non_final
+       "state": Number          // Storage type: 0=default, 1=latest_finalized, 2=latest_decided
      }
    }
 

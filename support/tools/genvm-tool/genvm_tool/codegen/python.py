@@ -102,6 +102,8 @@ def render(defs: list[Definition], **_opts) -> str:
 			buf.append(f'class {to_camel(d.name)}({base}):\n')
 			for k, v in d.values.items():
 				buf.append(f'\t{k.upper()} = {_pydump(v)}\n')
+			for alias, target in d.aliases.items():
+				buf.append(f'\t{alias.upper()} = {target.upper()}  # Deprecated alias\n')
 		elif isinstance(d, Const):
 			buf.append(
 				f'\n\n{d.name.upper()}: typing.Final[{_py_repr(d.repr)}] = {_pydump(d.value)}\n'

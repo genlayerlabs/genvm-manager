@@ -72,8 +72,19 @@ pub enum ExecutorSelector {
 #[serde(rename_all = "snake_case")]
 pub enum NestedStorageType {
     Default,
-    LatestFinal,
-    LatestNonFinal,
+    #[serde(alias = "latest_final")]
+    LatestFinalized,
+    #[serde(alias = "latest_non_final")]
+    LatestDecided,
+}
+
+impl NestedStorageType {
+    #[deprecated(note = "use `NestedStorageType::LatestFinalized`")]
+    #[allow(non_upper_case_globals)]
+    pub const LatestFinal: Self = Self::LatestFinalized;
+    #[deprecated(note = "use `NestedStorageType::LatestDecided`")]
+    #[allow(non_upper_case_globals)]
+    pub const LatestNonFinal: Self = Self::LatestDecided;
 }
 
 /// Permission bits carried across an executor boundary.
@@ -230,6 +241,28 @@ pub struct NestedRunReply {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(deprecated)]
+    fn nested_storage_names_preserve_wire_values_and_legacy_aliases() {
+        fn legacy_match(value: NestedStorageType) -> u8 {
+            match value {
+                NestedStorageType::Default => 0,
+                NestedStorageType::LatestFinal => 1,
+                NestedStorageType::LatestNonFinal => 2,
+            }
+        }
+
+        assert_eq!(legacy_match(NestedStorageType::LatestDecided), 2);
+        assert_eq!(
+            serde_json::from_str::<NestedStorageType>("\"latest_non_final\"").unwrap(),
+            NestedStorageType::LatestDecided
+        );
+        assert_eq!(
+            genlayer_calldata::encode_obj(&NestedStorageType::LatestFinal),
+            genlayer_calldata::encode_obj(&NestedStorageType::LatestFinalized)
+        );
+    }
 
     #[test]
     fn unknown_permission_bits_are_denied() {

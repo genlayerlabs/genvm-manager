@@ -59,11 +59,17 @@ def _enum(e: Enum) -> str:
 		buf.append(f'#[repr({e.repr})]\n')
 		buf.append(f'pub enum {name} {{\n')
 		for k, v in e.values.items():
+			for alias, target in e.aliases.items():
+				if target == k:
+					buf.append(f'    #[serde(alias = "{to_camel(alias)}")]\n')
 			buf.append(f'    {to_camel(k)} = {_dump(v)},\n')
 		buf.append('}\n')
 	else:
 		buf.append(f'pub enum {name} {{\n')
 		for k in e.values:
+			for alias, target in e.aliases.items():
+				if target == k:
+					buf.append(f'    #[serde(alias = "{to_camel(alias)}")]\n')
 			buf.append(f'    {to_camel(k)},\n')
 		buf.append('}\n')
 	buf.append('\n')
@@ -75,6 +81,10 @@ def _enum(e: Enum) -> str:
 		and sorted(vals) == list(range(len(vals)))
 	):
 		buf.append(f'    pub const SIZE: usize = {len(vals)};\n')
+	for alias, target in e.aliases.items():
+		buf.append(f'    #[deprecated(note = "use `{name}::{to_camel(target)}`")]\n')
+		buf.append('    #[allow(non_upper_case_globals)]\n')
+		buf.append(f'    pub const {to_camel(alias)}: Self = Self::{to_camel(target)};\n')
 	buf.append(f'    pub fn value(self) -> {_rust_repr(e.repr)} {{\n')
 	buf.append('        match self {\n')
 	for k, v in e.values.items():

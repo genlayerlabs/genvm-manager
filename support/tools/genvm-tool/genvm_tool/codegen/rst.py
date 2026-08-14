@@ -36,6 +36,16 @@ def render(defs: list[Definition], rst_anchor_ns: str = '', **_opts) -> str:
 				buf.append(f'{k}\n')
 				buf.append('~' * len(k) + '\n\n')
 				buf.append(f'Value: ``{v}``\n\n')
+			for alias, target in d.aliases.items():
+				buf.append(
+					f'.. _gvm-def-{ns}enum-value-{_dash(d.name)}-{_dash(alias)}:\n\n'
+				)
+				buf.append(f'{alias}\n')
+				buf.append('~' * len(alias) + '\n\n')
+				buf.append(
+					'Deprecated alias of '
+					f':ref:`gvm-def-{ns}enum-value-{_dash(d.name)}-{_dash(target)}`.\n\n'
+				)
 		elif isinstance(d, Const):
 			buf.append(f'.. _gvm-def-{ns}const-{_dash(d.name)}:\n\n')
 			buf.append(f'{d.name}\n')
