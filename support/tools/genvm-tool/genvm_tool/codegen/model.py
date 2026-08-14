@@ -1,4 +1,5 @@
-"""Shared front-end for the ``genvm-tool codegen`` language backends.
+"""
+Shared front-end for the ``genvm-tool codegen`` language backends.
 
 Parses the codegen data JSON (a list of typed definitions) into a small typed
 model and provides the shared string-trie machinery every backend walks. The
@@ -45,7 +46,8 @@ class Consts:
 
 @dataclasses.dataclass
 class TrieNode:
-	"""One node of an unfolded string trie.
+	"""
+	One node of an unfolded string trie.
 
 	``suffix`` is the CamelCase concatenation of the path heads from the root to
 	this node (``''`` at the root); backends use it to name the generated
@@ -76,13 +78,18 @@ class StrTrie:
 	root: TrieNode
 	entries: list  # unfolded entries, kept for flat path enumeration (rst)
 	docs: dict[str, str]
+	# Details reachable from any built value, spelled ``<path> # <detail>``. A
+	# root-level ``#`` entry declares them; they are not paths, so they stay out
+	# of ``root``/``entries`` and out of the generated validity check.
+	suffix: TrieNode | None = None
 
 
 Definition = Enum | Const | Consts | StrTrie
 
 
 def _unfold(entry):
-	"""Normalize a trie entry to ``{'head', 'tail'}`` form (recursively).
+	"""
+	Normalize a trie entry to ``{'head', 'tail'}`` form (recursively).
 
 	A bare string ``"x"`` becomes ``{'head': 'x', 'tail': []}``; a dict whose
 	``tail`` is a list has each child unfolded; everything else (``$param`` tails)
@@ -167,6 +174,29 @@ def enumerate_paths(entries, prefix: str = ''):
 	return result
 
 
+DETAIL_HEAD = '#'
+"""Head of the root entry declaring a trie's detail suffixes."""
+
+
+def _split_details(name: str, entries: list) -> tuple[list, TrieNode | None]:
+	"""Carve the ``#`` entry out of a trie's root, returning ``(paths, details)``."""
+	found = [e for e in entries if e is not None and e['head'] == DETAIL_HEAD]
+	if not found:
+		return entries, None
+	if len(found) > 1:
+		raise ValueError(f'{name}: more than one {DETAIL_HEAD!r} entry')
+	tail = found[0]['tail']
+	if not isinstance(tail, list):
+		raise ValueError(f'{name}: {DETAIL_HEAD!r} must list details')
+	for detail in tail:
+		# A detail is appended to an already-built value, so it has no place to
+		# hang a subtree off and no argument to render.
+		if detail is None or detail['tail'] != []:
+			raise ValueError(f'{name}: a detail may not be nested or take a parameter')
+	paths = [e for e in entries if e is None or e['head'] != DETAIL_HEAD]
+	return paths, _build(tail, [], '', False)
+
+
 def parse(data) -> list[Definition]:
 	defs: list[Definition] = []
 	for t in data:
@@ -178,13 +208,14 @@ def parse(data) -> list[Definition]:
 		elif kind == 'consts':
 			defs.append(Consts(t['name'], t['repr'], t['values']))
 		elif kind == 'str_trie':
-			entries = [_unfold(e) for e in t['values']]
+			entries, details = _split_details(t['name'], [_unfold(e) for e in t['values']])
 			defs.append(
 				StrTrie(
 					t['name'],
 					_build(entries, [], '', False),
 					entries,
 					t.get('docs', {}),
+					details,
 				)
 			)
 		else:

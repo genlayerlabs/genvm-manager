@@ -4,6 +4,8 @@
 //! would otherwise drop. That connection must therefore go through the unfiltered
 //! client -- while contract-driven `Request` traffic stays filtered.
 
+//! genvm-tool-test-tags: feature-web-render, feature-web-request, needs-web
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

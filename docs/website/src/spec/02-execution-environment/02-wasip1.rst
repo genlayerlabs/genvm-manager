@@ -128,6 +128,7 @@ Fail with ``Notsup`` error code:
 - ``proc_raise``
 - ``sched_yield``
 - ``fd_pwrite``
+- ``fd_renumber``
 
 
 Functions
@@ -155,17 +156,87 @@ caller that wants a graceful fallback must handle that error explicitly.
 #. ``proc_exit(0)`` is equivalent to :ref:`gvm-def-return` of ``null`` value.
 #. ``proc_exit(x)`` where :math:`x \neq 0` results in :ref:`gvm-def-vm-error`
 
+.. _gvm-def-vfs-path-resolution:
+
+Path Resolution
+~~~~~~~~~~~~~~~
+
+``path_*`` functions take a directory :term:`FD` and a path. Resolution is
+purely lexical and identical in both modes:
+
+#. The directory descriptor's own path and the supplied path are concatenated
+   and split on ``/``. Empty and ``.`` components are dropped, a ``..``
+   component pops the preceding one, and a ``..`` that would escape the root is
+   dropped. There are no symlinks, so ``dirflags`` never changes the result.
+#. The resulting absolute path must lie within a preopened subtree, otherwise
+   the call fails with ``Notcapable``.
+#. The path is then walked through the :ref:`gvm-def-vfs`: a missing component
+   fails with ``Noent``, and a component that resolves to a file while more
+   components remain fails with ``Badf``.
+
+A descriptor that is not a directory fails with ``Badf`` before any of this.
+
+File Metadata
+~~~~~~~~~~~~~
+
+The :ref:`gvm-def-vfs` stores no metadata, so every ``Filestat`` reports
+``dev``, ``ino``, ``atim``, ``mtim`` and ``ctim`` as ``0``; ``size`` is the
+file's length in octets and ``0`` for a directory. Timestamps are **not**
+derived from the transaction timestamp — a file has no modification time at
+all.
+
 ``path_open`` Function
 ~~~~~~~~~~~~~~~~~~~~~~
+
+#. The path is resolved as in `Path Resolution`_.
+#. ``oflags``, ``fs_rights_base``, ``fs_rights_inheriting`` and ``fdflags`` are
+   ignored. The :ref:`gvm-def-vfs` is read-only, so ``creat``, ``excl`` and
+   ``trunc`` never take effect — opening a non-existent path fails with
+   ``Noent`` rather than creating it — and ``directory`` does not restrict the
+   result.
+#. On success a fresh descriptor is allocated (see
+   :ref:`gvm-def-fd-allocation`) that refers to the resolved file or directory.
+   A file descriptor starts at offset ``0``.
+#. The descriptor is released again if the call fails, so a failed open leaks
+   neither a descriptor nor its :ref:`gvm-def-ram-consumption`.
 
 ``path_filestat_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+Resolves the path as in `Path Resolution`_ and returns the ``Filestat``
+described in `File Metadata`_ with ``filetype`` ``regular_file`` or
+``directory`` and ``nlink`` ``0``.
+
 ``fd_readdir`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~
 
+A descriptor that is not a directory fails with ``Badf``.
+
+The entry sequence of a directory is fixed and does not depend on how the
+:ref:`gvm-def-vfs` was populated:
+
+#. ``.`` — filetype ``directory``
+#. ``..`` — filetype ``directory``, and refers to the root itself in the root
+   directory
+#. the directory's children in ascending order of their names, compared as raw
+   octet sequences; a child's filetype is ``directory`` or ``regular_file``
+
+``d_ino`` is ``0`` for every entry, ``d_namlen`` is the name's length in
+octets, and ``d_next`` is the cookie of the following entry — cookies number
+the sequence above from ``1``. The ``cookie`` argument skips that many leading
+entries; a cookie past the end yields no entries.
+
+Entries are written as a ``Dirent`` immediately followed by the name, until the
+buffer is exhausted. A truncated entry is not backed out: the last ``Dirent``
+or name may be cut mid-way, and the call then returns ``buf_len`` to signal
+that the caller must retry with a larger buffer. Otherwise it returns the
+number of octets written.
+
 ``fd_tell`` Function
 ~~~~~~~~~~~~~~~~~~~~
+
+Returns the descriptor's current offset. ``stdout``/``stderr`` fail with
+``Spipe``, a directory with ``Notsup``.
 
 ``fd_datasync`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~
@@ -180,11 +251,21 @@ Does nothing and always returns success.
 ``fd_seek`` Function
 ~~~~~~~~~~~~~~~~~~~~
 
-``fd_renumber`` Function
-~~~~~~~~~~~~~~~~~~~~~~~~
+Moves a file descriptor's offset and returns the new value.
+
+#. ``set`` and ``cur`` clamp the result into :math:`[0, \texttt{size}]` instead
+   of failing: a negative target becomes ``0`` and a target beyond the end
+   becomes the file's size.
+#. ``end`` is not supported and fails with ``Notsup``.
+#. ``stdout``/``stderr`` fail with ``Spipe``, a directory with ``Notsup``.
 
 ``fd_prestat_dir_name`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Writes the preopened directory's name — the last component of its path, or ``/``
+for the root. ``fd_prestat_get`` returns the ``Prestat`` whose ``pr_name_len``
+determines the name's length. A buffer shorter than that name fails with
+``Overflow``; any non-directory descriptor fails with ``Badf``.
 
 ``fd_prestat_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -198,20 +279,58 @@ Does nothing and always returns success.
 ``fd_write`` Function
 ~~~~~~~~~~~~~~~~~~~~~
 
-``fd_pread`` Function
-~~~~~~~~~~~~~~~~~~~~~
+Only ``stdout`` and ``stderr`` are writable; a file or directory descriptor
+fails with ``Rofs``. The written octets are diagnostic output: they are not part
+of the :ref:`gvm-def-vm-result` and are not covered by the
+:ref:`gvm-def-execution-hash`.
+
+The call reports every supplied octet as written and never fails on the
+underlying stream, so a contract cannot observe whether the :term:`Host`
+accepted, buffered or discarded the output.
 
 ``fd_read`` Function
 ~~~~~~~~~~~~~~~~~~~~
 
+Reads a file descriptor's contents into the ``iovec``\ s in order, starting at
+the descriptor's offset and advancing it by the number of octets read. Reading
+at or past the end of the file yields ``0`` octets rather than an error.
+``stdout``/``stderr`` fail with ``Acces``, a directory with ``Isdir``.
+
+``fd_pread`` Function
+~~~~~~~~~~~~~~~~~~~~~
+
+As ``fd_read``, except that it starts at the explicit ``offset`` and leaves the
+descriptor's own offset unchanged.
+
 ``fd_filestat_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Returns the ``Filestat`` described in `File Metadata`_ with ``nlink`` ``1`` and
+``filetype``:
+
+- ``regular_file`` for a file descriptor, whose ``size`` is the file's length
+- ``directory`` for a directory descriptor
+- ``character_device`` for ``stdout``/``stderr``
 
 ``fd_fdstat_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
+``fs_flags`` is always empty — no descriptor is appending, non-blocking or
+synchronous — and ``fs_rights_inheriting`` always equals ``fs_rights_base``.
+The rights are fixed per descriptor kind and never include a mutating right:
+
+- a file descriptor: ``regular_file`` with the read, seek, tell, advise, sync,
+  datasync, readdir, readlink, ``path_open`` and filestat-get rights
+- a directory descriptor: ``directory`` with the read, ``path_open``, readdir,
+  readlink and filestat-get rights
+- ``stdout``/``stderr``: ``unknown`` filetype with the write right only
+
 ``fd_close`` Function
 ~~~~~~~~~~~~~~~~~~~~~
+
+Deallocates the descriptor (see :ref:`gvm-def-fd-allocation`) and releases the
+:ref:`gvm-def-ram-consumption` charged for its contents, if any. An unknown
+descriptor fails with ``Badf``.
 
 ``fd_advise`` Function
 ~~~~~~~~~~~~~~~~~~~~~~

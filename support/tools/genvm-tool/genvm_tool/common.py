@@ -1,4 +1,5 @@
-"""Shared primitives: repo discovery and git queries.
+"""
+Shared primitives: repo discovery and git queries.
 
 A "repo" is the manager root plus every executor submodule
 (`executors/<v>.x/`, discovered from `.genvm-monorepo-root`).
@@ -9,6 +10,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import types
 from dataclasses import dataclass
 from pathlib import Path
@@ -125,6 +127,21 @@ def active_versions_from_config(config: dict) -> list[str]:
 	return sorted(vers, key=_ver_key)
 
 
+def add_extra_python_paths(root: Path) -> None:
+	"""
+	Put `extra_python_paths` on `sys.path` (the repo's importable test plugins).
+
+	They are libraries of the repo rather than of this package, so anything that
+	reaches for one imports it lazily, after this call.
+	"""
+	for entry in monorepo_config(root).get('extra_python_paths', []):
+		path = Path(entry)
+		if not path.is_absolute():
+			path = root / path
+		if str(path) not in sys.path:
+			sys.path.append(str(path))
+
+
 def executor_rel(version: str) -> str:
 	"""Manager-relative checkout/gitlink path for an executor version line."""
 	return f'executors/v{_bare(version)}.x'
@@ -153,13 +170,15 @@ class Repo:
 
 	@property
 	def line(self) -> str | None:
-		"""The version-line tag (e.g. `v0.3`) for an executor submodule, or None
+		"""
+		The version-line tag (e.g. `v0.3`) for an executor submodule, or None
 		for the manager."""
 		m = re.fullmatch(r'executors/(v\d+\.\d+)\.x', self.name)
 		return m.group(1) if m else None
 
 	def feature_branch(self, name: str) -> str:
-		"""Physical branch name for the logical feature branch `name` in this repo.
+		"""
+		Physical branch name for the logical feature branch `name` in this repo.
 
 		The manager is its own repo, so it carries `name` verbatim. Every executor
 		submodule, however, shares ONE remote (`genvm-executor`): a bare `name`

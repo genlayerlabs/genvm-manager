@@ -5,7 +5,19 @@ import { Command } from 'commander';
 import * as logger from './logging.js';
 import * as chromeBrowser from './browser/chrome.js';
 import * as ssrf from './ssrf.js';
-import { envDurationMs, envInt, formatDurationMs } from './duration.js';
+import {
+	envDurationMs,
+	envInt,
+	envPositiveInt,
+	envSize,
+	formatDurationMs,
+} from './duration.js';
+import {
+	Semaphore,
+	SemaphoreAborted,
+	SemaphoreQueueFull,
+	SemaphoreTimeout,
+} from './semaphore.js';
 
 interface NavigationOptions {
 	waitUntil?: pup.PuppeteerLifeCycleEvent;
@@ -17,6 +29,7 @@ interface RenderOptions {
 	waitAfterLoaded?: number;
 	waitUntil?: pup.PuppeteerLifeCycleEvent;
 	maxPageHeapMB?: number;
+	maxResponseChars?: number;
 }
 
 const program = new Command();
@@ -30,8 +43,42 @@ program
 const options = program.opts();
 
 const STATUS_I_AM_A_TEAPOT = 418;
+const STATUS_INSUFFICIENT_STORAGE = 507;
+const STATUS_SERVICE_UNAVAILABLE = 503;
 
 const DEFAULT_MAX_PAGE_HEAP_MB = envInt('GVM_WEBDRIVER_MAX_PAGE_HEAP_MB', 1024);
+
+// peak_mem ~= MAX_CONCURRENT_RENDERS * (page heap + extracted response) + browser baseline
+//
+// we deem that by default we are limited by manager permits,
+// so this knob is for extra tuning and default 128 is essentially "unlimited"
+const MAX_CONCURRENT_RENDERS = envPositiveInt(
+	'GVM_WEBDRIVER_MAX_CONCURRENT_RENDERS',
+	128,
+);
+
+// Counted in characters, which is what bounds the string materialized in this
+// process. One character encodes to at most 4 UTF-8 bytes on the wire, and
+// occupies 2 bytes in V8 for the common (BMP) case.
+const MAX_RESPONSE_CHARS = envSize('GVM_WEBDRIVER_MAX_RESPONSE', '5MiB');
+
+// Waiting callers are cheap but not free: each holds a live connection. Past
+// this depth the service is not going to work through the backlog before
+// callers give up anyway, so refusing immediately beats refusing slowly.
+const MAX_RENDER_QUEUE = envInt('GVM_WEBDRIVER_MAX_RENDER_QUEUE', 64);
+
+// Kept well below the caller's own transport timeout: a queue wait that
+// outlives it converts a condition we can report cleanly into a transport
+// failure, which callers treat far more harshly.
+const RENDER_QUEUE_TIMEOUT_MS = envDurationMs(
+	'GVM_WEBDRIVER_RENDER_QUEUE_TIMEOUT',
+	'120s',
+);
+
+const renderSlots = new Semaphore({
+	permits: MAX_CONCURRENT_RENDERS,
+	maxQueued: MAX_RENDER_QUEUE,
+});
 
 const MAX_WAIT_AFTER_LOADED_MS = envDurationMs(
 	'GVM_WEBDRIVER_MAX_WAIT_AFTER_LOADED',
@@ -119,27 +166,64 @@ async function navigateToPage(
 	}
 }
 
-async function asText(page: pup.Page) {
-	const bodyText = await page.evaluate(() => {
-		return document.body.innerText;
-	});
+/**
+ * Read `innerText` or `innerHTML`, rejecting oversized documents *in the page*.
+ *
+ * The size test has to happen on the browser side. Pulling the string across
+ * first and measuring it here would already have paid the memory cost we are
+ * trying to avoid — this process would hold the whole document no matter what
+ * any downstream limit says.
+ */
+async function extractBounded(
+	page: pup.Page,
+	kind: 'innerText' | 'innerHTML',
+	maxChars: number,
+): Promise<string> {
+	const extracted = await page.evaluate(
+		(k, limit) => {
+			const raw =
+				k === 'innerText' ? document.body.innerText : document.body.innerHTML;
+			return raw.length > limit
+				? { tooLarge: true as const, length: raw.length }
+				: { tooLarge: false as const, content: raw };
+		},
+		kind,
+		maxChars,
+	);
 
-	return normalizeWhitespace(bodyText);
+	if (extracted.tooLarge) {
+		throw new ResponseLimitExceeded(extracted.length, maxChars);
+	}
+	return extracted.content;
 }
 
-async function asHTML(page: pup.Page) {
-	return await page.evaluate(() => {
-		return document.body.innerHTML;
-	});
+async function asText(page: pup.Page, maxChars: number) {
+	return normalizeWhitespace(await extractBounded(page, 'innerText', maxChars));
 }
 
-async function asScreenshot(page: pup.Page) {
-	return await page.screenshot();
+async function asHTML(page: pup.Page, maxChars: number) {
+	return await extractBounded(page, 'innerHTML', maxChars);
+}
+
+async function asScreenshot(page: pup.Page, maxChars: number) {
+	// Screenshots are viewport-sized rather than full-page, so this is a
+	// backstop rather than a limit anyone should reach.
+	const image = await page.screenshot();
+	if (image.length > maxChars) {
+		throw new ResponseLimitExceeded(image.length, maxChars);
+	}
+	return image;
 }
 
 class HeapLimitExceeded extends Error {
 	constructor(heapMB: number, maxHeapMB: number) {
 		super(`Page JS heap ${heapMB.toFixed(1)}MB exceeds limit ${maxHeapMB}MB`);
+	}
+}
+
+class ResponseLimitExceeded extends Error {
+	constructor(size: number, maxSize: number) {
+		super(`Rendered response ${size} exceeds limit ${maxSize}`);
 	}
 }
 
@@ -212,18 +296,49 @@ async function renderPage(
 	targetUrl: string,
 	mode: 'text' | 'html' | 'screenshot',
 	options: RenderOptions = {},
+	signal?: AbortSignal,
 ): Promise<{ status: number; body: any }> {
-	const browserManager = await chromeBrowser.INSTANCE;
-	const browserInstance = browserManager.getBrowser();
+	// The slot is taken before the browser is touched, so a queued request costs
+	// nothing but the open connection.
 	try {
-		return renderPageWithBrowser(
-			browserInstance.get(),
-			targetUrl,
-			mode,
-			options,
-		);
+		await renderSlots.acquire(RENDER_QUEUE_TIMEOUT_MS, signal);
+	} catch (e) {
+		// Saturation escapes as a transport failure rather than a render result,
+		// and the distinction is deliberate. How busy this host happens to be is
+		// not a property of the page, so it must not reach the contract: two
+		// hosts under different load would otherwise return different answers
+		// for the same request and each would look legitimate. Failing at the
+		// transport level keeps the outcome an honest "this host could not run
+		// it" instead of a fabricated observation about the web.
+		if (e instanceof SemaphoreTimeout || e instanceof SemaphoreQueueFull) {
+			logger.log('warn', 'render rejected: saturated', {
+				url: targetUrl,
+				reason: e.name,
+				inFlight: renderSlots.inFlight,
+				queued: renderSlots.queued,
+				timeout: formatDurationMs(RENDER_QUEUE_TIMEOUT_MS),
+			});
+		} else if (e instanceof SemaphoreAborted) {
+			logger.log('debug', 'render abandoned while queued', { url: targetUrl });
+		}
+		throw e;
+	}
+
+	try {
+		const browserManager = await chromeBrowser.INSTANCE;
+		const browserInstance = browserManager.getBrowser();
+		try {
+			return await renderPageWithBrowser(
+				browserInstance.get(),
+				targetUrl,
+				mode,
+				options,
+			);
+		} finally {
+			browserInstance.close();
+		}
 	} finally {
-		browserInstance.close();
+		renderSlots.release();
 	}
 }
 
@@ -238,13 +353,25 @@ async function renderPageWithBrowser(
 		waitAfterLoaded = 0,
 		waitUntil = 'domcontentloaded',
 		maxPageHeapMB = DEFAULT_MAX_PAGE_HEAP_MB,
+		maxResponseChars = MAX_RESPONSE_CHARS,
 	} = options;
 
 	// Each render runs in its own browser context so cookies, localStorage,
 	// IndexedDB, service workers and HSTS state never leak between tenants
 	// sharing this long-lived browser.
 	const context = await browserInstance.createBrowserContext();
-	const page = await context.newPage();
+
+	// `newPage` fails when the shared browser is under pressure, and the cleanup
+	// below only runs once execution is inside the try. Without this the context
+	// survives for the browser's whole lifetime — and since pressure is exactly
+	// what makes `newPage` fail, the response to it would be to leak more.
+	let page: pup.Page;
+	try {
+		page = await context.newPage();
+	} catch (e) {
+		await context.close().catch(() => {});
+		throw e;
+	}
 
 	try {
 		await ssrf.installSsrfGuard(page);
@@ -287,13 +414,13 @@ async function renderPageWithBrowser(
 			let data;
 			switch (mode) {
 				case 'text':
-					data = await asText(page);
+					data = await asText(page, maxResponseChars);
 					break;
 				case 'html':
-					data = await asHTML(page);
+					data = await asHTML(page, maxResponseChars);
 					break;
 				case 'screenshot':
-					data = await asScreenshot(page);
+					data = await asScreenshot(page, maxResponseChars);
 					break;
 				default:
 					data = 'Invalid mode';
@@ -302,19 +429,48 @@ async function renderPageWithBrowser(
 			return { status: statusCode, body: data };
 		});
 	} catch (e) {
+		// Both limits are reported as render results, not transport failures: a
+		// transport failure aborts the caller's whole execution, and a page too
+		// big for this host is a thing the contract can reasonably be told about
+		// and handle, like any other page it could not load.
 		if (e instanceof HeapLimitExceeded) {
 			logger.log('warn', 'page heap limit exceeded', {
 				url: targetUrl,
 				error: e.message,
 			});
-			return { status: 507, body: e.message };
+		} else if (e instanceof ResponseLimitExceeded) {
+			logger.log('warn', 'rendered response limit exceeded', {
+				url: targetUrl,
+				mode,
+				error: e.message,
+			});
+		} else {
+			throw e;
 		}
-		throw e;
+
+		return { status: STATUS_INSUFFICIENT_STORAGE, body: e.message };
 	} finally {
 		// Close the page and its context together; the context teardown is what
 		// actually discards the per-request browsing state.
 		await Promise.allSettled([page.close(), context.close()]);
 	}
+}
+
+/**
+ * Fires when the caller goes away before it has been answered, so a request
+ * nobody is waiting for stops occupying a queue slot.
+ */
+function disconnectSignal(
+	req: http.IncomingMessage,
+	res: http.ServerResponse,
+): AbortSignal {
+	const controller = new AbortController();
+	req.on('close', () => {
+		if (!res.writableEnded) {
+			controller.abort();
+		}
+	});
+	return controller.signal;
 }
 
 async function handleRenderRequest(
@@ -355,7 +511,12 @@ async function handleRenderRequest(
 				: {}),
 		};
 
-		const result = await renderPage(targetUrl, mode, options);
+		const result = await renderPage(
+			targetUrl,
+			mode,
+			options,
+			disconnectSignal(req, res),
+		);
 
 		if (statusIsGood(result.status)) {
 			updateLastSuccessfulRenderTime();
@@ -370,6 +531,29 @@ async function handleRenderRequest(
 		}
 		res.end(result.body);
 	} catch (error) {
+		if (error instanceof SemaphoreAborted) {
+			// The caller hung up while queued; there is nobody left to answer.
+			return;
+		}
+		// How loaded this host happens to be is not a property of the page, so it
+		// must not reach the contract: two hosts under different load would
+		// answer the same request differently, both answers looking legitimate.
+		// A transport failure says plainly that this host could not run it.
+		if (
+			error instanceof SemaphoreTimeout ||
+			error instanceof SemaphoreQueueFull
+		) {
+			res.writeHead(STATUS_SERVICE_UNAVAILABLE, {
+				'Content-Type': 'application/json',
+			});
+			res.end(
+				JSON.stringify({
+					error: 'Service unavailable',
+					message: error.message,
+				}),
+			);
+			return;
+		}
 		res.writeHead(500, { 'Content-Type': 'application/json' });
 		res.end(
 			JSON.stringify({
@@ -380,7 +564,11 @@ async function handleRenderRequest(
 	}
 }
 
-async function handleHealthcheck(parsedUrl: URL, res: http.ServerResponse) {
+async function handleHealthcheck(
+	parsedUrl: URL,
+	req: http.IncomingMessage,
+	res: http.ServerResponse,
+) {
 	const now = Date.now();
 	const sinceLastSuccessMs = now - lastSuccessfulRenderTime;
 	if (sinceLastSuccessMs < HEALTHCHECK_CACHE_DURATION_MS) {
@@ -415,7 +603,12 @@ async function handleHealthcheck(parsedUrl: URL, res: http.ServerResponse) {
 		cacheDuration: formatDurationMs(HEALTHCHECK_CACHE_DURATION_MS),
 	});
 	try {
-		const result = await renderPage(targetUrl, mode, {});
+		const result = await renderPage(
+			targetUrl,
+			mode,
+			{},
+			disconnectSignal(req, res),
+		);
 		if (statusIsGood(result.status)) {
 			updateLastSuccessfulRenderTime();
 			logger.log('info', 'healthcheck ok', { status: result.status });
@@ -427,6 +620,13 @@ async function handleHealthcheck(parsedUrl: URL, res: http.ServerResponse) {
 			res.end('unhealthy');
 		}
 	} catch (error) {
+		if (error instanceof SemaphoreAborted) {
+			return;
+		}
+		// Saturation lands here too, and reporting unhealthy is right: the probe
+		// only renders when nothing has succeeded for the cache duration, so a
+		// host that is both saturated and has completed nothing in that window
+		// genuinely is not serving.
 		logger.log('error', 'healthcheck error', {
 			error: (error as Error).message,
 		});
@@ -442,7 +642,7 @@ const server = http.createServer(async (req, res) => {
 	if (pathname === '/render') {
 		await handleRenderRequest(parsedUrl, req, res);
 	} else if (pathname === '/healthcheck') {
-		await handleHealthcheck(parsedUrl, res);
+		await handleHealthcheck(parsedUrl, req, res);
 	} else if (pathname === '/log-level') {
 		if (req.method === 'GET') {
 			res.writeHead(200, { 'Content-Type': 'text/plain' });

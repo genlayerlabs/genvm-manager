@@ -209,7 +209,9 @@ TEST_RUST_EXECUTORS = DefaultStepInfo(
 	tool_step=Stage(
 		data=ToolTest(
 			tests_name_filter_for_or='^executors/',
-			tests_tags_filter_for_or='rust',
+			# integration cases tag their Rust contracts `rust` too, and those need
+			# a built manager -- which this cell deliberately does not build
+			tests_tags_filter_for_or='rust & !integration',
 		),
 	),
 )
@@ -297,7 +299,7 @@ def _cell(
 
 
 QUEUE_CELLS = [
-	_cell('other', TEST_OTHER),
+	_cell('other', TEST_OTHER, fuzz_host=True),
 	_cell('rust-executors', TEST_RUST_EXECUTORS, fuzz_host=True, disk_reclaim=True),
 	_cell('rust-manager', TEST_RUST_MANAGER, fuzz_host=True, disk_reclaim=True),
 	_cell(

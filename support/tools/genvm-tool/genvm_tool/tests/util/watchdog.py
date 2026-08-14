@@ -1,6 +1,9 @@
+import os
+import selectors
 import subprocess
 import sys
 import threading
+import time
 import typing
 from pathlib import Path
 
@@ -8,7 +11,8 @@ import cloudpickle
 
 
 class Watchdog:
-	"""Owns the lifecycle of registered cleanups (e.g. ``docker stop``).
+	"""
+	Owns the lifecycle of registered cleanups (e.g. ``docker stop``).
 
 	Cleanups are picklable zero-argument callables shipped to a watchdog
 	subprocess. The subprocess is the single executor: it runs a cleanup when
@@ -22,6 +26,10 @@ class Watchdog:
 	cleanly). Otherwise a broken watchdog would silently leak every container.
 	"""
 
+	# Has to outlast the slowest cleanup the watchdog runs for us: `docker stop`
+	# gives a container 10s to exit and is itself capped at 30s.
+	ACK_TIMEOUT = 60.0
+
 	def __init__(self, process: subprocess.Popen):
 		self._process = process
 		self._lock = threading.Lock()
@@ -30,6 +38,7 @@ class Watchdog:
 		# Cleared as soon as the watchdog misses anything we asked of it: from
 		# then on its exit status says nothing about what it actually ran.
 		self._healthy = True
+		self._ack_buffer = b''
 
 	@staticmethod
 	def start() -> 'Watchdog':
@@ -75,7 +84,8 @@ class Watchdog:
 			self._send({'action': 'remove', 'token': token})
 
 	def kill(self, token: int) -> None:
-		"""Run a registered cleanup now (via the watchdog) and forget it.
+		"""
+		Run a registered cleanup now (via the watchdog) and forget it.
 
 		Blocks until the watchdog acknowledges completion, so callers may rely on
 		the resource (e.g. a container's port) being released on return. Safe to
@@ -93,23 +103,44 @@ class Watchdog:
 				_run_cleanup(cleanup)
 
 	def _await_ack(self, token: int) -> bool:
-		"""Wait for this kill's ack, skipping stale ones. ``False`` on EOF."""
+		"""
+		Wait for this kill's ack, skipping stale ones. ``False`` on EOF or timeout.
+
+		The wait is bounded because this runs on a thread holding :attr:`_lock`:
+		a watchdog that stops answering would otherwise block every later
+		:meth:`register` and :meth:`kill`, and hang the interpreter at exit.
+		"""
 		assert self._process.stdout is not None
-		while True:
-			try:
-				line = self._process.stdout.readline()
-			except (OSError, ValueError):
-				return False
-			if not line:
-				return False
-			try:
-				if int(line) == token:
-					return True
-			except ValueError:
-				return False
+		deadline = time.monotonic() + self.ACK_TIMEOUT
+		with selectors.DefaultSelector() as selector:
+			selector.register(self._process.stdout, selectors.EVENT_READ)
+			while True:
+				# Lines are cut from our own buffer rather than read through the
+				# stream's: a line the stream has already buffered is one the
+				# selector can no longer see, and we would wait out the deadline
+				# with the answer in hand. The remainder outlives the call, so
+				# back-to-back kills do not drop each other's ack.
+				while b'\n' in self._ack_buffer:
+					line, _, self._ack_buffer = self._ack_buffer.partition(b'\n')
+					try:
+						if int(line) == token:
+							return True
+					except ValueError:
+						return False
+				remaining = deadline - time.monotonic()
+				if remaining <= 0 or not selector.select(remaining):
+					return False
+				try:
+					chunk = os.read(self._process.stdout.fileno(), 4096)
+				except (OSError, ValueError):
+					return False
+				if not chunk:
+					return False
+				self._ack_buffer += chunk
 
 	def stop(self) -> None:
-		"""Stop the watchdog, running any cleanups still registered.
+		"""
+		Stop the watchdog, running any cleanups still registered.
 
 		Closing stdin signals the subprocess to exit: it tears down every dangling
 		cleanup first, so we wait for it to finish. It exits 0 only after they all
@@ -128,7 +159,12 @@ class Watchdog:
 			code = self._process.wait(timeout=60)
 		except subprocess.TimeoutExpired:
 			self._process.kill()
-			code = self._process.wait()
+			try:
+				code = self._process.wait(timeout=10)
+			except subprocess.TimeoutExpired:
+				# Killed and still not reaped. Ending the run matters more than
+				# the exit status; below, a non-zero one runs the cleanups here.
+				code = -1
 		with self._lock:
 			cleanups, self._cleanups = self._cleanups, {}
 			healthy = self._healthy

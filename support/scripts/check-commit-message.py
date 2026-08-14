@@ -112,7 +112,8 @@ class CommitPart:
 
 
 def parse_commit(message: str) -> list[CommitPart]:
-	"""Split a commit message into parts to validate independently.
+	"""
+	Split a commit message into parts to validate independently.
 
 	A squash carries a bullet per collapsed commit, each its own subject and
 	body; the umbrella takes what precedes the first bullet.
@@ -211,7 +212,8 @@ def validate_part(part: CommitPart) -> tuple[list[str], list[str]]:
 
 
 def _check_control_chars(message: str, errors: list[str]) -> None:
-	"""Reject control characters: a message is text, newlines and tabs.
+	"""
+	Reject control characters: a message is text, newlines and tabs.
 
 	Anything else is invisible where the message is written and meaningful to
 	something downstream that reads it.

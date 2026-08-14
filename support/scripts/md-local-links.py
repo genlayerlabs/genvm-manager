@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Pre-commit guard: verify local file-path links in Markdown resolve.
+"""
+Pre-commit guard: verify local file-path links in Markdown resolve.
 
 Validates that **local** link targets (and reference definitions) point at
 existing files; ignores external links (http(s)/mailto/other schemes),
@@ -55,7 +56,8 @@ def _rel(p: Path, root: Path) -> str:
 
 
 def broken_links(md: Path, root: Path) -> list[str]:
-	"""Return human-readable messages for each broken local link in `md`.
+	"""
+	Return human-readable messages for each broken local link in `md`.
 
 	Targets resolve relative to the markdown file's directory; a leading `/` is
 	repo-root-relative (`root`). Paths in messages are shown relative to `root`.

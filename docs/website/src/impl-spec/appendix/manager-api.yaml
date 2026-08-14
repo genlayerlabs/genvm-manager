@@ -57,6 +57,12 @@ paths:
                       max:
                         type: integer
                         description: Maximum number of permits
+                      per_sync_run:
+                        type: integer
+                        description: Permits a sync run costs
+                      per_nondet_run:
+                        type: integer
+                        description: Permits a nondet run costs
                   executions:
                     type: object
                     description: Status of running executions
@@ -98,6 +104,8 @@ paths:
                   result:
                     type: string
                     example: module_started
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -132,6 +140,8 @@ paths:
                   result:
                     type: string
                     enum: [module_stopped, module_not_running]
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -175,6 +185,8 @@ paths:
                   result:
                     type: string
                     example: module_restarted
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -278,6 +290,8 @@ paths:
                         type: string
                         format: byte
                         nullable: true
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
     delete:
@@ -317,6 +331,8 @@ paths:
                         example: timeout during shutdown
                       genvm_id:
                         type: integer
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
 
   /genvm/{genvm_id}/artifact:
     get:
@@ -373,6 +389,8 @@ paths:
                   data_base64:
                     type: string
                     format: byte
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -408,6 +426,8 @@ paths:
                   specified_major:
                     type: integer
                     description: Detected major version
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -444,6 +464,8 @@ paths:
                     example: log_level_set
                   level:
                     type: string
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -484,7 +506,10 @@ paths:
                     description: Number of available permits
     post:
       summary: Set permits
-      description: Set the number of execution permits.
+      description: >-
+        Set the number of execution permits, one permit is one gigabyte of RAM.
+        A value below the cost of the most expensive run is rejected, and the
+        response carries the unchanged maximum.
       operationId: setPermits
       requestBody:
         required: true
@@ -513,6 +538,8 @@ paths:
                     example: permits_set
                   permits:
                     type: integer
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -615,6 +642,8 @@ paths:
                     response:
                       type: string
                       nullable: true
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -642,6 +671,8 @@ paths:
                     type: string
                     nullable: true
                     description: Human-readable error description, or null if unknown
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 

@@ -30,11 +30,13 @@ generated pages stay the single source of truth:
 
 - Constants: `:ref:`gvm-def-consts-value-<group>-<name>`` /
   `:ref:`gvm-def-const-<name>`` from `spec/appendix/constants.rst`
-  (generated from `executor/codegen/data/public-abi.json`) or
+  (generated from `executor/codegen/data/public-abi.json`),
+  `internal-constants.rst` (from `internal-constants.json`) or
   `constants-pending.rst` (from `public-abi-pending.json`). **Never edit these
   .rst by hand** — edit the JSON and regenerate
-  ([genvm-tool.md](../../../docs/contributing/howto/genvm-tool.md)). New
-  not-yet-stabilized constants go to the pending JSON.
+  ([genvm-tool.md](../../../docs/contributing/howto/genvm-tool.md)). Constants a
+  contract cannot read go to the internal JSON, not-yet-stabilized ones to the
+  pending JSON.
 - Error outcomes: `:ref:`gvm-def-str-trie-value-vm-error-...`` — every "traps
   with" / "rejected with" must link the exact vm_error entry.
 - Glossary terms: `:term:`sub-VM`` etc. on first use in a section.

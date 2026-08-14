@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Report what each repo changed in this CI run, as JSON.
+"""
+Report what each repo changed in this CI run, as JSON.
 
 Emits one entry per repo: the manager keyed as ``.``, every executor submodule by
 its path, each holding ``base_commit``, ``branch_commit`` and ``has_changes``.
@@ -60,7 +61,8 @@ def endpoints(base: str, head: str, path: str) -> tuple[str | None, str | None]:
 
 
 def fetch_pr_refs(base_ref: str, pr_number: str) -> tuple[str, str]:
-	"""Materialize the base tip and the PR head, and return (merge_base, head).
+	"""
+	Materialize the base tip and the PR head, and return (merge_base, head).
 
 	A `pull_request` checkout leaves HEAD on the merge commit, and the base
 	branch is usually not fetched at all, so both sides are fetched by explicit
@@ -97,7 +99,8 @@ def gh(*args: str) -> str:
 
 
 def base_ref_of(pr_number: str) -> str:
-	"""The PR's base branch, read from the API.
+	"""
+	The PR's base branch, read from the API.
 
 	`GITHUB_BASE_REF` is only set on `pull_request` events, but these checks also
 	run on the panel's `workflow_dispatch`, where the PR number is known and the

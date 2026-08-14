@@ -14,5 +14,12 @@
     "ATOMAKEY",
     "LSQLITE3_SRC",
     "LUA_INCLUDE"
-  ]
+  ],
+  "tags": {
+    "lib": [
+      "feature-manager-socket",
+      "feature-version-routing",
+      "feature-web-request-signed"
+    ]
+  }
 }

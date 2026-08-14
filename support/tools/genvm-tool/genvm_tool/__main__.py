@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
-"""Command-line interface for genvm-tool.
+"""
+Command-line interface for genvm-tool.
 
 Top-level commands (`configure`, `test`) sit alongside command *groups* (`git`
 with `git ls` / `git list-repo`). Each group is a sub-package exposing
@@ -24,13 +25,21 @@ from . import (
 	cmd_codegen,
 	cmd_configure,
 	cmd_docs,
+	cmd_fuzz_corpus,
 	cmd_test,
 	common,
 	formatter,
 	git,
 )
 
-TOPLEVEL = [cmd_configure, cmd_test, cmd_build_manifest, cmd_codegen, cmd_docs]
+TOPLEVEL = [
+	cmd_configure,
+	cmd_test,
+	cmd_build_manifest,
+	cmd_codegen,
+	cmd_docs,
+	cmd_fuzz_corpus,
+]
 GROUPS = [git]
 
 # One-line tagline for the man page NAME line and completion header; the fuller
@@ -67,7 +76,8 @@ def _rst_to_plain(text: str) -> str:
 
 
 def _long_help(mod):
-	"""The module docstring as a subparser `description` (falls back to HELP).
+	"""
+	The module docstring as a subparser `description` (falls back to HELP).
 
 	`inspect.getdoc` dedents and strips; `_rst_to_plain` drops the RST markup so
 	the rich per-command docstrings feed both the subcommand's `-h` and the man
@@ -88,7 +98,8 @@ def _add_leaf(subparsers, mod) -> None:
 
 
 class _PrintManpageAction(argparse.Action):
-	"""`--print-manpage`: emit a roff man page for the whole tree, then exit.
+	"""
+	`--print-manpage`: emit a roff man page for the whole tree, then exit.
 
 	The manager's `default.nix` pipes this into `installManPage` at build time,
 	mirroring how shtab's `--print-completion` feeds `installShellCompletion`.

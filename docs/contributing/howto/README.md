@@ -17,7 +17,7 @@
 - [rust.md](testing/rust.md) — Rust tests: where they go, how to run them, coverage
 - [python.md](testing/python.md) — Python tests, direct pytest for genlayer-py-std
 - [integration.md](testing/integration.md) — jsonnet cases, tags, golden `.stdout`/`.hash` files, services
-- [fuzzing.md](testing/fuzzing.md) — AFL fuzz targets, host sysctl prep
+- [fuzzing.md](testing/fuzzing.md) — AFL fuzz targets, seeding a corpus from a run, host sysctl prep
 
 ## committing/
 - [submodules.md](committing/submodules.md) — repo topology, gitlink bumps, pre-commit hooks, push order

@@ -137,7 +137,8 @@ async fn full_control_queue_does_not_kill_the_subscription() {
     // until the peer reads. A stalled client's connection looks exactly like
     // this from the manager's side.
     writer
-        .send_control(test_frame(Methods::Event, 99, "occupier"))
+        .control
+        .try_send(test_frame(Methods::Event, 99, "occupier"))
         .unwrap();
     let forwarder = tokio::spawn(forward_events(writer.clone(), events_rx));
 

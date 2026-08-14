@@ -18,20 +18,24 @@
   {
     "type": "enum",
     "repr": "u8",
+    "name": "result_code",
+    "values": {
+      "return": 0,
+      "user_error": 1,
+      "vm_error": 2,
+      "internal_error": 3,
+      "fatal_vm_error": 4
+    }
+  },
+  {
+    "type": "enum",
+    "repr": "u8",
     "name": "errors",
     "values": {
       "ok": 0,
       "evm_reverted": 1,
       "forbidden": 2
     }
-  },
-  {
-    "type": "str_trie",
-    "name": "vm_error_detail",
-    "values": [
-      "internal",
-      "external"
-    ]
   },
   {
     "type": "const",

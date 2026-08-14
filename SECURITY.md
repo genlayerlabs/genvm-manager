@@ -6,8 +6,8 @@ identical and trustworthy across all validators. Please treat security issues ac
 ## Reporting a vulnerability
 
 **Do not open a public issue.** Report privately via GitHub's
-[private vulnerability reporting](https://github.com/genlayerlabs/genvm/security/advisories/new),
-or email kira@yeager.ai
+[private vulnerability reporting](https://github.com/genlayerlabs/genvm-manager/security/advisories/new),
+or email kira@genlayerlabs.com
 
 Include a description, affected component/version, and a reproduction (a contract, calldata,
 or test case) where possible. We aim to acknowledge within a few business days.
@@ -37,3 +37,12 @@ In scope: the executor, runners/SDK, modules (LLM/web/manager), the install/mani
 the CI/release supply chain. Out of scope: issues requiring a pre-compromised host or operator
 machine, and non-default deployments that expose the loopback-only manager to untrusted networks
 (though we still want to know).
+
+## Trust boundary
+
+The following relationships are trusted. Hardening them is welcome, but a report that assumes
+one side is hostile is not treated as a vulnerability:
+
+- host and GenVM
+- executor and manager
+- the local disk and loopback in general

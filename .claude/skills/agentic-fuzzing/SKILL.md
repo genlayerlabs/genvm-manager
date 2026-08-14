@@ -119,8 +119,8 @@ leader-vs-validator comparison does not catch a load failure either: it is
 identical in all three modes, so the hashes agree and the case still passes — a
 probe whose contract never loaded reports `✓` in 50ms. Before believing a pass, open
 `genvm.log.gz` and check the run reached the contract, and decode the `hash`
-artifact — `base64 -d < hash` on a failed load reads `invalid_contract
-malformed_runner`.
+artifact — `base64 -d < hash` on a failed load reads `invalid_contract runner
+malformed`.
 
 ## Reviewing a PR for a failing test
 

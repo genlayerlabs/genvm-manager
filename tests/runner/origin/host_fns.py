@@ -19,24 +19,18 @@ class Methods(IntEnum):
 	RUN_NESTED = 8
 
 
+class ResultCode(IntEnum):
+	RETURN = 0
+	USER_ERROR = 1
+	VM_ERROR = 2
+	INTERNAL_ERROR = 3
+	FATAL_VM_ERROR = 4
+
+
 class Errors(IntEnum):
 	OK = 0
 	EVM_REVERTED = 1
 	FORBIDDEN = 2
-
-class VmErrorDetail:
-	__slots__ = ('value',)
-	def __init__(self, value: str):
-		self.value = value
-	def __str__(self) -> str:
-		return self.value
-	@staticmethod
-	def internal() -> 'VmErrorDetail':
-		return VmErrorDetail('internal')
-	@staticmethod
-	def external() -> 'VmErrorDetail':
-		return VmErrorDetail('external')
-
 
 
 CURRENT_MAJOR: typing.Final[int] = 0

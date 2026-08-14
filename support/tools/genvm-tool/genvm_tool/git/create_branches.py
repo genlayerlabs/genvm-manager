@@ -1,4 +1,5 @@
-"""`genvm-tool git create-branches` — branch the sub-repos that have new content.
+"""
+`genvm-tool git create-branches` — branch the sub-repos that have new content.
 
 Surveys the manager and every checked-out executor submodule, keeps the ones with
 uncommitted or unpushed work, lets you tick which of those to branch, and creates
@@ -35,7 +36,8 @@ def _git(repo: common.Repo, *args: str) -> subprocess.CompletedProcess:
 
 
 def _new_content(repo: common.Repo) -> str | None:
-	"""Describe a repo's pending work, or None if it has nothing to branch.
+	"""
+	Describe a repo's pending work, or None if it has nothing to branch.
 
 	"New content" is a dirty working tree (staged / unstaged / untracked) or
 	commits ahead of the upstream branch — anything a fresh branch would capture.
@@ -80,7 +82,8 @@ def _current_branch(repo: common.Repo) -> str:
 
 
 def _default_name(repo: common.Repo) -> str:
-	"""The manager's current branch as a prompt default, unless it is a release/
+	"""
+	The manager's current branch as a prompt default, unless it is a release/
 	branch-model branch (main / version / dev) or detached — then no default.
 	"""
 	cur = _current_branch(repo)

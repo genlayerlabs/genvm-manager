@@ -1,4 +1,5 @@
-"""Message-fee allocation tree types.
+"""
+Message-fee allocation tree types.
 
 Mirrors the executor's `genvm_common::domain::fees` module: the fee parameters
 and the nested `MessageAllocationNode` tree that is passed alongside an

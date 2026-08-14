@@ -14,13 +14,9 @@ use crate::On;
     genlayer_calldata::Encode,
     genlayer_calldata::Decode,
 )]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct InternalMessageParams {
-    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
     pub leader_timeunits_allocation: U256,
-    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
     pub validator_timeunits_allocation: U256,
-    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
     pub execution_budget_per_round: U256,
     /// Per-round rotation allocations; `rotations[0]` is the initial round, the
     /// rest are appeal rounds. Must be non-empty.
@@ -31,21 +27,17 @@ pub struct InternalMessageParams {
     /// so we derive `appeal_rounds = rotations.len() - 1` instead. The ABI
     /// encoder re-inserts it so the encoded bytes (and their `keccak256` fee-param
     /// pin) match the chain's field layout.
-    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_vec_u256))]
     pub rotations: Vec<U256>,
     /// Per-time-unit GEN price cap locked at activation (consensus CON-549,
     /// v0.6-dev). The chain charges at this cap as the funding multiplier and
     /// cancels the tx if the global price exceeds it; `MessagePayments` requires
     /// it to be non-zero for internal messages.
-    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
     pub max_price_gen_per_time_unit: U256,
     /// Max gas price applied to the storage-fee component (v0.6-dev). Revert
     /// guard in `_calculateRoundFees`; must be non-zero for internal messages.
-    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
     pub storage_fee_max_gas_price: U256,
     /// Max gas price applied to the receipt-fee component (v0.6-dev). Revert
     /// guard in `_calculateRoundFees`; must be non-zero for internal messages.
-    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::abi::arb::arb_u256))]
     pub receipt_fee_max_gas_price: U256,
 }
 
@@ -110,6 +102,7 @@ impl MessageAllocationNode {
         abi::encode(roots)
     }
 
+    #[allow(clippy::if_same_then_else)]
     pub fn matches_internal(
         &self,
         on: On,
@@ -130,6 +123,7 @@ impl MessageAllocationNode {
         }
     }
 
+    #[allow(clippy::if_same_then_else)]
     pub fn matches_external(
         &self,
         recipient: genlayer_calldata::Address,

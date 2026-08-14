@@ -1,17 +1,17 @@
 import asyncio
 import contextlib
-import json
 import os
 import pickle
-import socket
 import stat
 import typing
 from dataclasses import dataclass
 from pathlib import Path
 
 import aiohttp
+import genvm_tool.io as gvm_io
 import genvm_tool.tests
 import genvm_tool.tests.stage.collection
+import genvm_tool_plugins.genvm as genvm
 import origin.base_host as base_host
 import origin.calldata as gvm_calldata
 from gvm_extra.mock_host import MockHost, MockStorage
@@ -126,120 +126,36 @@ class ManagerWsClient:
 			self.session = None
 
 
-class ManagerProc:
-	def __init__(
-		self,
-		*,
-		root: Path,
-		build_dir: Path,
-		artifacts_dir: Path,
-		name: str,
-		socket_path: Path,
-		max_message_bytes: int = 67108864,
-		execution_retention: str = '30s',
-		use_unix_listener: bool = False,
-	):
-		self.root = root
-		self.build_dir = build_dir
-		self.work_dir = artifacts_dir / name
-		self.socket_path = socket_path
-		self.max_message_bytes = max_message_bytes
-		self.execution_retention = execution_retention
-		self.use_unix_listener = use_unix_listener
-		self.process: asyncio.subprocess.Process | None = None
-		self.port = self._unused_port()
-		self.log_file = None
-
-	@staticmethod
-	def _unused_port() -> int:
-		with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-			sock.bind(('127.0.0.1', 0))
-			return sock.getsockname()[1]
+class _ManagerFixture:
+	def __init__(self, handle: genvm.ManagerHandle, work_dir: Path):
+		self.handle = handle
+		self.work_dir = work_dir
+		self.work_dir.mkdir(parents=True, exist_ok=True)
 
 	@property
 	def uri(self) -> str:
-		if self.use_unix_listener:
-			return f'unix://{self.socket_path}'
-		return f'http://127.0.0.1:{self.port}'
+		return self.handle.uri
+
+	@property
+	def socket_path(self) -> Path | None:
+		return self.handle.socket_path
+
+	async def restart(self) -> None:
+		await self.handle.restart()
 
 	async def __aenter__(self):
-		self.work_dir.mkdir(parents=True, exist_ok=True)
-		config_path = self.work_dir / 'genvm-manager.yaml'
-		config_path.write_text(
-			'\n'.join(
-				[
-					'threads: 4',
-					'blocking_threads: 48',
-					'log_disable: tracing*,polling*,tungstenite*,tokio_tungstenite*',
-					'log_level: info',
-					f'manifest_path: {self.build_dir / "out" / "data" / "manifest.yaml"}',
-					'permits: 2',
-					f'execution_retention: {self.execution_retention}',
-					f'max_message_bytes: {self.max_message_bytes}',
-					'',
-				]
-			)
-		)
-		listener_args = (
-			['--socket', str(self.socket_path)]
-			if self.use_unix_listener
-			else ['--port', str(self.port)]
-		)
-		self.log_file = open(self.work_dir / 'manager.log', 'wb')
-		self.process = await asyncio.subprocess.create_subprocess_exec(
-			str(self.build_dir / 'out' / 'bin' / 'genvm-modules'),
-			'manager',
-			*listener_args,
-			'--die-with-parent',
-			'--config',
-			str(config_path),
-			stdin=asyncio.subprocess.DEVNULL,
-			stdout=self.log_file,
-			stderr=self.log_file,
-			start_new_session=True,
-		)
-		await self._wait_healthy()
 		return self
 
 	async def __aexit__(self, *_args):
-		if self.process is not None:
-			try:
-				self.process.terminate()
-				await asyncio.wait_for(self.process.wait(), timeout=5)
-			except asyncio.TimeoutError:
-				self.process.kill()
-				await self.process.wait()
-		if self.log_file is not None:
-			self.log_file.close()
+		pass
 
-	async def _wait_healthy(self):
-		last_error: BaseException | None = None
-		for _ in range(80):
-			if self.process is not None and self.process.returncode is not None:
-				raise RuntimeError(f'manager exited early with {self.process.returncode}')
-			try:
-				if self.use_unix_listener:
-					async with aiohttp.ClientSession(
-						connector=aiohttp.UnixConnector(path=str(self.socket_path))
-					) as session:
-						async with session.get(
-							'http://localhost/status',
-							timeout=aiohttp.ClientTimeout(total=1),
-						) as resp:
-							if resp.status == 200:
-								return
-				else:
-					async with aiohttp.request(
-						'GET',
-						f'{self.uri}/status',
-						timeout=aiohttp.ClientTimeout(total=1),
-					) as resp:
-						if resp.status == 200:
-							return
-			except BaseException as exc:
-				last_error = exc
-			await asyncio.sleep(0.1)
-		raise TimeoutError(f'manager did not become healthy: {last_error}')
+
+class _StaleSocketManagerService(genvm.ManagerService):
+	async def _start_once(self) -> genvm.ManagerHandle:
+		assert self._socket_path is not None
+		self._socket_path.parent.mkdir(parents=True, exist_ok=True)
+		self._socket_path.write_text('stale')
+		return await super()._start_once()
 
 
 def _run_request(
@@ -302,7 +218,8 @@ async def _wait_event(client: ManagerWsClient, variant: str, timeout: float = 10
 
 
 async def _wait_terminal(client: ManagerWsClient, timeout: float = 10.0):
-	"""Wait for whichever terminal event the run produces.
+	"""
+	Wait for whichever terminal event the run produces.
 
 	Which one it is depends on how far the run got, and the point of the test is
 	that *some* terminal event arrives without the host having to time out.
@@ -371,7 +288,7 @@ async def _get_artifact(client: ManagerWsClient, genvm_id: int, field: str) -> b
 
 
 def _make_mock_host(
-	manager: ManagerProc,
+	manager: _ManagerFixture,
 	name: str,
 	ctx: _TestContext,
 	running_address: Address | None = None,
@@ -400,6 +317,8 @@ def _make_mock_host(
 class ManagerSocketCase(genvm_tool.tests.test.Case):
 	description: genvm_tool.tests.test.Description
 	shared: genvm_tool.tests.SharedContext
+	manager_service: genvm_tool.tests.stage.collection.Service
+	method: str
 
 	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
 		return [ManagerSocketStep(self)]
@@ -408,7 +327,7 @@ class ManagerSocketCase(genvm_tool.tests.test.Case):
 class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 	def __init__(self, case: ManagerSocketCase):
 		self.case = case
-		self.phase = 'start'
+		self.phase = case.method
 
 	def to_str(self) -> str:
 		return '<manager socket protocol test>'
@@ -417,7 +336,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 		self, previous_results: list[typing.Any]
 	) -> genvm_tool.tests.test.Result:
 		try:
-			await self._run_all()
+			await getattr(self, self.case.method)()
 			return genvm_tool.tests.test.Result(passed=True, context={}, elapsed_seconds=0)
 		except BaseException as exc:
 			return genvm_tool.tests.test.Result(
@@ -433,69 +352,17 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 		max_message_bytes: int = 67108864,
 		use_unix_listener: bool = False,
 	):
-		artifacts = self.case.shared.artifacts_dir / 'manager_socket'
-		socket_path = Path('/tmp') / f'gvm-ms-{os.getpid()}' / f'{name}.sock'
-		return ManagerProc(
-			root=self.case.shared.root_dir,
-			build_dir=Path(
-				json.loads((self.case.shared.root_dir / 'build' / 'info.json').read_text())[
-					'build_dir'
-				]
-			),
-			artifacts_dir=artifacts,
-			name=name,
-			socket_path=socket_path,
-			max_message_bytes=max_message_bytes,
-			use_unix_listener=use_unix_listener,
+		del max_message_bytes, use_unix_listener
+		handle = self.case.manager_service.handle
+		assert isinstance(handle, genvm.ManagerHandle)
+		return _ManagerFixture(
+			handle,
+			self.case.shared.case_dir_for(self.case.description.name) / name,
 		)
 
 	async def _manager_with_retention(self, name: str, retention: str):
-		artifacts = self.case.shared.artifacts_dir / 'manager_socket'
-		socket_path = Path('/tmp') / f'gvm-ms-{os.getpid()}' / f'{name}.sock'
-		return ManagerProc(
-			root=self.case.shared.root_dir,
-			build_dir=Path(
-				json.loads((self.case.shared.root_dir / 'build' / 'info.json').read_text())[
-					'build_dir'
-				]
-			),
-			artifacts_dir=artifacts,
-			name=name,
-			socket_path=socket_path,
-			execution_retention=retention,
-		)
-
-	async def _run_all(self):
-		self.phase = 'protocol errors'
-		await self._malformed_unknown_and_survival()
-		self.phase = 'oversized close'
-		await self._oversized_closes_connection()
-		self.phase = 'startup failures'
-		await self._startup_failure_events_and_permits()
-		self.phase = 'happy path'
-		await self._happy_path_artifact_ack_attach()
-		self.phase = 'reconnect mid-run'
-		await self._disconnect_mid_run_reconnect_attach()
-		self.phase = 'finish before ack reconnect'
-		await self._disconnect_after_finish_before_ack()
-		self.phase = 'multi attach'
-		await self._two_clients_receive_terminal()
-		self.phase = 'ack and ttl'
-		await self._ack_and_ttl_drop_results()
-		self.phase = 'boot mismatch'
-		await self._manager_restart_boot_mismatch()
-		self.phase = 'restart loses run'
-		await self._manager_restart_fails_waiter()
-		self.phase = 'cancel after start'
-		await self._cancel_after_start_single_terminal()
-		self.phase = 'deadline event'
-		await self._deadline_pushes_terminal()
-		self.phase = 'ttl drain'
-		await self._client_never_returns_ttl_drains()
-		self.phase = 'http socket parity'
-		await self._http_and_socket_same_fixture()
-		self.phase = 'unix stale'
-		await self._unix_parent_and_stale_socket()
+		del retention
+		return await self._manager(name)
 
 	async def _malformed_unknown_and_survival(self):
 		async with await self._manager('protocol-errors') as manager:
@@ -577,9 +444,9 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 			tmp_dir = manager.work_dir / 'host'
 			tmp_dir.mkdir(parents=True, exist_ok=True)
 			storage_path = tmp_dir / 'storage.pickle'
-			with open(storage_path, 'wb') as f:
-				pickle.dump(MockStorage(), f)
-			host_path = tmp_dir / 'host.sock'
+			await gvm_io.write_file_bytes(storage_path, pickle.dumps(MockStorage()))
+			host_path = Path('/tmp') / f'gvm-ms-{os.getpid()}' / 'happy-host.sock'
+			host_path.parent.mkdir(parents=True, exist_ok=True)
 			ctx = _TestContext(self.case.shared.logger)
 			host = MockHost(
 				path=str(host_path),
@@ -797,6 +664,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 			async with ManagerWsClient(manager.uri) as client:
 				boot_id = await _read_hello(client)
 				genvm_id = 1
+		await manager.restart()
 		async with manager:
 			async with ManagerWsClient(manager.uri) as client:
 				await _read_hello(client)
@@ -828,8 +696,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					# The manager that owns the run dies and a fresh one takes its
 					# place, handing out the same ids again -- the run cannot be
 					# re-attached, so the waiter has to fail rather than reconnect.
-					await manager.__aexit__()
-					await manager.__aenter__()
+					await manager.restart()
 					try:
 						terminal = await asyncio.wait_for(client.wait_terminal(state), timeout=15)
 					except base_host.ManagerRunLost:
@@ -948,7 +815,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 			assert http_res['result_kind'] == socket_res.result_kind
 			assert http_res['result_data'] == socket_res.result_data
 
-	async def _run_fixture_over_http(self, manager: ManagerProc, name: str):
+	async def _run_fixture_over_http(self, manager: _ManagerFixture, name: str):
 		ctx = _TestContext(self.case.shared.logger)
 		host, host_path = _make_mock_host(manager, name, ctx)
 		cancel_host = asyncio.Event()
@@ -985,7 +852,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 			'result_data': consumed.result_data,
 		}
 
-	async def _run_fixture_over_socket(self, manager: ManagerProc, name: str):
+	async def _run_fixture_over_socket(self, manager: _ManagerFixture, name: str):
 		ctx = _TestContext(self.case.shared.logger)
 		host, host_path = _make_mock_host(manager, name, ctx)
 		with host as mock_host:
@@ -1011,24 +878,141 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 				)
 
 	async def _unix_parent_and_stale_socket(self):
-		artifacts = Path('/tmp') / f'gvm-ms-{os.getpid()}'
-		socket_path = artifacts / 'unix-stale.sock'
-		socket_path.parent.mkdir(parents=True, exist_ok=True)
-		socket_path.write_text('stale')
 		async with await self._manager('unix-stale', use_unix_listener=True) as manager:
-			assert manager.socket_path == socket_path
+			assert manager.socket_path is not None
+			socket_path = manager.socket_path
 			mode = os.stat(socket_path).st_mode
 			assert stat.S_ISSOCK(mode)
 
 
-def collect(ctx: genvm_tool.tests.stage.collection.Context) -> None:
-	# console_pool: this case starts, restarts and kills managers of its own, and
-	# waits out retention sweeps. Sharing the runner with other cases makes their
-	# manager unreachable partway through, which they report as a connection
-	# refused far away from the cause.
-	desc = genvm_tool.tests.test.Description(
-		name='tests/system/manager-socket',
-		tags=frozenset({'integration', 'stable', 'manager-socket'}),
-		console_pool=True,
-	)
-	ctx.add_case(ManagerSocketCase(description=desc, shared=ctx.shared))
+def collect(
+	ctx: genvm_tool.tests.stage.collection.Context,
+	*,
+	manager_semaphore: genvm_tool.tests.stage.collection.Semaphore,
+	build_dir: Path,
+	ci: bool,
+) -> None:
+	service_root = ctx.shared.artifacts_dir / 'manager_socket' / 'services'
+	base_config = {
+		'permits': {'total': 2},
+		'execution_retention': '30s',
+	}
+
+	def service(
+		name: str,
+		*,
+		config: dict[str, typing.Any] | None = None,
+		socket_path: Path | None = None,
+		implementation: type[genvm.ManagerService] = genvm.ManagerService,
+	):
+		merged_config = {**base_config, **(config or {})}
+		return ctx.new_service(
+			name=f'manager-socket-{name}',
+			manager=implementation(
+				bin_path=build_dir / 'out' / 'bin' / 'genvm-modules',
+				log_path=service_root / name / 'manager.log',
+				env=ctx.configuration,
+				ci=ci,
+				config=merged_config,
+				socket_path=socket_path,
+			),
+			semaphores=[manager_semaphore],
+		)
+
+	cases = [
+		(
+			'protocol-errors',
+			'_malformed_unknown_and_survival',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'oversized-close',
+			'_oversized_closes_connection',
+			{'max_message_bytes': 32},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'startup-failures',
+			'_startup_failure_events_and_permits',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		('happy-path', '_happy_path_artifact_ack_attach', {}, None, genvm.ManagerService),
+		(
+			'reconnect-mid-run',
+			'_disconnect_mid_run_reconnect_attach',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'finish-before-ack',
+			'_disconnect_after_finish_before_ack',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'multiple-attachments',
+			'_two_clients_receive_terminal',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'ack-drops-result',
+			'_ack_and_ttl_drop_results',
+			{'execution_retention': '500ms'},
+			None,
+			genvm.ManagerService,
+		),
+		('boot-mismatch', '_manager_restart_boot_mismatch', {}, None, genvm.ManagerService),
+		(
+			'restart-loses-run',
+			'_manager_restart_fails_waiter',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		('cancel', '_cancel_after_start_single_terminal', {}, None, genvm.ManagerService),
+		('deadline', '_deadline_pushes_terminal', {}, None, genvm.ManagerService),
+		(
+			'retention-drain',
+			'_client_never_returns_ttl_drains',
+			{'execution_retention': '500ms'},
+			None,
+			genvm.ManagerService,
+		),
+		('http-parity', '_http_and_socket_same_fixture', {}, None, genvm.ManagerService),
+		(
+			'unix-stale-socket',
+			'_unix_parent_and_stale_socket',
+			{},
+			Path('/tmp') / f'gvm-ms-{os.getpid()}' / 'unix-stale.sock',
+			_StaleSocketManagerService,
+		),
+	]
+	for slug, method, config, socket_path, implementation in cases:
+		manager_service = service(
+			slug,
+			config=config,
+			socket_path=socket_path,
+			implementation=implementation,
+		)
+		desc = genvm_tool.tests.test.Description(
+			name=f'tests/system/manager-socket/{slug}',
+			needed_services=frozenset({manager_service}),
+			tags=frozenset({'integration', 'stable', 'feature-manager-socket'}),
+		)
+		ctx.add_case(
+			ManagerSocketCase(
+				description=desc,
+				shared=ctx.shared,
+				manager_service=manager_service,
+				method=method,
+			)
+		)

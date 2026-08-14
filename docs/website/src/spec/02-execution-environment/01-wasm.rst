@@ -16,15 +16,31 @@ Enabled WASM Features and Proposals
 :ref:`gvm-def-det-mode` Additional Limitations
 ----------------------------------------------
 
-Only following ``f32.*`` and ``f64.*`` operations are allowed:
+An operation on a floating point value is allowed *iff* it moves or copies bits
+without interpreting them as numbers. The complete allowed set is:
 
 - ``f32.store``, ``f64.store``
 - ``f32.load``, ``f64.load``
 - ``f32.const``, ``f64.const``
 - ``f32.reinterpret_i32``, ``f64.reinterpret_i64``
 - ``i32.reinterpret_f32``, ``i64.reinterpret_f64``
+- ``f32x4.splat``, ``f64x2.splat``
+- ``f32x4.extract_lane``, ``f64x2.extract_lane``
+- ``f32x4.replace_lane``, ``f64x2.replace_lane``
 
-Any other floating point operation is considered non-deterministic and is not allowed in :ref:`gvm-def-det-mode`.
+Every other ``f32.*``, ``f64.*``, ``f32x4.*`` and ``f64x2.*`` operation is
+considered non-deterministic — this covers arithmetic, ``min``/``max``
+(including the relaxed and pseudo-min/max forms), ``sqrt``, rounding,
+``abs``/``neg``/``copysign``, comparisons, fused multiply-add, and every
+conversion between a float and an integer or between float widths. Reaching one
+of them in :ref:`gvm-def-det-mode` traps with
+:ref:`gvm-def-str-trie-value-vm-error-wasm-trap-nondet-instruction`; a module
+merely containing them is not rejected.
+
+Operations on ``v128`` that do not name a float type (``v128.load``,
+``v128.store``, ``v128.const``, ``i8x16.shuffle``, ``v128.bitselect``, the
+integer lane operations, …) are not floating point operations and are
+unrestricted.
 
 :ref:`gvm-def-non-det-mode` does not have these limitations, allowing all floating point operations.
 

@@ -11,7 +11,6 @@ use genlayer_calldata::Address;
     Eq,
     Debug,
 )]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub enum On {
     #[serde(rename = "finalized")]
     #[calldata(rename = "finalized")]
@@ -93,39 +92,4 @@ fn default_datetime() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339("2024-11-26T06:42:42.424242Z")
         .unwrap()
         .to_utc()
-}
-
-#[cfg(feature = "arbitrary")]
-impl<'a> arbitrary::Arbitrary<'a> for MessageData {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        use arbitrary::Arbitrary;
-
-        let ts = u32::arbitrary(u)?;
-        let Some(datetime) = chrono::DateTime::<chrono::Utc>::from_timestamp_secs(ts as i64) else {
-            return Err(arbitrary::Error::NotEnoughData);
-        };
-
-        let chain_id_bytes: [u8; 32] = Arbitrary::arbitrary(u)?;
-        let chain_id = primitive_types::U256::from_big_endian(&chain_id_bytes);
-
-        let value_bytes: [u8; 32] = Arbitrary::arbitrary(u)?;
-        let value = primitive_types::U256::from_big_endian(&value_bytes);
-
-        Ok(Self {
-            contract_address: Arbitrary::arbitrary(u)?,
-            sender_address: Arbitrary::arbitrary(u)?,
-            origin_address: Arbitrary::arbitrary(u)?,
-            signer_address: Arbitrary::arbitrary(u)?,
-            chain_id: num_bigint::BigInt::from_bytes_be(
-                num_bigint::Sign::Plus,
-                &chain_id.to_big_endian(),
-            ),
-            value: num_bigint::BigInt::from_bytes_be(
-                num_bigint::Sign::Plus,
-                &value.to_big_endian(),
-            ),
-            is_init: bool::arbitrary(u)?,
-            datetime,
-        })
-    }
 }

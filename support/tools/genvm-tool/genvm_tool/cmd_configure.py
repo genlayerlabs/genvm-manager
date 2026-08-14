@@ -1,4 +1,5 @@
-"""`genvm-tool configure` — generate the build graph.
+"""
+`genvm-tool configure` — generate the build graph.
 
 Writes `build/build.ninja` and `build/info.json`, from which `ninja -C build`
 drives the cargo builds, `genvm-tool codegen` outputs, the runner build, and the
@@ -26,7 +27,8 @@ PLUGINS_REL = Path('tests/runner')
 
 
 class ExecVersion(NamedTuple):
-	"""One active executor line resolved to its on-disk locations.
+	"""
+	One active executor line resolved to its on-disk locations.
 
 	- ``key``: the top-level version line (e.g. ``v0.3``) as listed in
 		``.genvm-monorepo-root``.
@@ -42,7 +44,8 @@ class ExecVersion(NamedTuple):
 
 
 def _load_versions(monorepo_cfg, source_dir: Path) -> tuple[str, list[ExecVersion]]:
-	"""Resolve every active executor line from ``.genvm-monorepo-root``.
+	"""
+	Resolve every active executor line from ``.genvm-monorepo-root``.
 
 	Each active line is mounted at ``executors/<line>.x`` and its
 	``manifest.json`` pins the concrete ``executor-version`` that becomes the
@@ -59,7 +62,8 @@ def _load_versions(monorepo_cfg, source_dir: Path) -> tuple[str, list[ExecVersio
 
 
 def build_independent_info(monorepo_cfg, source_dir: Path) -> dict:
-	"""The parts of ``info.json`` derivable from source alone — no build needed.
+	"""
+	The parts of ``info.json`` derivable from source alone — no build needed.
 
 	``executor_versions`` maps each active line (e.g. ``v0.3``) to its built
 	``out/executor/<real>`` directory name; ``primary_executor_version`` is the
@@ -79,7 +83,8 @@ def build_independent_info(monorepo_cfg, source_dir: Path) -> dict:
 def base_info(
 	monorepo_cfg, source_dir: Path, build_dir: Path, rust_target_dir: Path
 ) -> dict:
-	"""Every ``info.json`` key that does not depend on having built anything.
+	"""
+	Every ``info.json`` key that does not depend on having built anything.
 
 	Two commands write ``info.json``: ``configure``, and the test harness when it
 	finds none (so CI can run tests without configuring first, see the
@@ -102,7 +107,8 @@ def base_info(
 def rust_target_dirs_info(
 	monorepo_cfg, source_dir: Path, rust_target_dir: Path
 ) -> dict:
-	"""``rust_target_dirs``: line checkout (``executors/v0.3.x``) → its cargo target dir.
+	"""
+	``rust_target_dirs``: line checkout (``executors/v0.3.x``) → its cargo target dir.
 
 	Keyed by mount so a consumer only has to ask which one contains its crate;
 	crates under none of them use ``rust_target_dir`` itself. Why lines cannot
@@ -138,7 +144,8 @@ def detect_rust_target() -> str:
 
 
 def _line_configurator(ctx: common.Context, source_dir: Path, exec_rel: str):
-	"""Resolve a line's `configure(line)` hook from its `.genvm-tool.py`.
+	"""
+	Resolve a line's `configure(line)` hook from its `.genvm-tool.py`.
 
 	Falls back to the plugin's default (committed-registry-or-nix) when the line
 	carries no hook, so a line without one still configures sensibly.
@@ -315,9 +322,12 @@ def main(ctx: common.Context, args) -> int:
 	)
 	public_abi_py = source_dir / 'tests/runner/origin/public_abi.py'
 	constants_rst = source_dir / 'docs/website/src/spec/appendix/constants.rst'
-	# Pending public-abi constants (ADR-012): documented in their own appendix
-	# page so the spec can reference them, without feeding the runner-hashed
-	# `public_abi.py`. Sourced from the primary line's pending data file.
+	internal_constants_rst = (
+		source_dir / 'docs/website/src/spec/appendix/internal-constants.rst'
+	)
+	# Public-ABI constants staged for a future release: documented in their own
+	# appendix page so the spec can reference them, without feeding the
+	# runner-hashed `public_abi.py`. Empty while nothing is staged.
 	constants_pending_rst = (
 		source_dir / 'docs/website/src/spec/appendix/constants-pending.rst'
 	)
@@ -329,6 +339,11 @@ def main(ctx: common.Context, args) -> int:
 	n.codegen(manager_socket_consts_rst, 'rst', shared_data / 'manager-api.json')
 	n.codegen(public_abi_py, 'python', p_data / 'public-abi.json')
 	n.codegen(constants_rst, 'rst', p_data / 'public-abi.json')
+	n.codegen(
+		internal_constants_rst,
+		'rst',
+		p_data / 'internal-constants.json',
+	)
 	n.codegen(
 		constants_pending_rst,
 		'rst',
@@ -343,6 +358,7 @@ def main(ctx: common.Context, args) -> int:
 		manager_socket_consts_rst,
 		public_abi_py,
 		constants_rst,
+		internal_constants_rst,
 		constants_pending_rst,
 	):
 		codegen_phony.add_dependency(out)
@@ -352,6 +368,7 @@ def main(ctx: common.Context, args) -> int:
 	# CI mode forbids touching Cargo.lock during the build.
 	locked = ['--locked'] if args.ci else []
 
+	# Lint edges (clippy) never create `$out`, so ninja re-runs them every time.
 	n.rule(
 		'cargo',
 		command=[
@@ -368,12 +385,6 @@ def main(ctx: common.Context, args) -> int:
 			ninja.RawStr('$target_dir'),
 			*locked,
 			ninja.RawStr('$extra_args'),
-			ninja.AND,
-			'cd',
-			str(build_dir),
-			ninja.AND,
-			'touch',
-			ninja.VAR_OUT,
 		],
 		description='Running cargo $subcommand',
 		pool='console',

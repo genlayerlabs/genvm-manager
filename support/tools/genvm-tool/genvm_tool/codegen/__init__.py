@@ -1,4 +1,5 @@
-"""`genvm-tool codegen` language backends.
+"""
+`genvm-tool codegen` language backends.
 
 A single front-end (:mod:`genvm_tool.codegen.model`) parses the codegen data JSON
 into a typed model + shared string-trie; each language module renders that model.

@@ -140,3 +140,6 @@ submodule's linter reformat leak an unrelated file into a commit. Each repo's
 per-repo pre-commit hook (git-hooks.nix, in its flake) runs on the repo you
 commit in. Do not `--no-verify` (even for gitlink bumps — let the hooks run).
 Full workflow (order, pushing, `--force-with-lease` after a rebase): `/submodules`.
+
+Never include text like "bump the v0.3 gitlink". State the underlying change,
+not name the file updated

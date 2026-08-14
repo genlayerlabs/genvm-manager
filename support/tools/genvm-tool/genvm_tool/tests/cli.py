@@ -13,7 +13,7 @@ from pathlib import Path
 
 import genvm_tool.tests
 import genvm_tool.tests.stage
-from genvm_tool import formatter
+from genvm_tool import common, formatter
 
 from .stage.pipeline import (
 	CollectionStage,
@@ -131,12 +131,15 @@ def _show_execution_plan(
 					immediate_await_batches.add(action.id)
 
 	def _case_info(case: genvm_tool.tests.test.Case) -> str | dict:
+		info: dict[str, typing.Any] = {}
 		if case.description.depends_on:
-			return {
-				'name': case.description.name,
-				'depends_on': sorted(case.description.depends_on),
-			}
-		return case.description.name
+			info['depends_on'] = sorted(case.description.depends_on)
+		if case.description.permits > 1 and not case.description.console_pool:
+			# Otherwise a case holding a third of the pool looks like any other one
+			info['permits'] = case.description.permits
+		if not info:
+			return case.description.name
+		return {'name': case.description.name, **info}
 
 	plan_items = []
 	for action in actions:
@@ -334,6 +337,8 @@ async def workflow_services(
 		info: dict[str, typing.Any] = {'name': svc.name}
 		if svc.depends_on:
 			info['depends_on'] = [dep.name for dep in svc.depends_on]
+		if svc.semaphores:
+			info['semaphores'] = sorted(semaphore.name for semaphore in svc.semaphores)
 		services_info.append(info)
 
 	shared_context.printer.put(
@@ -376,7 +381,8 @@ def run(
 	root: Path,
 	suite: typing.Callable,
 ) -> None:
-	"""Run the test runner under genvm-tool's shared ``logger`` / ``printer``.
+	"""
+	Run the test runner under genvm-tool's shared ``logger`` / ``printer``.
 
 	``argv`` is everything after ``genvm-tool test`` — the runner's own
 	``run`` / ``show ...`` subcommands plus suite-provided filter flags. The
@@ -400,14 +406,7 @@ def run(
 		suite=suite,
 	)
 
-	for p in shared_context.config.get('extra_python_paths', []):
-		extra_path = Path(p)
-		if not extra_path.is_absolute():
-			extra_path = shared_context.root_dir / extra_path
-		extra_path_str = str(extra_path)
-		if extra_path_str not in sys.path:
-			logger.debug('adding extra python path', path=extra_path)
-			sys.path.append(extra_path_str)
+	common.add_extra_python_paths(shared_context.root_dir)
 
 	parser_result = create_parser()
 

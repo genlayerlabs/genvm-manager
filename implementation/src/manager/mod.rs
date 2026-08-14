@@ -29,11 +29,122 @@ pub struct Config {
     pub base: genvm_common::BaseConfig,
     pub manifest_path: String,
 
-    pub permits: Option<usize>,
+    /// Absent or null keeps every default.
+    pub permits: Option<PermitsConfig>,
     #[serde(default = "default_execution_retention")]
     pub execution_retention: run::ManagerDuration,
     #[serde(default = "default_max_message_bytes")]
     pub max_message_bytes: usize,
+}
+
+/// Concurrency budget, denominated in gigabytes of RAM.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PermitsConfig {
+    /// Total pool; null derives it from free memory.
+    #[serde(default)]
+    pub total: Option<usize>,
+    #[serde(default = "default_permits_per_gib")]
+    pub per_gib: PermitsPerGig,
+    #[serde(default = "default_permits_sync")]
+    pub sync: usize,
+    #[serde(default = "default_permits_nondet")]
+    pub nondet: usize,
+}
+
+impl Default for PermitsConfig {
+    fn default() -> Self {
+        Self {
+            total: None,
+            per_gib: default_permits_per_gib(),
+            sync: default_permits_sync(),
+            nondet: default_permits_nondet(),
+        }
+    }
+}
+
+/// Permits handed out per gibibyte of free memory.
+///
+/// A ratio rather than a float: `1/4` is exactly one permit per four gibibytes,
+/// and a config saying so must not depend on how a decimal rounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PermitsPerGig(num_rational::Ratio<u64>);
+
+impl PermitsPerGig {
+    /// Floors, so a pool is never wider than the memory backing it.
+    pub fn apply(self, gigabytes: usize) -> usize {
+        let scaled = gigabytes as u128 * *self.0.numer() as u128 / *self.0.denom() as u128;
+        scaled.min(usize::MAX as u128) as usize
+    }
+}
+
+impl std::str::FromStr for PermitsPerGig {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let (numer, denom) = match s.split_once('/') {
+            Some((numer, denom)) => (numer.trim(), denom.trim()),
+            None => (s.trim(), "1"),
+        };
+        let numer: u64 = numer
+            .parse()
+            .with_context(|| format!("invalid permits per_gib numerator in {s:?}"))?;
+        let denom: u64 = denom
+            .parse()
+            .with_context(|| format!("invalid permits per_gib denominator in {s:?}"))?;
+        anyhow::ensure!(numer > 0, "permits per_gib must be positive, got {s:?}");
+        anyhow::ensure!(denom > 0, "permits per_gib must not divide by zero");
+
+        Ok(Self(num_rational::Ratio::new(numer, denom)))
+    }
+}
+
+impl std::fmt::Display for PermitsPerGig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.0.numer(), self.0.denom())
+    }
+}
+
+impl serde::Serialize for PermitsPerGig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PermitsPerGig {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        /// `1` and `"1/4"` are both natural spellings in yaml
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Integer(u64),
+            Str(String),
+        }
+
+        use std::str::FromStr as _;
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Integer(n) => Self::from_str(&n.to_string()),
+            Repr::Str(s) => Self::from_str(&s),
+        }
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+fn default_permits_per_gib() -> PermitsPerGig {
+    PermitsPerGig(num_rational::Ratio::from_integer(1))
+}
+
+fn default_permits_sync() -> usize {
+    4
+}
+
+fn default_permits_nondet() -> usize {
+    8
 }
 
 fn default_execution_retention() -> run::ManagerDuration {
@@ -129,6 +240,13 @@ fn internal_error(error: anyhow::Error) -> Response {
     error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{:#}", error))
 }
 
+/// A malformed body, query or header is the caller's fault: it answers 400 and
+/// stays out of the error log, which is for this process' own failures.
+fn bad_request(error: anyhow::Error) -> Response {
+    log_debug!(err:ah = &error; "bad request");
+    error_response(StatusCode::BAD_REQUEST, format!("{:#}", error))
+}
+
 fn unwrap_all_anyhow<R: IntoResponse>(result: anyhow::Result<R>) -> Response {
     match result {
         Ok(response) => response.into_response(),
@@ -189,7 +307,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  body: Bytes| async move {
                     let body = match parse_json_body(body) {
                         Ok(body) => body,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_module_start(ctx, body).await)
                 },
@@ -202,7 +320,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  body: Bytes| async move {
                     let body = match parse_json_body(body) {
                         Ok(body) => body,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_module_stop(ctx, body).await)
                 },
@@ -215,7 +333,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  body: Bytes| async move {
                     let body = match parse_json_body(body) {
                         Ok(body) => body,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_module_restart(ctx, body).await)
                 },
@@ -237,7 +355,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  contract_code: Bytes| async move {
                     let deployment_timestamp = match deployment_timestamp(&headers) {
                         Ok(deployment_timestamp) => deployment_timestamp,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(
                         handlers::handle_contract_detect_version(
@@ -257,7 +375,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  body: Bytes| async move {
                     let body = match parse_json_body(body) {
                         Ok(body) => body,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_set_log_level(ctx, body).await)
                 },
@@ -279,7 +397,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  body: Bytes| async move {
                     let body = match parse_json_body(body) {
                         Ok(body) => body,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_set_permits(ctx, body).await)
                 },
@@ -296,7 +414,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                     };
                     let query = match parse_query(query) {
                         Ok(query) => query,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_genvm_shutdown(ctx, genvm_id, query).await)
                 },
@@ -310,7 +428,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                     };
                     let query = match parse_query(query) {
                         Ok(query) => query,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(
                         handlers::handle_genvm_status(ctx, genvm_id, query).await,
@@ -329,7 +447,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                     };
                     let query = match parse_query(query) {
                         Ok(query) => query,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_genvm_artifact(ctx, genvm_id, query).await)
                 },
@@ -342,7 +460,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  body: Bytes| async move {
                     let body = match parse_json_body(body) {
                         Ok(body) => body,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_llm_check(ctx, body).await)
                 },
@@ -355,7 +473,7 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                  query: std::result::Result<Query<handlers::DescribeVmErrorRequest>, QueryRejection>| async move {
                     let query = match parse_query(query) {
                         Ok(query) => query,
-                        Err(error) => return internal_error(error),
+                        Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_describe_vm_error(ctx, query).await)
                 },

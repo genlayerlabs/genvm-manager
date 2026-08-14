@@ -1,4 +1,5 @@
-"""Permits semaphore system test.
+"""
+Permits semaphore system test.
 
 Tests that the manager's permit semaphore correctly blocks new genvm executions
 when all permits are exhausted. Evaluated by ``collection.Context.collect_dir``;
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import aiohttp
+import genvm_tool.io as gvm_io
 import genvm_tool.tests
 import genvm_tool.tests.stage.collection
 import origin.base_host as base_host
@@ -49,6 +51,7 @@ class PermitsTestCase(genvm_tool.tests.test.Case):
 	description: genvm_tool.tests.test.Description
 	manager_service: genvm_tool.tests.stage.collection.Service
 	shared: genvm_tool.tests.SharedContext
+	method: str
 
 	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
 		return [PermitsTestStep(self)]
@@ -70,8 +73,13 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 		shared = self._case.shared
 		logger = shared.logger
 
-		N = 1
-		num_permits = N * 2  # minimum enforced by manager is 2
+		# the manager refuses to go below the most expensive run, so take that
+		# many permits and fill them with sync runs exactly
+		costs = (await self._get_status(manager_uri))['permits']
+		sync_cost = costs['per_sync_run']
+		min_permits = max(sync_cost, costs['per_nondet_run'])
+		N = -(-min_permits // sync_cost)
+		num_permits = N * sync_cost
 
 		original_permits = await self._get_permits(manager_uri)
 		genvm_ids: list[str] = []
@@ -80,23 +88,21 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 		shut_downer = asyncio.Event()
 		async with base_host.ManagerClient(manager_uri) as manager_client:
 			try:
-				# Set permits to N * 2
 				await self._set_permits(manager_uri, num_permits)
 				logger.debug('permits set', permits=num_permits)
 
-				# Start N*2 background genvms (each sync, 1 permit)
+				# Start N background genvms, each sync
 				tmp_dir = shared.artifacts_dir / 'permits_test'
 				tmp_dir.mkdir(parents=True, exist_ok=True)
 
 				code = BUSY_CONTRACT.read_bytes()
 
-				for i in range(num_permits):
+				for i in range(N):
 					sock_path = f'/tmp/genvm-test-permits-{i}.sock'
 					storage_path = tmp_dir / f'storage_{i}.pickle'
 
 					# Create empty storage
-					with open(storage_path, 'wb') as f:
-						pickle.dump(MockStorage(), f)
+					await gvm_io.write_file_bytes(storage_path, pickle.dumps(MockStorage()))
 
 					ctx = _TestContext(logger)
 					host = MockHost(
@@ -140,23 +146,22 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 				logger.debug('all permits consumed, testing blocking behavior')
 
 				# Try to start another genvm; it should block on semaphore.
-				blocked = await self._assert_blocks(manager_uri, code)
-				if not blocked:
-					return genvm_tool.tests.test.Result(
-						passed=False,
-						context={'reason': 'POST /genvm/run did not block when permits exhausted'},
-						elapsed_seconds=0,
+				if self._case.method == 'http-blocks':
+					passed = await self._assert_blocks(manager_uri, code)
+					reason = 'POST /genvm/run did not block when permits exhausted'
+				elif self._case.method == 'socket-cancel':
+					passed = await self._assert_socket_cancel_queued(
+						manager_uri, manager_client, code
 					)
-
-				socket_cancelled = await self._assert_socket_cancel_queued(
-					manager_uri, manager_client, code
-				)
-				if not socket_cancelled:
+					reason = (
+						'socket cancel while queued consumed a permit or missed terminal event'
+					)
+				else:
+					raise ValueError(f'unknown permits test method: {self._case.method}')
+				if not passed:
 					return genvm_tool.tests.test.Result(
 						passed=False,
-						context={
-							'reason': 'socket cancel while queued consumed a permit or missed terminal event'
-						},
+						context={'reason': reason},
 						elapsed_seconds=0,
 					)
 
@@ -340,16 +345,18 @@ def collect(
 	*,
 	manager_service: genvm_tool.tests.stage.collection.Service,
 ) -> None:
-	desc = genvm_tool.tests.test.Description(
-		name='tests/system/permits',
-		needed_services=frozenset({manager_service}),
-		tags=frozenset({'integration', 'stable', 'permits'}),
-		console_pool=True,
-	)
-	ctx.add_case(
-		PermitsTestCase(
-			description=desc,
-			manager_service=manager_service,
-			shared=ctx.shared,
+	for slug in ('http-blocks', 'socket-cancel'):
+		desc = genvm_tool.tests.test.Description(
+			name=f'tests/system/permits/{slug}',
+			needed_services=frozenset({manager_service}),
+			tags=frozenset({'integration', 'stable', 'feature-permit'}),
+			console_pool=True,
 		)
-	)
+		ctx.add_case(
+			PermitsTestCase(
+				description=desc,
+				manager_service=manager_service,
+				shared=ctx.shared,
+				method=slug,
+			)
+		)

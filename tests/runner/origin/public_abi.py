@@ -11,7 +11,6 @@ class ResultCode(IntEnum):
 	RETURN = 0
 	USER_ERROR = 1
 	VM_ERROR = 2
-	INTERNAL_ERROR = 3
 
 
 class StorageType(IntEnum):
@@ -30,16 +29,6 @@ class Permissions(IntEnum):
 	CAN_USE_BALANCE_FOR_MESSAGE_FEES = 1
 
 
-class _MemoryLimiterConsts(typing.NamedTuple):
-	TABLE_ENTRY: int = 64
-	FILE_MAPPING: int = 256
-	FD_ALLOCATION: int = 96
-	RUNNER_LOAD_COST: int = 4096
-	VM_SPAWN_COST: int = 134217728
-
-memory_limiter_consts: typing.Final = _MemoryLimiterConsts()
-
-
 class _RootOffsets(typing.NamedTuple):
 	MAJOR: int = 0
 	CONTRACT: int = 1
@@ -52,23 +41,38 @@ class _RootOffsets(typing.NamedTuple):
 root_offsets: typing.Final = _RootOffsets()
 
 
-class _TopLimits(typing.NamedTuple):
-	NONDET_BLOCKS: int = 4096
-	LOCKED_SLOTS: int = 256
-	UPGRADERS: int = 32
-	VM_RECURSION: int = 512
-	WEB_REQUEST_MIN_SPACE: int = 65536
-	WEB_RENDER_MIN_SPACE: int = 134217728
-	MAX_FDS: int = 1024
-	WASM_CALL_DEPTH: int = 1024
-	WASM_STACK_VALUE_SLOTS: int = 65535
-
-top_limits: typing.Final = _TopLimits()
-
-
 class SpecialMethod(StrEnum):
 	GET_SCHEMA = '#get-schema'
 	ERRORED_MESSAGE = '#error'
+
+class _VmErrorLeaderFaultNondetOutput:
+	@staticmethod
+	def absent() -> 'VmError':
+		return VmError('leader_fault nondet_output absent')
+	@staticmethod
+	def malformed() -> 'VmError':
+		return VmError('leader_fault nondet_output malformed')
+	@staticmethod
+	def uses_this_error() -> '_VmErrorLeaderFaultNondetOutputUsesThisError':
+		return _VmErrorLeaderFaultNondetOutputUsesThisError()
+	@staticmethod
+	def extra() -> '_VmErrorLeaderFaultNondetOutputExtra':
+		return _VmErrorLeaderFaultNondetOutputExtra()
+
+class _VmErrorLeaderFaultNondetOutputUsesThisError:
+	@staticmethod
+	def val_str(v: str) -> 'VmError':
+		return VmError(f'leader_fault nondet_output uses_this_error {v}')
+
+class _VmErrorLeaderFaultNondetOutputExtra:
+	@staticmethod
+	def val_str(v: str) -> 'VmError':
+		return VmError(f'leader_fault nondet_output extra {v}')
+
+class _VmErrorLeaderFault:
+	@staticmethod
+	def nondet_output() -> '_VmErrorLeaderFaultNondetOutput':
+		return _VmErrorLeaderFaultNondetOutput()
 
 class _VmErrorWasmTrap:
 	@staticmethod
@@ -195,6 +199,14 @@ class _VmErrorEvm:
 	def reverted() -> 'VmError':
 		return VmError('evm reverted')
 
+class _VmErrorInvalidContractRunner:
+	@staticmethod
+	def absent() -> 'VmError':
+		return VmError('invalid_contract runner absent')
+	@staticmethod
+	def malformed() -> 'VmError':
+		return VmError('invalid_contract runner malformed')
+
 class _VmErrorInvalidContractWasm:
 	@staticmethod
 	def validating() -> 'VmError':
@@ -211,17 +223,14 @@ class _VmErrorInvalidContract:
 	def val() -> 'VmError':
 		return VmError('invalid_contract')
 	@staticmethod
-	def absent_runner_comment() -> 'VmError':
-		return VmError('invalid_contract absent_runner_comment')
-	@staticmethod
 	def not_utf8_text() -> 'VmError':
 		return VmError('invalid_contract not_utf8_text')
 	@staticmethod
-	def malformed_runner() -> 'VmError':
-		return VmError('invalid_contract malformed_runner')
-	@staticmethod
 	def major_mismatch() -> 'VmError':
 		return VmError('invalid_contract major_mismatch')
+	@staticmethod
+	def runner() -> '_VmErrorInvalidContractRunner':
+		return _VmErrorInvalidContractRunner()
 	@staticmethod
 	def wasm() -> '_VmErrorInvalidContractWasm':
 		return _VmErrorInvalidContractWasm()
@@ -241,11 +250,14 @@ class VmError:
 	def timeout() -> 'VmError':
 		return VmError('timeout')
 	@staticmethod
-	def absent_leader_nondet_output() -> 'VmError':
-		return VmError('absent_leader_nondet_output')
+	def malformed_entry() -> 'VmError':
+		return VmError('malformed_entry')
 	@staticmethod
-	def host_forbidden() -> 'VmError':
-		return VmError('host_forbidden')
+	def forbidden() -> 'VmError':
+		return VmError('forbidden')
+	@staticmethod
+	def leader_fault() -> '_VmErrorLeaderFault':
+		return _VmErrorLeaderFault()
 	@staticmethod
 	def exit_code() -> '_VmErrorExitCode':
 		return _VmErrorExitCode()
@@ -264,6 +276,12 @@ class VmError:
 	@staticmethod
 	def invalid_contract() -> '_VmErrorInvalidContract':
 		return _VmErrorInvalidContract()
+	def internal(self) -> 'VmError':
+		assert ' # ' not in self.value
+		return VmError(f'{self.value} # internal')
+	def external(self) -> 'VmError':
+		assert ' # ' not in self.value
+		return VmError(f'{self.value} # external')
 
 
 

@@ -11,7 +11,7 @@ let
   isMacos = name-target == "arm64-macos";
 in
 pkgs.stdenvNoCC.mkDerivation {
-  name = "lsqlite3-${name-target}";
+  name = "genvm-lsqlite3-${name-target}";
 
   src = lsqlite3-src;
 

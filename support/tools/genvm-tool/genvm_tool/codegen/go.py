@@ -1,4 +1,5 @@
-"""Go backend for ``genvm-tool codegen``.
+"""
+Go backend for ``genvm-tool codegen``.
 
 Ports the standalone go generator (trie builders emit flat ``func``s rather than
 structs). The package name is configurable via ``--go-package`` since the
@@ -73,8 +74,17 @@ def render(defs: list[Definition], *, go_package: str = 'genvm', **_opts) -> str
 	buf.append(f'package {go_package}\n')
 
 	needs_fmt = any(isinstance(d, StrTrie) and _has_param(d.root) for d in defs)
-	if needs_fmt:
-		buf.append('\nimport "fmt"\n')
+	needs_strings = any(isinstance(d, StrTrie) and d.suffix is not None for d in defs)
+	imports = [
+		n for n, needed in (('fmt', needs_fmt), ('strings', needs_strings)) if needed
+	]
+	if len(imports) == 1:
+		buf.append(f'\nimport "{imports[0]}"\n')
+	elif imports:
+		buf.append('\nimport (\n')
+		for name in imports:
+			buf.append(f'\t"{name}"\n')
+		buf.append(')\n')
 
 	for d in defs:
 		if isinstance(d, Enum):
@@ -99,6 +109,14 @@ def render(defs: list[Definition], *, go_package: str = 'genvm', **_opts) -> str
 			root_camel = to_camel(d.name)
 			buf.append(f'\ntype {root_camel} string\n\n')
 			_trie_inner(d.root, root_camel, buf)
+			for name, _parts in d.suffix.leaves if d.suffix else []:
+				# Mirrors the rust/python guard: a value carries at most one detail.
+				buf.append(
+					f'func (v {root_camel}) {to_camel(name)}() {root_camel} {{ '
+					f'if strings.Contains(string(v), " # ") {{ '
+					f'panic("a value carries at most one detail") }}; '
+					f'return v + {_dump(f" # {name}")} }}\n'
+				)
 	return ''.join(buf)
 
 

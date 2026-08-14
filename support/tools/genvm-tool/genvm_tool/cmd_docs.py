@@ -1,4 +1,5 @@
-"""`genvm-tool docs` — list the contributor documentation.
+"""
+`genvm-tool docs` — list the contributor documentation.
 
 Walks each quadrant of `docs/contributing/` (tutorial, how-to, explanation), reads
 every page's one-line description from that quadrant's `README.md` index, and prints

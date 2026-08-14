@@ -1,0 +1,16 @@
+{
+    "foo": [
+        "b    [1,ar",
+    123,
+        -123,
+        -1e10,
+        1e20,
+          [1, 2, 3]
+    ],
+    "bar": [
+        "",
+        "mbbbbbѐусские б˃квы 日本",
+        "mbbbbbbbbbbbbbbaz\t\uabbbbb",
+        "mbbbbbbbbbbbbbbaz\t\\uabbbbb"
+    ]
+}

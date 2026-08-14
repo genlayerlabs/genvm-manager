@@ -23,7 +23,8 @@ monorepo = json.loads(genvm_root_dir.joinpath('.genvm-monorepo-root').read_text(
 
 
 def _newest_line() -> str:
-	"""The newest active executor line, e.g. `v0.3`.
+	"""
+	The newest active executor line, e.g. `v0.3`.
 
 	Decided by version order, NOT by position: `active-versions` is hand-ordered
 	and `genvm-tool check-versions bump` APPENDS the new line, so after the next
@@ -318,7 +319,8 @@ latest_runners = res.get(latest_ver, {}) if latest_ver else {}
 
 
 def build_runner_version_list(rid):
-	"""Build list of (hash, version_range_str) for previous versions of a runner.
+	"""
+	Build list of (hash, version_range_str) for previous versions of a runner.
 
 	Groups consecutive versions sharing the same hash into ranges.
 	Skips the current (latest) hash.

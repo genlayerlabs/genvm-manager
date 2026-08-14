@@ -152,6 +152,7 @@ pub enum ResultCode {
     UserError = 1,
     VmError = 2,
     InternalError = 3,
+    FatalVmError = 4,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -347,9 +348,12 @@ where
         enc.push_str(match kind {
             ResultCode::Return => "Return",
             ResultCode::UserError => "UserError",
-            // An internal error is never handed to a caller as a result, so it
-            // shares the `VMError` label rather than inventing a fourth one.
-            ResultCode::VmError | ResultCode::InternalError => "VMError",
+            // Neither an internal error nor fatality is part of the outcome
+            // itself: the first is never handed to a caller as a result, and the
+            // second only says the caller may not catch it. The value folded is
+            // the same `vm_error` either way, so a timeout hashes alike whether
+            // or not the line that served it can raise fatality.
+            ResultCode::VmError | ResultCode::InternalError | ResultCode::FatalVmError => "VMError",
         })?;
 
         enc.push_map_k("result")?;

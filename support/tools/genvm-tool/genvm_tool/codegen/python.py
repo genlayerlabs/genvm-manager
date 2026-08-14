@@ -1,4 +1,5 @@
-"""Python backend for ``genvm-tool codegen`` (ports the old ``py.rb`` template).
+"""
+Python backend for ``genvm-tool codegen`` (ports the old ``py.rb`` template).
 
 Output is byte-for-byte identical to the previous ruby generator (tab-indented,
 single-quoted), so regeneration produces no diff.
@@ -83,6 +84,11 @@ def _trie(t: StrTrie, buf: list[str]) -> None:
 		buf.append('\t@staticmethod\n')
 		buf.append(f"\tdef {head.lower()}() -> '_{root_name}{child.suffix}':\n")
 		buf.append(f'\t\treturn _{root_name}{child.suffix}()\n')
+	if t.suffix is not None:
+		for name, _parts in t.suffix.leaves:
+			buf.append(f"\tdef {name.lower()}(self) -> '{root_name}':\n")
+			buf.append("\t\tassert ' # ' not in self.value\n")
+			buf.append(f"\t\treturn {root_name}(f'{{self.value}} # {name}')\n")
 	buf.append('\n')
 
 

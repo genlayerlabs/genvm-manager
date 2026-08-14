@@ -29,13 +29,6 @@ vm_error
 
 Value: ``2``
 
-.. _gvm-def-enum-value-result-code-internal-error:
-
-internal_error
-~~~~~~~~~~~~~~
-
-Value: ``3``
-
 .. _gvm-def-enum-storage-type:
 
 storage_type
@@ -106,48 +99,6 @@ can_use_balance_for_message_fees
 
 Value: ``1``
 
-.. _gvm-def-consts-memory-limiter-consts:
-
-memory_limiter_consts
----------------------
-
-Type: u32
-
-.. _gvm-def-consts-value-memory-limiter-consts-table-entry:
-
-table_entry
-~~~~~~~~~~~
-
-Value: ``64``
-
-.. _gvm-def-consts-value-memory-limiter-consts-file-mapping:
-
-file_mapping
-~~~~~~~~~~~~
-
-Value: ``256``
-
-.. _gvm-def-consts-value-memory-limiter-consts-fd-allocation:
-
-fd_allocation
-~~~~~~~~~~~~~
-
-Value: ``96``
-
-.. _gvm-def-consts-value-memory-limiter-consts-runner-load-cost:
-
-runner_load_cost
-~~~~~~~~~~~~~~~~
-
-Value: ``4096``
-
-.. _gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost:
-
-vm_spawn_cost
-~~~~~~~~~~~~~
-
-Value: ``134217728``
-
 .. _gvm-def-consts-root-offsets:
 
 root_offsets
@@ -204,76 +155,6 @@ permissions
 
 Value: ``37``
 
-.. _gvm-def-consts-top-limits:
-
-top_limits
-----------
-
-Type: u32
-
-.. _gvm-def-consts-value-top-limits-nondet-blocks:
-
-nondet_blocks
-~~~~~~~~~~~~~
-
-Value: ``4096``
-
-.. _gvm-def-consts-value-top-limits-locked-slots:
-
-locked_slots
-~~~~~~~~~~~~
-
-Value: ``256``
-
-.. _gvm-def-consts-value-top-limits-upgraders:
-
-upgraders
-~~~~~~~~~
-
-Value: ``32``
-
-.. _gvm-def-consts-value-top-limits-vm-recursion:
-
-vm_recursion
-~~~~~~~~~~~~
-
-Value: ``512``
-
-.. _gvm-def-consts-value-top-limits-web-request-min-space:
-
-web_request_min_space
-~~~~~~~~~~~~~~~~~~~~~
-
-Value: ``65536``
-
-.. _gvm-def-consts-value-top-limits-web-render-min-space:
-
-web_render_min_space
-~~~~~~~~~~~~~~~~~~~~
-
-Value: ``134217728``
-
-.. _gvm-def-consts-value-top-limits-max-fds:
-
-max_fds
-~~~~~~~
-
-Value: ``1024``
-
-.. _gvm-def-consts-value-top-limits-wasm-call-depth:
-
-wasm_call_depth
-~~~~~~~~~~~~~~~
-
-Value: ``1024``
-
-.. _gvm-def-consts-value-top-limits-wasm-stack-value-slots:
-
-wasm_stack_value_slots
-~~~~~~~~~~~~~~~~~~~~~~
-
-Value: ``65535``
-
 .. _gvm-def-enum-special-method:
 
 special_method
@@ -307,10 +188,34 @@ Type: str_trie
 ``timeout``
 ~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-absent-leader-nondet-output:
+.. _gvm-def-str-trie-value-vm-error-malformed-entry:
 
-``absent_leader_nondet_output``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``malformed_entry``
+~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-absent:
+
+``leader_fault nondet_output absent``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed:
+
+``leader_fault nondet_output malformed``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-uses-this-error:
+
+``leader_fault nondet_output uses_this_error``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Param: str
+
+.. _gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-extra:
+
+``leader_fault nondet_output extra``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Param: str
 
 .. _gvm-def-str-trie-value-vm-error-exit-code:
 
@@ -484,10 +389,10 @@ Param: i32
 ``fee too_many_rounds``
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-host-forbidden:
+.. _gvm-def-str-trie-value-vm-error-forbidden:
 
-``host_forbidden``
-~~~~~~~~~~~~~~~~~~
+``forbidden``
+~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-evm-reverted:
 
@@ -499,20 +404,20 @@ Param: i32
 ``invalid_contract``
 ~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-invalid-contract-absent-runner-comment:
+.. _gvm-def-str-trie-value-vm-error-invalid-contract-runner-absent:
 
-``invalid_contract absent_runner_comment``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``invalid_contract runner absent``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-invalid-contract-runner-malformed:
+
+``invalid_contract runner malformed``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-invalid-contract-not-utf8-text:
 
 ``invalid_contract not_utf8_text``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. _gvm-def-str-trie-value-vm-error-invalid-contract-malformed-runner:
-
-``invalid_contract malformed_runner``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-invalid-contract-major-mismatch:
 
@@ -535,6 +440,16 @@ This error remains terminal for top-level and runner loads. During :ref:`gvm-def
 
 ``invalid_contract wasm entrypoint``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-detail-vm-error-internal:
+
+``# internal``
+~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-detail-vm-error-external:
+
+``# external``
+~~~~~~~~~~~~~~
 
 .. _gvm-def-const-event-max-topics:
 

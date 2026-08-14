@@ -47,7 +47,8 @@ genvm_root_dir = Path(__file__).parent.parent
 
 
 def requirements_for(base: Path) -> Path:
-	"""The requirements to install into the venv.
+	"""
+	The requirements to install into the venv.
 
 	lief is a heavy binary wheel whose only job is rewriting the ELF interpreter,
 	so `--use-patchelf` drops it — patchelf does that instead. The venv is keyed

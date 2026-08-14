@@ -1,4 +1,5 @@
-"""Assemble the manager's runtime manifest (`data/manifest.yaml`).
+"""
+Assemble the manager's runtime manifest (`data/manifest.yaml`).
 
 The manager reads this YAML at startup: `executor_versions` maps each active
 executor version to its `available_after` timestamp, alongside the runner
@@ -33,7 +34,8 @@ def _executor_manifest(root: Path, bare_version: str) -> dict:
 
 
 def build(root: Path):
-	"""Return the manifest document: `executor_versions` followed by the static
+	"""
+	Return the manifest document: `executor_versions` followed by the static
 	base fields. Keeps ruamel's round-trip type so comments/quoting in the base
 	file survive the dump."""
 	executor_versions: dict = {}

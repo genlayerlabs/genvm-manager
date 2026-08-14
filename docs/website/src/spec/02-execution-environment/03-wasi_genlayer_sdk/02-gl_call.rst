@@ -296,7 +296,9 @@ meta-properties, including the *param* ``runner`` and *param*
 
 The caller receives the sandbox result (:ref:`gvm-def-subvm-result-encoding`)
 and may handle both :ref:`gvm-def-vm-error` and :ref:`gvm-def-user-error`;
-storage writes performed by the sandbox are not reverted on error.
+storage writes performed by the sandbox are not reverted on error. If the
+sandbox terminates with :ref:`gvm-def-fatal-vm-error`, the caller terminates
+with the same fatal VM error instead.
 
 .. _gvm-def-gl-call-register-runner:
 
@@ -573,6 +575,21 @@ Payload
 Causes VM to exit with ``ContractReturn``. Encodes return value using
 :ref:`gvm-def-calldata-encoding` format.
 
+.. _gvm-def-gl-call-observable-discretion:
+
+Implementation Discretion
+-------------------------
+
+Where a message below says an implementation may ignore it, that discretion
+covers only the side effect the message asks for — writing a log line,
+recording a timing. The **value returned to the guest** is never at an
+implementation's discretion: it is fixed by this specification for the mode the
+call is made in, and such a call MUST NOT fail. A message whose result differs
+between two conformant implementations would make
+:ref:`gvm-def-det-mode` execution diverge across validators; widening or
+narrowing what a message returns therefore requires a new
+:ref:`GenVM version <gvm-def-contract-version>`.
+
 ``Trace.Message`` Message
 -------------------------
 
@@ -595,13 +612,14 @@ Payload
 
 .. note::
 
-   Implementations may choose to ignore this message and return an error.
+   Whether anything is logged is implementation-defined (see
+   :ref:`gvm-def-gl-call-observable-discretion`); the call returns no value and
+   always succeeds.
 
 Requirements
 ~~~~~~~~~~~~
 
 #. GenVM version 0.1.10 or higher
-#. :term:`GenVM` implementation is allowed ignore this message
 
 .. _tracing-runtime-microsec:
 
@@ -622,13 +640,14 @@ Payload
 
 .. note::
 
-   Implementations may choose to ignore this message and return an error.
+   The returned value is not at an implementation's discretion — in
+   :ref:`gvm-def-det-mode` it is exactly ``0``, and the call never fails (see
+   :ref:`gvm-def-gl-call-observable-discretion`).
 
 Requirements
 ~~~~~~~~~~~~
 
 #. GenVM version 0.1.10 or higher
-#. :term:`GenVM` implementation is allowed ignore this message
 
 ``Yield`` Message
 -----------------
@@ -646,13 +665,14 @@ Payload
 
 .. note::
 
-   Implementations may choose to ignore this message.
+   Whether the implementation actually yields anything is implementation-defined
+   (see :ref:`gvm-def-gl-call-observable-discretion`); the call returns no value
+   and always succeeds.
 
 Requirements
 ~~~~~~~~~~~~
 
 #. GenVM version 0.3.0 or higher
-#. :term:`GenVM` implementation is allowed ignore this message
 
 .. _get-timestamp:
 

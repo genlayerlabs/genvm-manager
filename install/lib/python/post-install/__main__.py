@@ -324,7 +324,8 @@ _MACHO_MAGICS = frozenset(
 
 
 def detect_executable_platform(path: Path) -> BinaryOS | None:
-	"""Sniff a binary's header to identify its target OS: ELF -> linux, Mach-O
+	"""
+	Sniff a binary's header to identify its target OS: ELF -> linux, Mach-O
 	(any variant/byte order) -> macos. Returns None for anything unrecognized
 	(wrapper scripts, truncated/empty files, unknown formats)."""
 	try:
@@ -340,7 +341,8 @@ def detect_executable_platform(path: Path) -> BinaryOS | None:
 
 
 def check_executable_platform(path: Path):
-	"""Refuse a wrong-OS binary before we trust it. A bad release once shipped a
+	"""
+	Refuse a wrong-OS binary before we trust it. A bad release once shipped a
 	macOS (Mach-O) executor inside a linux tarball; the missing-only download
 	guard accepted it and it surfaced as an opaque `Exec format error` at
 	runtime. Here we error on a clear OS mismatch instead. Unrecognized formats
@@ -435,7 +437,7 @@ def _download_template(descr: str, templates: list[str], vars: dict[str, str]) -
 
 
 def download_runners_from_json(
-	file: str | Path, runners_dir: Path, verify_hash: bool = True
+	file: str | Path, runners_dir: Path, extension: str, verify_hash: bool = True
 ):
 	# `verify_hash` is disabled for the v0.2.x legacy line, whose registry hashes
 	# use Nix base32 rather than the Crockford scheme `runner_check_bytes`
@@ -454,7 +456,7 @@ def download_runners_from_json(
 
 	for name, hashes in all_runners.items():
 		for hash in hashes:
-			cur_dst = runners_dir.joinpath(name, hash[:2], hash[2:] + '.tar')
+			cur_dst = runners_dir.joinpath(name, hash[:2], hash[2:] + '.' + extension)
 
 			if cur_dst.exists():
 				if not verify_hash:
@@ -476,6 +478,7 @@ def download_runners_from_json(
 					'hash': hash,
 					'hash_0_2': hash[:2],
 					'hash_2_': hash[2:],
+					'ext': extension,
 				},
 			)
 			if verify_hash and not runner_check_bytes(data, hash):
@@ -486,7 +489,8 @@ def download_runners_from_json(
 
 
 def download_executor(executor_version: str):
-	"""Fetch an executor line from its own release and unpack it at the install root.
+	"""
+	Fetch an executor line from its own release and unpack it at the install root.
 
 	Since the repo split the manager release carries no executors: each line is
 	released separately, under its own executor-version. The tarball is laid out
@@ -578,7 +582,8 @@ def process_executor_version(executor_version: str):
 		# root (executor/<version>/legacy-runners, see its genvm.yaml); every
 		# other line shares the manager-root runners/ dir. v0.2.x also uses a
 		# Nix-base32 registry hash this installer can't reproduce, so hash
-		# verification is left to that executor's `check` command.
+		# verification is left to that executor's `check` command, and it packages
+		# its runners as ustar rather than the zip every other line uses.
 		is_legacy = (major, minor) == (0, 2)
 		if is_legacy:
 			runners_dir = executor_root_dir.joinpath('legacy-runners')
@@ -587,6 +592,7 @@ def process_executor_version(executor_version: str):
 		download_runners_from_json(
 			executor_root_dir.joinpath('data', 'all.json'),
 			runners_dir,
+			extension='tar' if is_legacy else 'zip',
 			verify_hash=not is_legacy,
 		)
 

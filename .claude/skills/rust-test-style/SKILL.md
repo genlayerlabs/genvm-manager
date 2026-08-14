@@ -1,6 +1,6 @@
 ---
 name: rust-test-style
-description: GenVM Rust test conventions and style. Use when writing, adding, or modifying Rust tests — inline `#[cfg(test)] mod tests`, integration tests under a crate's `tests/`, helpers, assertions, and how `genvm-tool test` discovers them.
+description: Always read before writing, adding, or modifying Rust tests — where to put and how to run them.
 ---
 
 # Writing Rust tests in GenVM

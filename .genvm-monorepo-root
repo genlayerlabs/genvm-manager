@@ -8,6 +8,7 @@
         "v0.2"
     ],
     "artifacts_dir": "build/test-artifacts",
+    "tags_registry": "tests/tags.json",
     "extra_python_paths": [
         "tests/runner"
     ]

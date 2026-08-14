@@ -150,7 +150,6 @@
             mermaid-cli
           ];
           packages-py-test = with pkgs; [
-            # aflplusplus # currently we don't run fuzzing on CI
             python312
             poetry
             # pytest + plugins so `poetry run -- pytest` has the
@@ -736,7 +735,10 @@
             '';
           };
           devShells.mock-tests = pkgs.mkShell {
-            packages = packages-0 ++ packages-rust ++ packages-debug-test;
+            # `pre-commit` itself, not `enabledPackages`: the push-refs unit test
+            # drives a `language: system` hook, so it needs no hook tooling.
+            packages =
+              packages-0 ++ packages-rust ++ packages-debug-test ++ [ pre-commit-check.config.package ];
             shellHook = shell-hook-base;
           };
           devShells.full = pkgs.mkShell {

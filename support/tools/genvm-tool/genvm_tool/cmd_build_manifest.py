@@ -1,4 +1,5 @@
-"""`genvm-tool build-manifest` — generate the manager's `data/manifest.yaml`.
+"""
+`genvm-tool build-manifest` — generate the manager's `data/manifest.yaml`.
 
 Writes the runtime manifest (executor versions from the active submodules plus
 the static base fields) to `--output`. Used by release packaging; dev builds get

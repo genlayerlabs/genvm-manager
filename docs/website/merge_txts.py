@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Concatenate every ``*.txt`` under a directory into one bundle.
+"""
+Concatenate every ``*.txt`` under a directory into one bundle.
 
 Used to fold a sphinx ``-b text`` build of one section into a single
 ``_static/ai/<section>.txt`` file (the "docs for LLMs" bundles). Each entry is

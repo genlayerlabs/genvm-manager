@@ -35,6 +35,10 @@ def add_args(parser: argparse.ArgumentParser) -> None:
 	)
 
 
+def _is_tag_char(char: str) -> bool:
+	return char.isalnum() or char in '-_'
+
+
 def _tokenize_expr(expr: str) -> list[str]:
 	tokens = []
 	idx = 0
@@ -47,7 +51,7 @@ def _tokenize_expr(expr: str) -> list[str]:
 			idx += 1
 			continue
 		word_end = idx
-		while word_end < len(expr) and expr[word_end].isalpha():
+		while word_end < len(expr) and _is_tag_char(expr[word_end]):
 			word_end += 1
 		if word_end == idx:
 			raise ValueError(f'Unexpected character at position {idx}: {expr[idx]}')
@@ -72,7 +76,7 @@ def _parse_tags_expr(
 			inner = _parse_tags_expr(toks, 0)
 			return lambda tags: not inner(tags)
 		tag = toks.pop()
-		if not tag[0].isalpha():
+		if not _is_tag_char(tag[0]):
 			raise ValueError(f'Unexpected token in tags expression: {tag}')
 		if tag == 'true':
 			return lambda tags: True

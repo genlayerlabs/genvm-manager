@@ -20,7 +20,8 @@ subcommand
 
 Presets in `tests/presets/`: `release.txt` is `integration & stable & !bench`,
 `rust.txt` is `(rust | integration) & !bench & !fuzz`, `rust-fuzz.txt` is
-`rust & fuzz`, `python.txt` is `python`. `genvm-tool test show tags` lists every
+`rust & fuzz`, `python.txt` is `python & !needs-fuzz`, `python-fuzz.txt` is
+`python & needs-fuzz`. `genvm-tool test show tags` lists every
 tag, the integration ones are in [integration.md](integration.md)
 
 ## Fix–Rerun Loop
@@ -37,6 +38,8 @@ genvm-tool test run --filter-continue <name-or-path>
 
 Rust from every tracked `Cargo.toml` and its `fuzz/*.rs`, python from
 `executors/v0.3.x/runners/genlayer-py-std`, integration from each line's
-`tests/integration/`, system from `tests/system/<name>/test.py`. Collection is
-wired in the root `.genvm-tool.py`, runner configuration in
+`tests/integration/`, and system from `tests/system/`. System suites use the
+same Jsonnet collector when they execute contracts; protocol-level assertions
+use `test.py`, which must register 1 `genvm-tool` case per assertion. Collection
+is wired in the root `.genvm-tool.py`, runner configuration in
 `.genvm-monorepo-root` ([genvm-tool.md](../genvm-tool.md))

@@ -1,4 +1,5 @@
-"""Structured text/json output.
+"""
+Structured text/json output.
 
 A `Formatter` is both a leveled logger (`logger.info('msg', key=val)`) and a
 `Sink` (`printer.put('topic', **kv)`). Output is rendered either as indented
@@ -8,6 +9,7 @@ concurrently-run repos never interleave a record.
 
 import abc
 import collections.abc
+import dataclasses
 import enum
 import io
 import json
@@ -232,6 +234,10 @@ class TextFormatter(Formatter, Sink):
 	def _do_dump(self, f: io.TextIOBase, ind, data):
 		if isinstance(data, (set, frozenset, BaseException)):
 			data = _log_unwrap(data)
+		if dataclasses.is_dataclass(data):
+			data = {
+				field.name: getattr(data, field.name) for field in dataclasses.fields(data)
+			}
 
 		if isinstance(data, collections.abc.Mapping):
 			for k, v in data.items():

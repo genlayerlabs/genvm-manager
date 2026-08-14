@@ -21,6 +21,16 @@ exceeding resource limits.
 
 It uses predefined string error codes.
 
+.. _gvm-def-fatal-vm-error:
+
+.. rubric:: Fatal VM Error
+
+Every VM error is either **fatal** or not; both draw their code from the same
+set. A non-fatal error of a :term:`sub-VM` is returned to its caller as
+:ref:`gvm-def-subvm-result-encoding`. A fatal one is not catchable: the caller
+terminates with the same VM error, and propagation continues until the topmost
+VM boundary
+
 .. _gvm-def-vm-error-code:
 
 VM Error Code Format
@@ -37,9 +47,25 @@ VM Error Code Format
   separated from the public code by ``#`` surrounded by a single space on each
   side.
 
-The detail MUST be a deterministic function of execution (the full string is
-covered by the :ref:`gvm-def-execution-hash`), but its content carries no
-compatibility promise — see :ref:`gvm-def-vm-error-compat`.
+The full string, detail included, is covered by the
+:ref:`gvm-def-execution-hash`, so it must be reproducible octet for octet by
+every implementation running the same execution. A detail MUST therefore be
+composed only of:
+
+#. octets the execution itself produced or consumed — a guest-supplied string,
+   a decoded field of the calldata or of a runner description;
+#. values fixed by the WASM module or by this specification — a function or
+   memory index, a limit, a constant from :doc:`../appendix/constants`;
+#. literal text chosen by the code that raises the error.
+
+Anything the host or the runtime environment supplies MUST NOT appear, even
+indirectly. In particular: filesystem paths, operating-system error strings or
+numbers, host addresses and pointer values, elapsed times, locale-dependent or
+platform-width-dependent formatting, thread or process identifiers, and
+implementation build or version strings.
+
+Beyond that constraint the detail's content carries no compatibility promise —
+see :ref:`gvm-def-vm-error-compat`.
 
 Consumers MUST compare and match VM error codes only by the public code (the
 part before the first `` # ``). A consumer matching a known code ``P`` MUST
@@ -52,16 +78,24 @@ with further space-separated components.
 
 Represents a user-produced error in utf-8 format.
 
+.. rubric:: Effects of a Non-Returning Run
+
+Only a :ref:`gvm-def-return` carries effects. A topmost run that ends in
+:ref:`gvm-def-user-error` or :ref:`gvm-def-vm-error` reports no
+``storage_changes`` and no ``emissions``, whatever it wrote or emitted before
+failing, and its :ref:`gvm-def-execution-hash` covers those empty fields.
+
 .. _gvm-def-internal-error:
 
 InternalError
 -------------
 
-It is a special :ref:`gvm-def-vm-result` that represents an internal error in the VM,
-such as: :term:`Host` communication failures or :term:`Module` unavailability.
+Not a :ref:`gvm-def-vm-result` but the absence of one: the executor could not
+run the contract to a verdict at all, because of a :term:`Host` communication
+failure or :term:`Module` unavailability.
 
-Internal errors are not visible by the contracts. Most likely :term:`Host` will
-vote *timeout* if encounters such an error
+Internal errors are not visible by the contracts and are reported only to the
+:term:`Host`, which will most likely vote *timeout* if it encounters one
 
 Non-Deterministic Block Result Encoding
 ---------------------------------------
@@ -69,6 +103,9 @@ Non-Deterministic Block Result Encoding
 - :ref:`gvm-def-return`\: Arbitrary structure in :ref:`gvm-def-calldata-encoding`
 - :ref:`gvm-def-user-error`\: utf-8 string
 - :ref:`gvm-def-vm-error`\: utf-8 string
+
+These three are the only codes a leader-proposed non-deterministic block result
+may carry; validators treat every other byte as a malformed leader result
 
 Contract Result Encoding
 ------------------------
@@ -128,7 +165,9 @@ with the following keys (in this order):
 
 #. ``backtrace``
 #. ``data`` — the contract result value
+#. ``data_fees_consumed``
 #. ``data_fees_remaining``
+#. ``emissions`` — emitted messages and events, in emission order
 #. ``kind`` — the :ref:`gvm-def-vm-result` result code
 #. ``storage_changes``
 #. ``subvm_hashes`` — see :ref:`gvm-def-subvm-hash`
@@ -136,6 +175,11 @@ with the following keys (in this order):
 
 Two runs that agree on the deterministic result produce the same execution hash, so
 consensus can compare a single 32-byte value instead of the full result.
+
+``emissions`` covers the whole content of every emitted message and event, not
+just its metered cost: two emissions can carry different calldata or different
+event topics for the same fee, so a fee-only commitment would let nodes agree on
+the hash while committing divergent side effects
 
 .. _gvm-def-subvm-hash:
 
@@ -149,8 +193,11 @@ into a rolling SHA3-256 accumulator. The finalized accumulator is the
 For each deterministic sub-VM, its *small hash* is folded into the accumulator. The
 small hash is a SHA3-256 digest over a :ref:`gvm-def-calldata-encoding` encoded map:
 
-#. ``kind`` — the exact string ``"Return"``, ``"UserError"``, or ``"VMError"``
-#. ``result`` — for ``Return``/``UserError`` the result value in :ref:`gvm-def-calldata-encoding`; for ``VMError`` the error code string
+#. ``kind`` — the exact string ``"Return"``, ``"UserError"`` or ``"VMError"``.
+   Fatality is not an outcome of its own, only a statement about who may catch
+   it, so a fatal result hashes as ``"VMError"``
+#. ``result`` — for ``Return``/``UserError`` the result value in
+   :ref:`gvm-def-calldata-encoding`; for ``VMError`` the error code string
 #. ``subvm_hashes`` — that sub-VM's own finalized accumulator, making the hash recursive over the whole deterministic call tree
 #. ``wasm_store_hashes``
 
@@ -171,7 +218,7 @@ A consumer in :ref:`gvm-def-sync-mode` or :ref:`gvm-def-validator-mode`
 consumes one leader-proposed result per non-deterministic block it runs. If the
 leader supplied **more** results than the run consumed, the surplus blocks were
 never reached: the run's result is replaced by
-:ref:`gvm-def-pending-str-trie-value-vm-error-leader-output-extra`, whose
+:ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-extra`, whose
 parameter is the first 6 characters of the :ref:`gvm-def-gvm32` encoding of the
 ``sha3_256`` digest of the complete ``[result_code][data]``
 :ref:`sub-VM result buffer <gvm-def-subvm-result-encoding>` the run would

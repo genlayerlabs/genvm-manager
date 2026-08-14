@@ -7,6 +7,12 @@ contracts interact with each other. The ABI provides a standardized way
 to encode method calls, handle parameters, and manage contract schemas
 while supporting both deterministic and non-deterministic operations.
 
+The public ABI includes the stable values listed in
+:doc:`../appendix/constants`. Values listed in
+:doc:`../appendix/internal-constants` bound what a run may do, but they are not
+part of that surface: a contract cannot read them, and nothing in the ABI is
+required to keep them stable
+
 .. _gvm-def-contract-call-conv:
 
 Method Calling Convention
@@ -45,7 +51,7 @@ set. Element types inside ``args``/``kwargs`` are matched against the method
 signature by the runner, not here.
 
 Violations are reported as
-:ref:`gvm-def-pending-str-trie-value-vm-error-malformed-entry`; where that
+:ref:`gvm-def-str-trie-value-vm-error-malformed-entry`; where that
 surfaces depends on the entry point, see :ref:`gvm-vm-startup-entry-validation`
 and :ref:`gvm-def-gl-call-call-contract`.
 

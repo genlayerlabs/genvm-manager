@@ -1,9 +1,13 @@
 Resource Limiting
 =================
 
-:ref:`gvm-def-det-mode` and :ref:`gvm-def-non-det-mode` have two separate RAM budgets.
-Each budget starts at 4294967295 octets (4 GiB).
-All :term:`sub-VM` instances within the same mode share the same budget.
+:ref:`gvm-def-det-mode` and :ref:`gvm-def-non-det-mode` have separate RAM
+budgets: what one consumes is never charged to the other.
+The deterministic budget starts at 4294967295 octets (4 GiB).
+Every :ref:`gvm-def-gl-call-run-nondet` gets its own non-deterministic budget,
+starting at what its caller had remaining at the moment of the call, so a
+nondet block never gets more RAM than its caller had left.
+All :term:`sub-VM` instances within one budget share it.
 
 .. _gvm-def-ram-consumption:
 
@@ -42,10 +46,17 @@ The following operations consume RAM:
   and ``RegisterRunner`` ``gl_call``\ s, and receiving a custom-runner grant at
   sub-VM creation (see :doc:`../02-execution-environment/04-runners` and
   :ref:`gvm-meta-property-custom-runners`)
+- **Storage writes**: writing to a 32-octet aligned region of a
+  :term:`Storage Slot` costs
+  :ref:`gvm-def-consts-value-memory-limiter-consts-new-storage-page` octets the
+  first time that region is written. Regions the :term:`sub-VM` inherited
+  already written from its caller, and repeated writes to a region, cost nothing
 - **Sub-VM creation**: each new :term:`sub-VM` costs
-  :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets,
-  charged to the new :term:`sub-VM` at creation (see :doc:`01-startup`) and
-  released when it finishes
+  :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets, plus
+  :ref:`gvm-def-consts-value-memory-limiter-consts-storage-page-inherited`
+  octets for every 32-octet region already written in the storage it inherits.
+  Both are charged to the new :term:`sub-VM` at creation (see :doc:`01-startup`)
+  and released when it finishes
 
 The runner load cost (:ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost`) is a fixed per-load
 overhead
@@ -58,6 +69,12 @@ When a :term:`sub-VM` finishes execution, all remaining RAM consumed by it is re
 This applies to runner charges as well: memory consumed by loading or
 registering a runner is released when the registering :term:`sub-VM` finishes,
 like any other charge. There are no permanent charges.
+
+Storage write charges are the exception: they follow the storage they paid for.
+When a :ref:`gvm-def-gl-call-sandbox` child returns and its caller takes over the
+child's storage, the charge for the regions the child wrote first is transferred
+to the caller rather than released, so a caller cannot use repeated
+:ref:`gvm-def-gl-call-sandbox` calls to accumulate storage it never pays for.
 
 Other Limits
 ------------

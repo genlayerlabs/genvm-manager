@@ -1,4 +1,5 @@
-"""`genvm-tool git check-for-push` — pre-push status across the sub-repos.
+"""
+`genvm-tool git check-for-push` — pre-push status across the sub-repos.
 
 Read-only survey of the manager and every executor submodule. For each repo it
 reports whether it is dirty, on a branch, committed into the manager, and in sync
@@ -53,7 +54,8 @@ def _origin_url(repo: common.Repo) -> str:
 def _worktree_state(
 	repo: common.Repo, ignore_submodules: bool
 ) -> tuple[int, bool, bool]:
-	"""Porcelain summary: (changed-line count, has-staged, has-unstaged/untracked).
+	"""
+	Porcelain summary: (changed-line count, has-staged, has-unstaged/untracked).
 
 	The manager passes ``--ignore-submodules=dirty`` so a submodule's own dirty
 	tree is left to that submodule's row, while a *moved gitlink* (new commits)
@@ -84,7 +86,8 @@ def _committed_in_manager(
 
 
 def _launch_origin_queries(targets: list[tuple[common.Repo, str]]):
-	"""Start one parallel `ls-remote` per distinct origin URL.
+	"""
+	Start one parallel `ls-remote` per distinct origin URL.
 
 	`targets` is (repo, branch) for the repos we want a live remote answer for.
 	Repos that share an origin URL (the executor submodules) are batched into a
@@ -120,7 +123,8 @@ def _launch_origin_queries(targets: list[tuple[common.Repo, str]]):
 
 
 def _collect_origin_queries(launched) -> dict[str, tuple[str | None, bool]]:
-	"""Wait for the launched `ls-remote` processes and map each repo to its remote
+	"""
+	Wait for the launched `ls-remote` processes and map each repo to its remote
 	branch hash: `{repo.name: (hash | None, reachable)}` (None hash = branch absent).
 	"""
 	procs, result = launched

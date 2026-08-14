@@ -48,16 +48,8 @@ struct Writer {
 }
 
 impl Writer {
-    /// Non-blocking, for the paths that run inside the read loop's error
-    /// handling and must not park. Everything that can await uses the async
-    /// twin instead, so a stalled peer applies backpressure rather than
-    /// costing frames.
-    fn send_control(&self, frame: Frame) -> Result<()> {
-        self.control
-            .try_send(frame)
-            .context("connection writer queue is full")
-    }
-
+    /// Parks when the queue is full, so a slow reader is throttled rather than
+    /// disconnected.
     async fn send_control_async(&self, frame: Frame) -> Result<()> {
         self.control
             .send(frame)
@@ -72,8 +64,9 @@ impl Writer {
             .context("connection writer queue is closed")
     }
 
-    fn error(&self, request_id: u64, code: Errors, message: impl Into<String>) -> Result<()> {
-        self.send_control(error_frame(request_id, code, message))
+    async fn error(&self, request_id: u64, code: Errors, message: impl Into<String>) -> Result<()> {
+        self.send_control_async(error_frame(request_id, code, message))
+            .await
     }
 }
 
@@ -390,7 +383,9 @@ where
         let body = match message.context("reading websocket message")? {
             Message::Binary(body) => body,
             Message::Text(_) => {
-                writer.error(0, Errors::MalformedFrame, "text messages are not valid")?;
+                writer
+                    .error(0, Errors::MalformedFrame, "text messages are not valid")
+                    .await?;
                 continue;
             }
             Message::Close(_) => return Ok(None),
@@ -399,7 +394,9 @@ where
         };
 
         if body.len() < HEADER_LEN {
-            writer.error(0, Errors::MalformedFrame, "message is shorter than header")?;
+            writer
+                .error(0, Errors::MalformedFrame, "message is shorter than header")
+                .await?;
             continue;
         }
 
@@ -409,11 +406,13 @@ where
         let method = match Methods::try_from(method_id) {
             Ok(method) => method,
             Err(()) => {
-                writer.error(
-                    request_id,
-                    Errors::UnknownMethod,
-                    format!("unknown method id {method_id}"),
-                )?;
+                writer
+                    .error(
+                        request_id,
+                        Errors::UnknownMethod,
+                        format!("unknown method id {method_id}"),
+                    )
+                    .await?;
                 continue;
             }
         };
@@ -453,11 +452,13 @@ where
 
     async fn dispatch(&mut self, method: Methods, request_id: u64, payload: &[u8]) -> Result<()> {
         if request_id == 0 {
-            self.writer.error(
-                0,
-                Errors::BadRequestId,
-                "client requests must use request_id != 0",
-            )?;
+            self.writer
+                .error(
+                    0,
+                    Errors::BadRequestId,
+                    "client requests must use request_id != 0",
+                )
+                .await?;
             return Ok(());
         }
 
@@ -468,11 +469,13 @@ where
             Methods::Ack => self.handle_ack(request_id, payload).await,
             Methods::GetArtifact => self.handle_get_artifact(request_id, payload).await,
             Methods::Error | Methods::Hello | Methods::Event => {
-                self.writer.error(
-                    request_id,
-                    Errors::UnknownMethod,
-                    format!("method {} is not a client request", method.value()),
-                )?;
+                self.writer
+                    .error(
+                        request_id,
+                        Errors::UnknownMethod,
+                        format!("method {} is not a client request", method.value()),
+                    )
+                    .await?;
                 Ok(())
             }
         }
@@ -483,7 +486,8 @@ where
             Ok(req) => req,
             Err(e) => {
                 self.writer
-                    .error(request_id, Errors::MalformedFrame, e.to_string())?;
+                    .error(request_id, Errors::MalformedFrame, e.to_string())
+                    .await?;
                 return Ok(());
             }
         };
@@ -493,11 +497,13 @@ where
             .get(1)
             .is_some_and(|data| !data.is_empty())
         {
-            self.writer.error(
-                request_id,
-                Errors::MalformedFrame,
-                "host_hello_data for manager-owned host index 1 is not allowed",
-            )?;
+            self.writer
+                .error(
+                    request_id,
+                    Errors::MalformedFrame,
+                    "host_hello_data for manager-owned host index 1 is not allowed",
+                )
+                .await?;
             return Ok(());
         }
 
@@ -505,11 +511,13 @@ where
             match super::modules::Ctx::get_module_locks(self.ctx.gep(|x| &x.mod_ctx)).await {
                 Some(lock) => Some(lock),
                 None => {
-                    self.writer.error(
-                        request_id,
-                        Errors::Internal,
-                        "modules are required but not running",
-                    )?;
+                    self.writer
+                        .error(
+                            request_id,
+                            Errors::Internal,
+                            "modules are required but not running",
+                        )
+                        .await?;
                     return Ok(());
                 }
             }
@@ -524,7 +532,8 @@ where
             Ok(id) => id,
             Err(e) => {
                 self.writer
-                    .error(request_id, Errors::Internal, format!("{:#}", e))?;
+                    .error(request_id, Errors::Internal, format!("{:#}", e))
+                    .await?;
                 return Ok(());
             }
         };
@@ -532,24 +541,28 @@ where
             Ok(result) => result,
             Err(e) => {
                 self.writer
-                    .error(request_id, Errors::UnknownId, format!("{:#}", e))?;
+                    .error(request_id, Errors::UnknownId, format!("{:#}", e))
+                    .await?;
                 return Ok(());
             }
         };
-        self.writer.send_control(Frame::new(
-            Methods::Run,
-            request_id,
-            &RunResponse { genvm_id },
-        ))?;
+        self.writer
+            .send_control_async(Frame::new(
+                Methods::Run,
+                request_id,
+                &RunResponse { genvm_id },
+            ))
+            .await?;
         if let run::Snapshot::Event(event) = snapshot {
-            self.writer.send_control(event_frame(event))?;
+            self.writer.send_control_async(event_frame(event)).await?;
         }
         // Subscribing last keeps the frames ordered: the receiver was taken
         // above, so nothing is missed, but a terminal landing meanwhile cannot
         // produce an event for a genvm_id the client has not been told yet.
         if let Err(e) = self.subscribe(genvm_id, Ok(rx)) {
             self.writer
-                .error(request_id, Errors::UnknownId, format!("{:#}", e))?;
+                .error(request_id, Errors::UnknownId, format!("{:#}", e))
+                .await?;
             return Ok(());
         }
         Ok(())
@@ -560,7 +573,8 @@ where
             Ok(req) => req,
             Err(e) => {
                 self.writer
-                    .error(request_id, Errors::MalformedFrame, e.to_string())?;
+                    .error(request_id, Errors::MalformedFrame, e.to_string())
+                    .await?;
                 return Ok(());
             }
         };
@@ -570,23 +584,30 @@ where
             Ok(result) => result,
             Err(e) if e.to_string() == "boot_id_mismatch" => {
                 self.writer
-                    .error(request_id, Errors::BootIdMismatch, "boot_id_mismatch")?;
+                    .error(request_id, Errors::BootIdMismatch, "boot_id_mismatch")
+                    .await?;
                 return Ok(());
             }
             Err(e) => {
                 self.writer
-                    .error(request_id, Errors::UnknownId, format!("{:#}", e))?;
+                    .error(request_id, Errors::UnknownId, format!("{:#}", e))
+                    .await?;
                 return Ok(());
             }
         };
+        self.writer
+            .send_control_async(Frame::new(
+                Methods::Attach,
+                request_id,
+                &AttachResponse {
+                    snapshot: snapshot_payload(snapshot),
+                },
+            ))
+            .await?;
+        // Subscribing last, as in `handle_run`: the receiver was taken above so
+        // nothing is missed, and the client cannot see an event that predates
+        // the snapshot it is answered with.
         self.subscribe(req.genvm_id, Ok(rx))?;
-        self.writer.send_control(Frame::new(
-            Methods::Attach,
-            request_id,
-            &AttachResponse {
-                snapshot: snapshot_payload(snapshot),
-            },
-        ))?;
         Ok(())
     }
 
@@ -595,19 +616,22 @@ where
             Ok(req) => req,
             Err(e) => {
                 self.writer
-                    .error(request_id, Errors::MalformedFrame, e.to_string())?;
+                    .error(request_id, Errors::MalformedFrame, e.to_string())
+                    .await?;
                 return Ok(());
             }
         };
         match self.ctx.run_ctx.cancel(req.genvm_id).await {
-            Ok(()) => self.writer.send_control(Frame::new(
-                Methods::Cancel,
-                request_id,
-                &EmptyResponse {},
-            ))?,
-            Err(e) => self
-                .writer
-                .error(request_id, Errors::UnknownId, format!("{:#}", e))?,
+            Ok(()) => {
+                self.writer
+                    .send_control_async(Frame::new(Methods::Cancel, request_id, &EmptyResponse {}))
+                    .await?
+            }
+            Err(e) => {
+                self.writer
+                    .error(request_id, Errors::UnknownId, format!("{:#}", e))
+                    .await?
+            }
         }
         Ok(())
     }
@@ -617,7 +641,8 @@ where
             Ok(req) => req,
             Err(e) => {
                 self.writer
-                    .error(request_id, Errors::MalformedFrame, e.to_string())?;
+                    .error(request_id, Errors::MalformedFrame, e.to_string())
+                    .await?;
                 return Ok(());
             }
         };
@@ -626,19 +651,19 @@ where
                 if let Some(handle) = self.subscriptions.remove(&req.genvm_id) {
                     handle.abort();
                 }
-                self.writer.send_control(Frame::new(
-                    Methods::Ack,
-                    request_id,
-                    &EmptyResponse {},
-                ))?;
+                self.writer
+                    .send_control_async(Frame::new(Methods::Ack, request_id, &EmptyResponse {}))
+                    .await?;
             }
             run::AckOutcome::NotFinished => {
                 self.writer
-                    .error(request_id, Errors::NotFinished, "run has not finished")?
+                    .error(request_id, Errors::NotFinished, "run has not finished")
+                    .await?
             }
             run::AckOutcome::Unknown => {
                 self.writer
-                    .error(request_id, Errors::UnknownId, "unknown_id")?
+                    .error(request_id, Errors::UnknownId, "unknown_id")
+                    .await?
             }
         }
         Ok(())
@@ -650,7 +675,8 @@ where
                 Ok(req) => req,
                 Err(e) => {
                     self.writer
-                        .error(request_id, Errors::MalformedFrame, e.to_string())?;
+                        .error(request_id, Errors::MalformedFrame, e.to_string())
+                        .await?;
                     return Ok(());
                 }
             };
@@ -674,11 +700,14 @@ where
             }
             Err(e) if e.to_string() == "unknown_id" => {
                 self.writer
-                    .error(request_id, Errors::UnknownId, "unknown_id")?
+                    .error(request_id, Errors::UnknownId, "unknown_id")
+                    .await?
             }
-            Err(e) => self
-                .writer
-                .error(request_id, Errors::MalformedFrame, format!("{:#}", e))?,
+            Err(e) => {
+                self.writer
+                    .error(request_id, Errors::MalformedFrame, format!("{:#}", e))
+                    .await?
+            }
         }
         Ok(())
     }
@@ -733,9 +762,10 @@ pub async fn handle_connection(socket: WebSocket, ctx: sync::DArc<AppContext>) {
         artifact: artifact_tx,
     };
 
-    let writer_task = tokio::spawn(writer_loop(writer_stream, control_rx, artifact_rx));
+    let mut writer_task = tokio::spawn(writer_loop(writer_stream, control_rx, artifact_rx));
     if writer
-        .send_control(hello_frame(ctx.run_ctx.boot_id()))
+        .send_control_async(hello_frame(ctx.run_ctx.boot_id()))
+        .await
         .is_err()
     {
         writer_task.abort();
@@ -762,7 +792,18 @@ pub async fn handle_connection(socket: WebSocket, ctx: sync::DArc<AppContext>) {
         _ = cancel.chan.closed() => {}
     }
 
-    match writer_task.await {
+    // The same peer defeats the select above if it stops reading: `sink.send`
+    // parks once the socket buffers fill, so the writer never drains its queue
+    // and never returns.
+    let writer_result = tokio::select! {
+        result = &mut writer_task => result,
+        _ = cancel.chan.closed() => {
+            writer_task.abort();
+            return;
+        }
+    };
+
+    match writer_result {
         Ok(Ok(())) => {}
         Ok(Err(e)) => log_debug!(error:ah = e; "manager websocket writer stopped"),
         Err(e) if e.is_cancelled() => {}

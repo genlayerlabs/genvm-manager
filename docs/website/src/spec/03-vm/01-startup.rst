@@ -40,7 +40,7 @@ The entry payload is host-supplied and is checked against
 :ref:`gvm-def-contract-call-conv` before permissions are read and before any
 runner loads. A payload that violates the convention produces the
 :ref:`gvm-def-vm-error`
-:ref:`gvm-def-pending-str-trie-value-vm-error-malformed-entry` as the execution
+:ref:`gvm-def-str-trie-value-vm-error-malformed-entry` as the execution
 result, like any other failure at this point.
 
 Messages emitted by :ref:`gvm-def-post-message` and ``DeployContract`` are
@@ -106,8 +106,12 @@ with :ref:`gvm-def-str-trie-value-vm-error-out-of-nondet-blocks`.
 
 Creating the :term:`sub-VM` charges
 :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets of
-:ref:`gvm-def-ram-consumption` to the new :term:`sub-VM`; the charge is
-released when it finishes.
+:ref:`gvm-def-ram-consumption` to the new :term:`sub-VM`, plus
+:ref:`gvm-def-consts-value-memory-limiter-consts-storage-page-inherited` octets
+for every storage region it inherits already written from its caller
+(:ref:`gvm-def-gl-call-sandbox` and :ref:`gvm-def-gl-call-run-nondet` inherit
+their caller's; the initial entry and :ref:`gvm-def-gl-call-call-contract`
+inherit none). Both charges are released when it finishes.
 
 After these checks, startup applies the `Custom-Runner Grants`_ for the new
 :term:`sub-VM`, then performs the runner load action for the entry runner and
@@ -202,7 +206,8 @@ inherited permission, never add one.
 :ref:`gvm-def-gl-call-run-nondet`
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-The child executes in :ref:`gvm-def-non-det-mode`.
+The child executes in :ref:`gvm-def-non-det-mode`, on its own RAM budget seeded
+with what the caller had remaining (see :doc:`03-ram-limiting`).
 
 - :ref:`gvm_vm_field_permissions` are all false, including
   :ref:`gvm-perm-deterministic`.

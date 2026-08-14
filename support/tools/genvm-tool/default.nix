@@ -8,7 +8,14 @@
 python.pkgs.buildPythonApplication {
   pname = "genvm-tool";
   version = "0.1.0";
-  src = ./.;
+  src = pkgs.lib.cleanSourceWith {
+    src = ./.;
+    filter =
+      path: type:
+      pkgs.lib.cleanSourceFilter path type
+      && !pkgs.lib.hasSuffix ".nix" path
+      && baseNameOf path != "flake.lock";
+  };
 
   pyproject = true;
   build-system = [ python.pkgs.setuptools ];
@@ -27,8 +34,10 @@ python.pkgs.buildPythonApplication {
     pkgs.git
     pkgs.installShellFiles
     pkgs.pre-commit
-    python.pkgs.pytestCheckHook
   ];
+
+  doCheck = false;
+  dontUsePytestCheck = true;
 
   # Generate the shell completions and man page from the freshly built binary
   # (shtab / argparse-manpage both walk the whole argparse command tree) and drop
@@ -41,8 +50,6 @@ python.pkgs.buildPythonApplication {
     $out/bin/genvm-tool --print-manpage > genvm-tool.1
     installManPage genvm-tool.1
   '';
-
-  pytestFlags = [ "unit_tests" ];
 
   meta = {
     description = "GenVM monorepo git helper (build, tests, hooks, ls)";

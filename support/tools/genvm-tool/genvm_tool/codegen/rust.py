@@ -1,4 +1,5 @@
-"""Rust backend for ``genvm-tool codegen`` (ports the old ``rs.rb`` template).
+"""
+Rust backend for ``genvm-tool codegen`` (ports the old ``rs.rb`` template).
 
 Output follows the previous ruby generator, plus the later `prefix_` and
 `is_valid_` additions: the build regenerates these files in-tree and a non-empty
@@ -207,6 +208,21 @@ def _trie(t: StrTrie, buf: list[str]) -> None:
 		)
 	buf.append('}\n\n')
 
+	if t.suffix is not None:
+		buf.append('#[rustfmt::skip]\n')
+		buf.append(f'impl {root_name} {{\n')
+		for name, _parts in t.suffix.leaves:
+			# A value carries at most one detail: the reader splits on the first
+			# separator, so a second one would be silently dropped. Checked in
+			# release too, so the invariant does not depend on the build -- these
+			# are error paths, and the scan is over a short fixed string.
+			buf.append(
+				f'    pub fn {name.lower()}(self) -> Self {{ '
+				f'assert!(!self.0.contains(" # "), "a value carries at most one detail"); '
+				f'Self(Cow::Owned(format!("{{}} # {name}", self.0))) }}\n'
+			)
+		buf.append('}\n\n')
+
 	_emit_is_valid(t, root_name, buf)
 
 
@@ -267,7 +283,7 @@ def render(defs: list[Definition], **_opts) -> str:
 	has_serialize = has_deserialize or has_str_trie
 	buf: list[str] = []
 	buf.append('// This file is auto-generated. Do not edit!\n\n')
-	buf.append('#![allow(dead_code, clippy::redundant_static_lifetimes)]\n')
+	buf.append('#![allow(dead_code, clippy::all)]\n')
 	buf.append('\n')
 	if has_deserialize:
 		buf.append('use serde::{Deserialize, Serialize};\n\n')

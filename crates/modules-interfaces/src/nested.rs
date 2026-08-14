@@ -249,9 +249,11 @@ mod tests {
 
         assert_ne!(hash(ResultCode::Return), hash(ResultCode::UserError));
         assert_ne!(hash(ResultCode::Return), hash(ResultCode::VmError));
-        // An internal error is never a caller-visible outcome, so it shares the
-        // `VMError` label rather than adding a kind a peer line might not know.
+        // Neither an internal error nor fatality changes the outcome value, so
+        // both fold as a plain `VMError` rather than adding a kind a peer line
+        // might not know.
         assert_eq!(hash(ResultCode::VmError), hash(ResultCode::InternalError));
+        assert_eq!(hash(ResultCode::VmError), hash(ResultCode::FatalVmError));
     }
 
     #[test]

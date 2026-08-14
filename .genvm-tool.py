@@ -1,4 +1,5 @@
-"""Manager-root genvm-tool project config.
+"""
+Manager-root genvm-tool project config.
 
 Loaded once by genvm-tool (``common.load_project``) before any subcommand runs;
 subcommands ask it for what they need:
@@ -20,12 +21,14 @@ Commit hooks live in each repo's flake (git-hooks.nix), not here.
 
 
 def tests(ctx):
-	"""Umbrella test suite (was the top-level .ya-test.py).
+	"""
+	Umbrella test suite (was the top-level .ya-test.py).
 
 	``ctx`` is the runner's configuration ``Context``. Collectors close over the
 	imports below (resolved lazily when collection runs).
 	"""
 	import json
+	import platform
 	import sys
 	from pathlib import Path
 
@@ -56,31 +59,20 @@ def tests(ctx):
 			+ '\n'
 		)
 
-	ctx.run_parser.add_argument(
-		'--fuzz-timeout',
-		type=int,
-		default=30,
-		help='Timeout for each fuzzing run in seconds',
-	)
-
-	ctx.run_parser.add_argument(
-		'--fuzz-update-corpus',
-		default=False,
-		action='store_true',
-		help='Whether to update the fuzzing corpus',
-	)
-
 	import genvm_tool_plugins
 
 	ctx.shared.logger.trace(
 		'import path', path=sys.path, plugins_path=genvm_tool_plugins.__path__
 	)
 	from genvm_tool_plugins import (
+		afl,
 		cargo,
 		genvm,
 		integration,
 		pytest,
 	)
+
+	afl.register(ctx)
 
 	def collect_rust(ctx: genvm_tool.tests.stage.collection.Context):
 		for t in filter(lambda x: x.name == 'Cargo.toml', ctx.shared.git_files):
@@ -101,53 +93,46 @@ def tests(ctx):
 				name = f'{name.parent}/{name.stem}'
 				cargo.cargo_fuzz(
 					ctx,
-					genvm_tool.tests.test.Description(
-						name,
-						console_pool=True,
-					),
+					genvm_tool.tests.test.Description(name),
 					rust_root_dir=rust_root_dir,
 					name=fuzz_file.stem,
 				)
 
 	def collect_pytest(ctx: genvm_tool.tests.stage.collection.Context):
-		p = ctx.shared.root_dir.joinpath(
-			'executors', 'v0.3.x', 'runners', 'genlayer-py-std'
-		)
-		pytest.pytest(
-			ctx,
-			genvm_tool.tests.test.Description(
-				str(p.relative_to(ctx.shared.root_dir)),
-				console_pool=True,
-				tags=frozenset({'unit'}),
-			),
-			project_root_dir=p,
-		)
-
-		ci = ctx.shared.root_dir.joinpath('support', 'ci')
-		pytest.pytest(
-			ctx,
-			genvm_tool.tests.test.Description(
-				str(ci.relative_to(ctx.shared.root_dir)),
-				console_pool=True,
-				tags=frozenset({'unit'}),
-			),
-			project_root_dir=ci,
-		)
-
-		fuzz_files = list(p.glob('fuzz/src/*.py'))
-		fuzz_files.sort()
-		for fuzz_file in fuzz_files:
-			name = fuzz_file.relative_to(ctx.shared.root_dir)
-			name = f'{name.parent}/{name.stem}'
-			continue  # for now let's disable it
-			pytest.py_fuzz(
+		dirs = [
+			ctx.shared.root_dir.joinpath('executors', 'v0.3.x', 'runners', 'genlayer-py-std'),
+			ctx.shared.root_dir.joinpath('support', 'tools', 'genvm-tool'),
+			ctx.shared.root_dir.joinpath('support', 'ci'),
+		]
+		for p in dirs:
+			pytest.pytest(
 				ctx,
 				genvm_tool.tests.test.Description(
-					name,
+					str(p.relative_to(ctx.shared.root_dir)),
+					console_pool=True,
+					tags=frozenset({'unit'}),
 				),
 				project_root_dir=p,
-				name=fuzz_file.stem,
 			)
+
+			# A project's flake carries python-afl and AFL++ on x86_64-linux only,
+			# so elsewhere the case could not start at all
+			if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
+				continue
+
+			fuzz_files = list(p.glob('fuzz/src/*.py'))
+			fuzz_files.sort()
+			for fuzz_file in fuzz_files:
+				name = fuzz_file.relative_to(ctx.shared.root_dir)
+				name = f'{name.parent}/{name.stem}'
+				pytest.py_fuzz(
+					ctx,
+					genvm_tool.tests.test.Description(
+						name,
+					),
+					project_root_dir=p,
+					name=fuzz_file.stem,
+				)
 
 	ctx.add_collector(collect_rust)
 	ctx.add_collector(collect_pytest)
@@ -196,6 +181,7 @@ def tests(ctx):
 		ci = ctx.shared.ci
 
 		manager_port = genvm.get_manager_port(ctx.configuration)
+		manager_semaphore = ctx.new_semaphore('manager-listener')
 
 		if no_manager:
 			manager_impl = genvm.ExternalManagerService(
@@ -225,6 +211,7 @@ def tests(ctx):
 		manager_service = ctx.new_service(
 			name='manager',
 			manager=manager_impl,
+			semaphores=[manager_semaphore],
 		)
 		manager_service.meta = {
 			'port': manager_port,
@@ -250,11 +237,47 @@ def tests(ctx):
 			webdriver_service=webdriver_service,
 			ci=ci,
 		)
+		integration.integration_test_directory(
+			ctx,
+			cases_dir=ctx.shared.root_dir / 'tests' / 'system' / 'cross-major' / 'cases',
+			reroute_to=build_info['executor_versions']['v0.3'],
+			save_hashes=False,
+			manager_service=manager_service,
+			modules_service=modules_service,
+			webdriver_service=webdriver_service,
+			ci=ci,
+		)
 
 		ctx.collect_dir('tests/system/permits', manager_service=manager_service)
-		ctx.collect_dir('tests/system/manager-socket')
-		ctx.collect_dir('tests/system/cross-major')
-		ctx.collect_dir('tests/system/cross-major-observability')
+		limited_manager_service = None
+		if not no_manager:
+			limited_manager_service = ctx.new_service(
+				name='manager-cross-major-small-message-cap',
+				manager=genvm.ManagerService(
+					bin_path=build_dir / 'out' / 'bin' / 'genvm-modules',
+					log_path=tests_output_root / 'cross-major-small-message-cap.log',
+					env=ctx.configuration,
+					ci=ci,
+					config={'max_message_bytes': 1024 * 1024},
+				),
+				semaphores=[manager_semaphore],
+			)
+			ctx.collect_dir(
+				'tests/system/manager-socket',
+				manager_semaphore=manager_semaphore,
+				build_dir=build_dir,
+				ci=ci,
+			)
+		ctx.collect_dir(
+			'tests/system/cross-major',
+			manager_service=manager_service,
+			limited_manager_service=limited_manager_service,
+			managed_manager=not no_manager,
+		)
+		ctx.collect_dir(
+			'tests/system/cross-major-observability',
+			manager_service=manager_service,
+		)
 
 	ctx.add_collector(collect_integration)
 

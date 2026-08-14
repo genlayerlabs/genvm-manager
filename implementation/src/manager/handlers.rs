@@ -21,6 +21,8 @@ pub async fn handle_status(ctx: sync::DArc<AppContext>) -> Result<Json<serde_jso
         "permits": {
             "current": ctx.run_ctx.get_current_permits(),
             "max": ctx.run_ctx.get_max_permits().await,
+            "per_sync_run": ctx.run_ctx.permits_sync(),
+            "per_nondet_run": ctx.run_ctx.permits_nondet(),
         },
         "executions": ctx.run_ctx.status_executions(),
     })))
@@ -347,7 +349,9 @@ fn describe_vm_error(error: &str) -> Option<&'static str> {
         Some(
             r##"The contract was detected to be a plain text contract, however it contains non-UTF8 bytes and hence cannot be parsed. Is deployed runner a valid contract?"##,
         )
-    } else if is_sub_error(error, "invalid_contract absent_runner_comment") {
+    } else if is_sub_error(error, "invalid_contract runner absent")
+        || is_sub_error(error, "invalid_contract absent_runner_comment")
+    {
         Some(
             r##"The contract was detected to be a plain text contract, however it does not start with a runner comment (such as `# { "Depends": "py-genlayer:..." }`), hence it is impossible to run. Have you forgotten to add it or is there other content before it?"##,
         )

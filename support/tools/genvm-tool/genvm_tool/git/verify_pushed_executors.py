@@ -1,4 +1,5 @@
-"""Verify that an outgoing manager commit pins published executor commits.
+"""
+Verify that an outgoing manager commit pins published executor commits.
 
 The manager ref defaults to ``PRE_COMMIT_TO_REF`` in a pre-push hook and to
 ``HEAD`` for manual runs. The active executor set and gitlinks are read from
@@ -157,7 +158,8 @@ def _targets_from_commit(
 
 
 def _published(target: _Target, remote: str) -> tuple[bool | None, str]:
-	"""Whether ``remote`` already holds the gitlink commit.
+	"""
+	Whether ``remote`` already holds the gitlink commit.
 
 	``--negotiate-only`` runs the fetch negotiation and stops before any
 	transfer, printing the commits both sides have. Our own sha comes back only

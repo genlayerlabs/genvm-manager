@@ -23,6 +23,25 @@ use crate::common::{LogSink, LogSinkElement, LogSinkInner, LoggerWithId, GENVM_B
 
 const ARTIFACT_CHUNK_CAP: usize = 256 * 1024;
 
+/// How many delegated (cross-major) hops one chain of contract calls may make.
+///
+/// Deliberately far below any line's `VM_RECURSION`: a hop costs a whole
+/// executor process, and the manager -- not any single line -- is the only
+/// party that sees the chain as a whole.
+const CROSS_MAJOR_RECURSION: u32 = 6;
+
+/// The recursion budget a delegated callee is given: whatever is left of the
+/// caller's, but never more than [`CROSS_MAJOR_RECURSION`].
+///
+/// Clamping rather than counting keeps this stateless -- the manager reads one
+/// number off the envelope and writes one back -- and it can only ever tighten
+/// the bound the caller already had. The subtree below a delegated call is
+/// bounded by the same number, which is the point: a chain that has already
+/// crossed a boundary does not get to recurse deeply in-process either.
+fn cross_major_recursion(remaining: u32) -> u32 {
+    remaining.min(CROSS_MAJOR_RECURSION)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ManagerDuration(std::time::Duration);
 
@@ -437,6 +456,9 @@ pub struct Ctx {
     next_genvm_id: std::sync::atomic::AtomicU64,
     pub permits: Arc<tokio::sync::Semaphore>,
     max_permits: tokio::sync::Mutex<PermitsData>,
+    /// Permits a single run costs, by kind. One permit is one gigabyte of RAM.
+    permits_sync: usize,
+    permits_nondet: usize,
 
     executors_path: std::path::PathBuf,
 }
@@ -485,6 +507,28 @@ impl Ctx {
         self.permits.available_permits()
     }
 
+    pub fn permits_sync(&self) -> usize {
+        self.permits_sync
+    }
+
+    pub fn permits_nondet(&self) -> usize {
+        self.permits_nondet
+    }
+
+    /// Below this the most expensive run could never be admitted.
+    pub fn min_permits(&self) -> usize {
+        self.permits_sync.max(self.permits_nondet)
+    }
+
+    fn permits_for(&self, req: &Request) -> u32 {
+        let count = if req.needs_modules() {
+            self.permits_nondet
+        } else {
+            self.permits_sync
+        };
+        count as u32
+    }
+
     pub async fn set_permits(&self, permits: usize) -> usize {
         let mut permits_lock = self.max_permits.lock().await;
 
@@ -494,8 +538,9 @@ impl Ctx {
         // actually this causes drop of previous one, so we can enter more genvms than we have permits, but it's ok for now
         // especially since this method is expected to be called before starting any genvms at all
 
-        if permits < 2 {
-            log_warn!(permits = permits; "cannot set permits below 2");
+        let min = self.min_permits();
+        if permits < min {
+            log_warn!(permits = permits, min = min; "cannot set permits below the most expensive run");
             return permits_lock.max;
         }
 
@@ -662,14 +707,14 @@ impl Ctx {
     }
 
     #[cfg(target_os = "macos")]
-    fn get_default_permits() -> usize {
+    fn detect_free_gigabytes() -> usize {
         log_warn!("automatic permits detection is not supported on macOS, using default value");
 
-        8
+        32
     }
 
     #[cfg(not(target_os = "macos"))]
-    fn get_default_permits() -> usize {
+    fn detect_free_gigabytes() -> usize {
         let mut sys = sysinfo::System::new_all();
         sys.refresh_memory();
         sys.refresh_all();
@@ -685,19 +730,41 @@ impl Ctx {
             "memory status"
         );
 
-        let total_mem_kb = free_memory / 1024 + free_swap / 1024;
-        let total_mem_gb = total_mem_kb / 1024 / 1024;
-
-        (total_mem_gb / 4).max(2) as usize
+        ((free_memory + free_swap) / (1024 * 1024 * 1024)) as usize
     }
 
     pub fn new(config: &crate::manager::Config) -> anyhow::Result<Self> {
-        let permits = if let Some(p) = config.permits {
-            p
-        } else {
-            Self::get_default_permits()
+        let config_permits = config.permits.clone().unwrap_or_default();
+        let permits_sync = config_permits.sync;
+        let permits_nondet = config_permits.nondet;
+        // the upper bound keeps the cast in `permits_for` honest
+        anyhow::ensure!(
+            (1..=u32::MAX as usize).contains(&permits_sync)
+                && (1..=u32::MAX as usize).contains(&permits_nondet),
+            "per-run permits must be positive and fit in u32"
+        );
+        let min_permits = permits_sync.max(permits_nondet);
+
+        let permits = match config_permits.total {
+            Some(p) => p,
+            None => config_permits.per_gib.apply(Self::detect_free_gigabytes()),
         };
-        log_info!(permits = permits; "estimated concurrent GenVM permits");
+        let permits = if permits < min_permits {
+            log_warn!(
+                permits = permits, min = min_permits;
+                "permits are below the most expensive run, raising"
+            );
+            min_permits
+        } else {
+            permits
+        };
+        log_info!(
+            permits = permits,
+            permits_sync = permits_sync,
+            permits_nondet = permits_nondet,
+            per_gib = config_permits.per_gib;
+            "estimated concurrent GenVM permits"
+        );
 
         let mut exe_path = std::env::current_exe()?;
         exe_path.pop();
@@ -716,6 +783,8 @@ impl Ctx {
                 num_throttled: 0,
                 throttled: None,
             }),
+            permits_sync,
+            permits_nondet,
 
             executors_path: exe_path,
         })
@@ -1329,6 +1398,7 @@ fn nested_reply_from_consumed_result(
         1 => genvm_modules_interfaces::ResultCode::UserError,
         2 => genvm_modules_interfaces::ResultCode::VmError,
         3 => genvm_modules_interfaces::ResultCode::InternalError,
+        4 => genvm_modules_interfaces::ResultCode::FatalVmError,
         value => anyhow::bail!("nested executor returned unknown result code {value}"),
     };
     let reported: genvm_modules_interfaces::ReportedResult = calldata::decode_obj(encoded)?;
@@ -2045,7 +2115,8 @@ impl Ctx {
         execution_data.leader_nondet_results = None;
         execution_data.record_actions.clear();
         execution_data.message_fee_allocation.clear();
-        execution_data.remaining_recursion = Some(envelope.remaining_recursion);
+        execution_data.remaining_recursion =
+            Some(cross_major_recursion(envelope.remaining_recursion));
         execution_data.nested = Some(genvm_modules_interfaces::NestedExecutionData {
             memory_limit: envelope.memory_limit,
             stack: envelope.stack,
@@ -2084,7 +2155,7 @@ async fn supervise_genvm(
     modules_lock: Box<dyn std::any::Any + Send + Sync>,
 ) {
     let ctx = full_ctx.gep(|x| &x.run_ctx);
-    let permit_count = if req.needs_modules() { 2 } else { 1 };
+    let permit_count = ctx.permits_for(&req);
 
     let permit_future = acquire_run_permits(ctx.permits.clone(), permit_count);
     tokio::pin!(permit_future);

@@ -1,4 +1,5 @@
-"""Ninja build-graph DSL + per-line `configure` helpers (importable plugin).
+"""
+Ninja build-graph DSL + per-line `configure` helpers (importable plugin).
 
 Extracted from ``genvm-tool configure`` so each executor line can own its own
 build configuration. The shared machinery lives here — the ninja DSL
@@ -36,7 +37,8 @@ CARGO_LD_LIBRARY_PATH = (
 
 
 def target_dir_for_line(rust_target_dir: Path, key: str) -> Path:
-	"""Cargo target dir for one executor line.
+	"""
+	Cargo target dir for one executor line.
 
 	Lines ship crates with identical names and versions; cargo's artifact hash
 	does not cover where a package came from, so in a shared target dir two lines
@@ -83,7 +85,8 @@ def _escape(s: str) -> str:
 
 
 def glob(base: Path, pattern: str) -> list[Path]:
-	"""Mirror Ruby's `Pathname#glob`: a depth-first, per-component sorted walk
+	"""
+	Mirror Ruby's `Pathname#glob`: a depth-first, per-component sorted walk
 	that skips dotfile entries (no FNM_DOTMATCH).
 
 	Sorting by path *components* (not the joined string) is what makes
@@ -110,7 +113,8 @@ def is_subpath(path: Path, base: Path) -> bool:
 # Nix expressions that evaluate a checkout's runner derivations to their
 # {id: hash} (latest.json) and {id: [hash]} (all.json) maps.
 def runner_manifest_expr(version: str, kind: str) -> str:
-	"""Nix expr for one executor's `latest`/`all` runner manifest.
+	"""
+	Nix expr for one executor's `latest`/`all` runner manifest.
 
 	The umbrella's ./runners owns this: `all` is every runner compatible up to
 	`version`, `latest` is that executor's own current runners. Evaluated with
@@ -276,7 +280,8 @@ class Ninja:
 	def codegen(
 		self, out: Path, lang: str, data: Path, extra_flags: list[str] | None = None
 	) -> None:
-		"""Emit one `codegen` edge (`genvm-tool codegen --lang <lang>`).
+		"""
+		Emit one `codegen` edge (`genvm-tool codegen --lang <lang>`).
 
 		Requires the `codegen` rule. The generated file depends on its data JSON and
 		on the codegen backend sources (``codegen_deps``, set by the command) so an
@@ -331,8 +336,10 @@ class Ninja:
 
 		clippy_lints = ['--', '-A', 'clippy::upper_case_acronyms', '-Dwarnings']
 
+		# Lint/format edges declare no inputs and produce no output file: cargo does
+		# its own staleness tracking, and a stale ninja stamp hid real diagnostics.
+
 		clippy = self.build('cargo', 'target/' + rel_path + '/clippy')
-		clippy.add_dependency(files_trg)
 		clippy.var('subcommand', 'clippy')
 		clippy.var('wd', crate_dir)
 		clippy.var('extra_args', extra_args + clippy_lints)
@@ -381,7 +388,8 @@ class Ninja:
 
 @dataclass
 class LineContext:
-	"""Everything one executor line's ``configure(line)`` hook needs.
+	"""
+	Everything one executor line's ``configure(line)`` hook needs.
 
 	Built by the configure command per active line. The hook composes the
 	``register_standard_*`` / ``install_tree`` steps and chooses a runner-registry
@@ -435,16 +443,24 @@ class LineContext:
 			'python',
 			data / 'public-abi.json',
 		)
-		pending_abi = self.exec_root / 'executor/codegen/data/public-abi-pending.json'
+		pending_abi = data / 'public-abi-pending.json'
 		if pending_abi.exists():
 			self.codegen(
 				self.exec_root / 'executor/crates/common/src/public_abi_pending.rs',
 				'rust',
-				self.exec_root / 'executor/codegen/data/public-abi-pending.json',
+				pending_abi,
+			)
+		internal_constants = data / 'internal-constants.json'
+		if internal_constants.exists():
+			self.codegen(
+				self.exec_root / 'executor/crates/common/src/internal_constants.rs',
+				'rust',
+				internal_constants,
 			)
 
 	def register_standard_crates(self) -> None:
-		"""Build this line's `genvm` binary plus its `common`/`sdk-rs` crates.
+		"""
+		Build this line's `genvm` binary plus its `common`/`sdk-rs` crates.
 
 		`calldata` and `calldata-derive` live in this line's tree too but get no
 		edge of their own — they are path deps of the crates listed here.
@@ -459,7 +475,8 @@ class LineContext:
 		self.n.register_cargo(f'{self.exec_rel}/executor/crates/sdk-rs', target_dir=td)
 
 	def frozen_registry(self) -> None:
-		"""Copy this line's committed ``executor/registry`` runner manifests verbatim.
+		"""
+		Copy this line's committed ``executor/registry`` runner manifests verbatim.
 
 		Frozen legacy lines ship the exact ``latest.json``/``all.json`` from their
 		release, which the nix build copies verbatim (see that line's
@@ -474,7 +491,8 @@ class LineContext:
 			self.data_phony.add_dependency(out)
 
 	def nix_manifests(self) -> None:
-		"""Derive this line's `latest`/`all` runner manifests via the nix machinery.
+		"""
+		Derive this line's `latest`/`all` runner manifests via the nix machinery.
 
 		Manifests are derived by the umbrella machinery (which imports every active
 		line's runners), so both the line's and the umbrella's nix inputs matter.
@@ -499,7 +517,8 @@ class LineContext:
 
 
 def configure_line_default(line: LineContext) -> None:
-	"""Fallback per-line configuration for a line whose `.genvm-tool.py` has no
+	"""
+	Fallback per-line configuration for a line whose `.genvm-tool.py` has no
 	`configure` hook: the standard codegen + crates + install, resolving the
 	runner registry from a committed ``executor/registry`` when present, else nix.
 	"""

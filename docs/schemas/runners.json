@@ -13,12 +13,12 @@
       },
       "runner-id": {
         "type": "string",
-        "description": "Identifier of a runner to load",
+        "description": "Identifier of a runner to load. Hashes are matched in their canonical GVM32 form; the executor's decoder is additionally lenient about case, the `i`/`l`/`o` aliases and ignored `-`, but ids are not written that way",
         "anyOf": [
           {
-            "pattern": "^[a-zA-Z0-9_-]+:[a-zA-Z0-9_=-]+$",
+            "pattern": "^[a-zA-Z0-9_-]+:[0-9abcdefghjkmnpqrstvwxyz]{52}$",
             "not": { "pattern": "^(contract|chain|custom):" },
-            "description": "`name:hash` — packaged runner by human readable name and archive hash (in debug mode hash may be `test`/`latest`). `contract`/`chain`/`custom` are reserved and cannot be used as a name"
+            "description": "`name:hash` — packaged runner by human readable name and archive hash, the latter 52 GVM32 characters (in dev mode the magic `test0000...` hash, which is itself well-formed GVM32). `contract`/`chain`/`custom` are reserved and cannot be used as a name"
           },
           {
             "const": "contract",
@@ -29,21 +29,22 @@
             "description": "`chain:<address>[:<a|f>[:<slot>]]` — code blob read from a `0x` 20 byte address at a GVM32-encoded 32 byte slot, `a`=accepted / `f`=finalized. `<a|f>` and `<slot>` are optional: `<a|f>` defaults to `a` and `<slot>` to the target contract's root code slot"
           },
           {
-            "pattern": "^custom:[a-zA-Z0-9_=-]+$",
-            "description": "`custom:<hash>` — runner registered at runtime"
+            "pattern": "^custom:[0-9abcdefghjkmnpqrstvwxyz]{52}$",
+            "description": "`custom:<hash>` — runner registered at runtime, addressed by 52 GVM32 characters"
           }
+        ]
+      },
+      "NestedInitAction": {
+        "description": "A rule nested inside another one. `$schema` is only accepted on the top level object.",
+        "allOf": [
+          { "$ref": "#/definitions/InitAction" },
+          { "not": { "required": ["$schema"] } }
         ]
       },
       "InitAction": {
         "description": "A single rule for loading.",
         "type": "object",
         "allOf": [
-          {
-            "type": "object",
-            "properties": {
-              "$schema": { "type": "string" }
-            }
-          },
           {
             "oneOf": [
               {
@@ -95,9 +96,12 @@
           }
         ],
         "properties": {
+          "$schema": { "type": "string" },
           "AddEnv": {
             "description": "Adds environment variable",
             "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "val"],
             "properties": {
               "name": {
                 "type": "string",
@@ -112,6 +116,8 @@
           "MapFile": {
             "description": "Makes file available at specified path in genvm",
             "type": "object",
+            "additionalProperties": false,
+            "required": ["file", "to"],
             "properties": {
               "file": {
                 "type": "string",
@@ -146,26 +152,30 @@
             "description": "Execute sequence",
             "type": "array",
             "items": {
-              "$ref": "#/definitions/InitAction"
+              "$ref": "#/definitions/NestedInitAction"
             }
           },
           "When": {
             "description": "Conditionally execute action",
             "type": "object",
+            "additionalProperties": false,
+            "required": ["cond", "action"],
             "properties": {
               "cond": { "$ref": "#/definitions/WasmMode" },
-              "action": { "$ref": "#/definitions/InitAction" }
+              "action": { "$ref": "#/definitions/NestedInitAction" }
             }
           },
           "With": {
             "description": "Makes given runner current without executing it's action. It means that MapFile will fork with files from this archive. Useful for creating lock files",
             "type": "object",
+            "additionalProperties": false,
+            "required": ["runner", "action"],
             "properties": {
               "runner": {
                 "description": "runner id to make current",
                 "$ref": "#/definitions/runner-id"
               },
-              "action": { "$ref": "#/definitions/InitAction" }
+              "action": { "$ref": "#/definitions/NestedInitAction" }
             }
           }
         },

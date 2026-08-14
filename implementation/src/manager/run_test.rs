@@ -13,6 +13,8 @@ fn test_ctx(retention: &str, permits: usize) -> Ctx {
             num_throttled: 0,
             throttled: None,
         }),
+        permits_sync: 1,
+        permits_nondet: 2,
         executors_path: std::path::PathBuf::new(),
     }
 }
@@ -444,6 +446,18 @@ async fn cancel_while_queued_consumes_no_permit() {
 }
 
 #[tokio::test]
+async fn permits_cannot_drop_below_the_most_expensive_run() {
+    let ctx = test_ctx("5m", 8);
+    assert_eq!(ctx.min_permits(), 2);
+
+    assert_eq!(ctx.set_permits(1).await, 8);
+    assert_eq!(ctx.get_current_permits(), 8);
+
+    assert_eq!(ctx.set_permits(2).await, 2);
+    assert_eq!(ctx.get_current_permits(), 2);
+}
+
+#[tokio::test]
 async fn nested_run_does_not_consume_parent_permit() {
     let ctx = test_ctx("5m", 1);
     let exec = fake_execution(GenVMId(1), None);
@@ -829,4 +843,37 @@ fn message_schema_matches_the_rust_struct() {
     accepted.sort();
 
     assert_eq!(documented_properties("MessageData"), accepted);
+}
+
+#[test]
+fn a_delegated_chain_is_bounded_more_tightly_than_plain_recursion() {
+    // The first hop clamps to the cross-major cap, and every hop after it
+    // spends one, so a chain of delegated calls dies well before the VM
+    // recursion budget it was minted from would.
+    let mut remaining = 1_000;
+    let mut hops = 0;
+    loop {
+        remaining = cross_major_recursion(remaining);
+        if remaining == 0 {
+            break;
+        }
+        hops += 1;
+        // What an executor spends on the sub-VM it spawns for the next hop.
+        remaining -= 1;
+    }
+
+    assert_eq!(hops, CROSS_MAJOR_RECURSION as usize);
+}
+
+#[test]
+fn a_delegated_chain_never_widens_the_budget_it_was_given() {
+    for remaining in [
+        0,
+        1,
+        CROSS_MAJOR_RECURSION - 1,
+        CROSS_MAJOR_RECURSION,
+        1_000,
+    ] {
+        assert!(cross_major_recursion(remaining) <= remaining, "{remaining}");
+    }
 }

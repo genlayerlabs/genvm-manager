@@ -1,5 +1,7 @@
 #![allow(non_upper_case_globals, dead_code)]
 
+// genvm-tool-test-tags: feature-prompt-text, feature-prompt-json, needs-llm, needs-web
+
 use std::collections::BTreeMap;
 use std::collections::HashMap;
 

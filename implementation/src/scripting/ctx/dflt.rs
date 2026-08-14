@@ -17,8 +17,7 @@ use super::CtxPart;
 static START: std::sync::LazyLock<std::time::Instant> =
     std::sync::LazyLock::new(std::time::Instant::now);
 
-/// Process-relative monotonic milliseconds: comparable only within one process,
-/// not a wall clock. Exists because the Lua sandbox loads no os library.
+/// Process-relative monotonic milliseconds
 fn monotonic_ms() -> mlua::Integer {
     let elapsed = START.elapsed().as_millis();
     elapsed.min(mlua::Integer::MAX as u128) as mlua::Integer

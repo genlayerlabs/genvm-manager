@@ -7,6 +7,10 @@ log_disable: tracing*,polling*,tungstenite*,tokio_tungstenite*
 log_level: info
 
 manifest_path: ${exeDir}/../data/manifest.yaml
-permits: null # if null will be auto-discovered; full VM takes 2, sync VM takes 1
+permits: # 1 permit is 1 GiB of RAM
+  total: null # if null, free memory times `per_gib`
+  per_gib: 1 # permits per gibibyte of free memory, an integer or a ratio (1/4 = one permit per 4 GiB)
+  sync: 4 # permits a sync run costs
+  nondet: 8 # permits a nondet run costs, also the minimum for `total`
 execution_retention: 5m # finished executions are retained until ack or this TTL
 max_message_bytes: 67108864 # 64 MiB manager websocket message cap

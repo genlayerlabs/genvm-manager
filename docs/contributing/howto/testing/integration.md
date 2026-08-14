@@ -21,6 +21,14 @@ stays in-process, which is what all other cases do. A routed callee must pin
 its runner by hash: the nested executor runs with debug mode disabled, where
 `:test` does not resolve. See `misc/routed_call` on v0.3.x
 
+A multi-line system case may also set `reroute_to` on an individual step, for
+example while deploying a fixture with the executor line that owns its public
+ABI. Use `${executorV02}` or `${executorV03}` rather than pinning a release
+version; the collector unfolds these from `build/info.json`
+
+Set `expected_executor_route_requests` to assert the exact hook calls. Each
+entry has `contract_address`, numeric `state_mode`, and `advisory_major`
+
 A step's declared public-ABI `major` is read from the contract's root slot, so
 the manager routes it the way a real host would. A step may set `major`
 explicitly when its subject is what the executor does with a major the manager
@@ -37,8 +45,8 @@ would otherwise refuse to route — see `runner/major_mismatch`
 
 Stability is the second argument of `util.features(paths, stability)` in the
 case's jsonnet `tags`; legacy v0.2.x uses a `stable/` top-level directory
-instead. `--filter-tag` tokenizes alphabetic words only, so a hyphenated tag —
-`semi-stable`, any `feature-*` — is unmatchable there; use `--filter-name`
+instead. `--filter-tag` accepts alphanumeric tag names containing `-` and `_`;
+matching remains exact
 
 ## Running a Subset
 
@@ -76,8 +84,11 @@ exposed. A top-level `debug_mode` in the jsonnet lowers that to `safe`,
 `safe-unbounded` or raises it to `unsafe-tracing`; `disabled` is rejected,
 because `reroute_to` — what points a case at its own line's executor — is
 honored only from `safe` up. Below `unsafe` a contract must name its runner by
-hash instead of `:test`, read from
-`build/out/executor/<version>/data/latest.json`
+hash instead of `:test`. Write `@RUNNER_LATEST_<line>_<runner>@` for that hash,
+for example `py-genlayer:@RUNNER_LATEST_v0.3_py-genlayer@`: the harness replaces
+it with the uid in `build/out/executor/<version>/data/latest.json` before the
+code reaches an executor, so a runner change needs no test edit. A literal uid
+still works and goes stale
 
 ## Services
 
@@ -85,3 +96,6 @@ The manager, the modules and the webdriver start automatically; `--no-manager`
 and `--no-webdriver` reuse externally running ones (a manual webdriver is
 `bash webdriver/build-and-run.sh`). After WASM files change,
 `./build/out/executor/<version>/bin/genvm precompile` saves test time
+
+`--no-manager` omits cases that require a manager with a suite-owned config or
+restart lifecycle

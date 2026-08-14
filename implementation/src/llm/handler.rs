@@ -190,17 +190,15 @@ impl Inner {
                 consumed_gen: primitive_types::U256::MAX,
             });
         }
-        if let Some(mlua_err) = err.downcast_ref::<mlua::Error>() {
-            if let mlua::Error::ExternalError(ext) = mlua_err {
-                if ext
-                    .downcast_ref::<crate::common::BudgetExhausted>()
-                    .is_some()
-                {
-                    return Ok(llm_iface::PromptAnswer {
-                        data: llm_iface::PromptAnswerData::Text(String::new()),
-                        consumed_gen: primitive_types::U256::MAX,
-                    });
-                }
+        if let Some(mlua::Error::ExternalError(ext)) = err.downcast_ref::<mlua::Error>() {
+            if ext
+                .downcast_ref::<crate::common::BudgetExhausted>()
+                .is_some()
+            {
+                return Ok(llm_iface::PromptAnswer {
+                    data: llm_iface::PromptAnswerData::Text(String::new()),
+                    consumed_gen: primitive_types::U256::MAX,
+                });
             }
         }
         Err(err)

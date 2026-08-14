@@ -23,10 +23,10 @@ results:
   leader's result at ``call_no`` from this vector and feeds it back to the contract
   as the second argument of the non-det block. If the leader produced fewer entries
   than the validator demands, the run aborts with
-  ``VmError::absent_leader_nondet_output``.
+  ``VmError::leader_fault().nondet_output().absent()``.
 
 ``call_no`` is a monotonically increasing counter incremented per ``RunNondet``
-invocation. The hard cap is ``public_abi::top_limits::NONDET_BLOCKS`` (``4096``);
+invocation. The hard cap is ``internal_constants::top_limits::NONDET_BLOCKS`` (``4096``);
 exceeding it produces ``VmError::oom().ram().limit()``. The counter is what binds
 a leader's i-th non-det result to the validator's i-th non-det check — the
 ordering of ``RunNondet`` calls in deterministic code MUST match between leader

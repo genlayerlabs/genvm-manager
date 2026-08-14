@@ -17,9 +17,21 @@
 let
   lib = pkgs.lib;
 
+  monorepo = builtins.fromJSON (builtins.readFile (root-src + "/.genvm-monorepo-root"));
+  release-src = get-root-subtree (
+    [
+      ".genvm-monorepo-root"
+      "install"
+      "libs/unhardcoded-engine/llm_policy"
+      "libs/unhardcoded-engine/llm_policy.lua"
+      "support/manifest-base.yaml"
+    ]
+    ++ builtins.map (line: "executors/${line}.x/manifest.json") monorepo.active-versions
+  );
+
   # The shipped LLM dispatch script requires the `llm_policy` package, which
   # lives in the unhardcoded-engine submodule instead of under install/.
-  llm-policy-src = root-src + "/libs/unhardcoded-engine";
+  llm-policy-src = release-src + "/libs/unhardcoded-engine";
 
   make-for-target =
     target:
@@ -38,6 +50,8 @@ let
           "crates/modules-interfaces"
           "crates/calldata"
           "crates/calldata-derive"
+          # a dev-dependency of the executor crates below, but cargo still needs its manifest
+          "crates/fuzzing"
           # executor crates come from the v0.3.x submodule mount
           "executors/v0.3.x/executor/crates"
         ];
@@ -57,7 +71,7 @@ let
 
       srcs = [
         exe
-        ../install
+        (release-src + "/install")
       ]
       ++ compiled-libs.${target};
 
@@ -103,7 +117,7 @@ let
 
         # Assemble data/manifest.yaml from the active executor submodules
         # (executor-version + available-after) and the static base fields.
-        genvm-tool -C ${root-src} build-manifest --output "$out/data/manifest.yaml"
+        genvm-tool -C ${release-src} build-manifest --output "$out/data/manifest.yaml"
 
         patch-rpath --codesign --search-dir "$out/lib" --rpath '$ORIGIN/../lib' "$out/bin/genvm-modules"
         find "$out/lib" -type f -name '*.so' -not -name 'libc.so' | while read lib; do

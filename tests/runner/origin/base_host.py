@@ -102,7 +102,8 @@ class HostException(Exception):
 
 @dataclass(frozen=True)
 class UnsafeOverrides:
-	"""Request overrides that reach boundaries production traffic cannot.
+	"""
+	Request overrides that reach boundaries production traffic cannot.
 
 	Each member states the `debug_mode` the manager requires before it applies:
 	`reroute_to` from `safe`, `initial_recursion` from `unsafe`. With debugging
@@ -477,7 +478,8 @@ async def host_loop_on(
 
 
 class ConsumedResultDecodeError(Exception):
-	"""`consumed_result` bytes did not parse into a `ConsumedResult` at all.
+	"""
+	`consumed_result` bytes did not parse into a `ConsumedResult` at all.
 
 	Distinct from `ConsumedResult.internal_error(...)`, which is itself a
 	valid (if unhappy) result value produced from bytes that *did* parse:
@@ -493,7 +495,7 @@ class ConsumedResult:
 	"""The decoded `consumed_result` blob: a `ResultCode` byte plus calldata."""
 
 	execution_hash: bytes
-	result_kind: public_abi.ResultCode
+	result_kind: host_fns.ResultCode
 	result_data: gvm_calldata.Decoded
 	result_fingerprint: ResultFingerprint | None = None
 	result_storage_changes: list[tuple[bytes, bytes]] = field(default_factory=list)
@@ -505,7 +507,7 @@ class ConsumedResult:
 	def internal_error(cls, message: str) -> 'ConsumedResult':
 		return cls(
 			execution_hash=b'',
-			result_kind=public_abi.ResultCode.INTERNAL_ERROR,
+			result_kind=host_fns.ResultCode.INTERNAL_ERROR,
 			result_data=message,
 		)
 
@@ -522,7 +524,7 @@ class ConsumedResult:
 			)
 			empty = not as_bytes
 			if not empty:
-				result_kind = public_abi.ResultCode(as_bytes[0])
+				result_kind = host_fns.ResultCode(as_bytes[0])
 				decoded = gvm_calldata.decode(as_bytes[1:])
 		except Exception as exc:
 			# Unreadable bytes are a protocol violation rather than a result, so
@@ -538,6 +540,10 @@ class ConsumedResult:
 			return cls.internal_error('empty_result')
 		if not isinstance(decoded, dict):
 			return cls.internal_error('result is not a mapping')
+		# The executor reports fatality; degrading it to an ordinary VM error
+		# is the host's job, so that a caller in another major can still see it
+		if result_kind == host_fns.ResultCode.FATAL_VM_ERROR:
+			result_kind = host_fns.ResultCode.VM_ERROR
 		return cls(
 			execution_hash=decoded.get('execution_hash', b''),
 			result_kind=result_kind,
@@ -560,7 +566,7 @@ class RunHostAndProgramRes:
 
 	execution_hash: bytes
 
-	result_kind: public_abi.ResultCode
+	result_kind: host_fns.ResultCode
 	result_data: gvm_calldata.Decoded
 	result_fingerprint: ResultFingerprint | None
 	result_storage_changes: list[tuple[bytes, bytes]]
@@ -615,7 +621,8 @@ class ManagerRunLost(Exception):
 
 
 class ManagerRunNotStarted(Exception):
-	"""A run never reached execution, so retrying it re-executes nothing.
+	"""
+	A run never reached execution, so retrying it re-executes nothing.
 
 	Raised for the two ways the manager can refuse before the genvm runs -- a
 	rejected RUN request and a `failed_to_start` terminal. Retry policy belongs
@@ -633,7 +640,8 @@ class ManagerRunNotStarted(Exception):
 
 
 class TerminalResultUnavailable(Exception):
-	"""A run reached a terminal `finished` state, but its result could not be
+	"""
+	A run reached a terminal `finished` state, but its result could not be
 	retrieved or decoded -- artifact transfer failed, or `consumed_result` was
 	empty/malformed.
 
@@ -763,7 +771,8 @@ class ManagerClient:
 	def _require_current_generation(
 		self, boot_id: int, genvm_id: int, *, op: str
 	) -> None:
-		"""Refuse to act on a run from a manager generation we have since left.
+		"""
+		Refuse to act on a run from a manager generation we have since left.
 
 		`CANCEL`/`ACK`/`GET_ARTIFACT` identify a run to the manager by
 		`genvm_id` alone -- the wire protocol has no `boot_id` field for them
@@ -1124,7 +1133,8 @@ def _duration_string(seconds: float | None) -> str | None:
 
 
 def _decode_genvm_log(data: bytes) -> list[dict[str, typing.Any]]:
-	"""Decodes the genvm log artifact, which is json lines.
+	"""
+	Decodes the genvm log artifact, which is json lines.
 
 	Split on newline bytes only. `str.splitlines` also breaks on U+2028, U+2029
 	and U+0085, none of which json escapes and all of which therefore appear raw
@@ -1324,9 +1334,9 @@ async def run_genvm(
 				) from exc
 			if (
 				status.get('cause') == 'deadline'
-				and consumed.result_kind != public_abi.ResultCode.RETURN
+				and consumed.result_kind != host_fns.ResultCode.RETURN
 			):
-				consumed.result_kind = public_abi.ResultCode.VM_ERROR
+				consumed.result_kind = host_fns.ResultCode.VM_ERROR
 				consumed.result_data = str(public_abi.VmError.timeout())
 		else:
 			# A failed_to_start terminal means the genvm was accepted but never
@@ -1346,7 +1356,7 @@ async def run_genvm(
 			raise ManagerRunNotStarted(error, retryable=retryable, reason=reason)
 
 		vm_error_description: str | None = None
-		if consumed.result_kind == public_abi.ResultCode.VM_ERROR and isinstance(
+		if consumed.result_kind == host_fns.ResultCode.VM_ERROR and isinstance(
 			consumed.result_data, str
 		):
 			try:

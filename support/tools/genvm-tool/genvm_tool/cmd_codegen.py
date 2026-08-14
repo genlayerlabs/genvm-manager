@@ -1,4 +1,5 @@
-"""`genvm-tool codegen` — generate language bindings from genvm data JSON.
+"""
+`genvm-tool codegen` — generate language bindings from genvm data JSON.
 
 Renders a data JSON file (`-i`) to a `--lang` backend (rust/python/rst/go) at
 `-o`. The build runs this for the rust/python/rst outputs; `--lang go` is a

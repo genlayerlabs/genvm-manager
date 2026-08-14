@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Pre-commit guard: keep source text plain and citation-free.
+"""
+Pre-commit guard: keep source text plain and citation-free.
 
 Comments should read on their own terms and stay ASCII. Rejected anywhere in a
 scanned file: architecture-decision and issue-ticket references -- they

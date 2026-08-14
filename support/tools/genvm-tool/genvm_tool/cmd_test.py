@@ -1,4 +1,5 @@
-"""`genvm-tool test` — run the test suite.
+"""
+`genvm-tool test` — run the test suite.
 
 Everything after `test` is forwarded to the test runner, which has its own
 `run` and `show plan|test|services|tags` subcommands plus filter flags. Run

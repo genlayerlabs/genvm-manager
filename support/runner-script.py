@@ -52,8 +52,7 @@ def run_verify_file(args):
 	path = Path(args.file)
 	expected_hash: str | None = args.expected_hash
 	if expected_hash is None:
-		expected_hash = path.name
-		expected_hash = expected_hash.removesuffix('.tar')
+		expected_hash = path.stem
 
 	if not all([x in HASH_VALID_CHARS for x in expected_hash]):
 		print(f'invalid hash {expected_hash}', file=sys.stderr)
@@ -93,12 +92,12 @@ def _load_registry(file: str) -> dict[str, list[str]]:
 	return ret
 
 
-def _object_gcs_path(name: str, hash: str) -> str:
-	return f'genvm_runners/{name}/{hash}.tar'
+def _object_gcs_path(name: str, hash: str, ext: str) -> str:
+	return f'genvm_runners/{name}/{hash}.{ext}'
 
 
-def _download_single(name: str, hash: str) -> bytes:
-	url = f'https://storage.googleapis.com/gh-af/{_object_gcs_path(name, hash)}'
+def _download_single(name: str, hash: str, ext: str) -> bytes:
+	url = f'https://storage.googleapis.com/gh-af/{_object_gcs_path(name, hash, ext)}'
 	with urllib.request.urlopen(url) as f:
 		return f.read()
 
@@ -141,7 +140,7 @@ def run_download(args):
 	for name, hashes in registry.items():
 		for hash in hashes:
 			try:
-				cur_dst = dst.joinpath(name, hash[:2], hash[2:] + '.tar')
+				cur_dst = dst.joinpath(name, hash[:2], hash[2:] + '.' + args.extension)
 
 				if cur_dst.exists():
 					data = cur_dst.read_bytes()
@@ -154,7 +153,7 @@ def run_download(args):
 				else:
 					print(f'info: not found {cur_dst}')
 
-				data = _download_single(name, hash)
+				data = _download_single(name, hash, args.extension)
 				if not check_bytes(data, hash):
 					raise ValueError('hash mismatch')
 
@@ -175,11 +174,11 @@ def run_download(args):
 	print(json.dumps({'downloaded': successful}, sort_keys=True))
 
 
-def _upload_single(name: str, hash: str, contents: bytes, *, token: str):
+def _upload_single(name: str, hash: str, contents: bytes, *, ext: str, token: str):
 	if not check_bytes(contents, hash):
 		raise ValueError('hash mismatch')
 
-	object_name = urllib.parse.quote_plus(_object_gcs_path(name, hash))
+	object_name = urllib.parse.quote_plus(_object_gcs_path(name, hash, ext))
 
 	upload_url = f'https://storage.googleapis.com/upload/storage/v1/b/gh-af/o?uploadType=media&name={object_name}'
 
@@ -249,8 +248,10 @@ def run_upload(args):
 		for hash in hashes:
 			try:
 				print(f'trying {name}:{hash} ...')
-				data = root.joinpath(name, hash[:2], hash[2:] + '.tar').read_bytes()
-				_upload_single(name, hash, data, token=token)
+				data = root.joinpath(
+					name, hash[:2], hash[2:] + '.' + args.extension
+				).read_bytes()
+				_upload_single(name, hash, data, ext=args.extension, token=token)
 			except Exception as e:
 				print(f'warn: failed to upload {name}:{hash}, {e}', file=sys.stderr)
 
@@ -273,7 +274,8 @@ EXECUTOR_LINE_TARGET_RE = re.compile(r'^executor-v\d+\.\d+-(?P<platform>.+)$')
 
 
 def _expand_targets(targets: set[str]) -> set[str]:
-	"""Add the per-platform alias of every per-line executor target.
+	"""
+	Add the per-platform alias of every per-line executor target.
 
 	Every executor line builds against the same dependency set, so the registry
 	keys them by platform (`executor-amd64-linux`), while the build targets name
@@ -493,6 +495,11 @@ if __name__ == '__main__':
 	verify_file_parser.set_defaults(func=run_verify_file)
 
 	download_parser = subparsers.add_parser('download')
+	download_parser.add_argument(
+		'--extension',
+		default='zip',
+		help='runner archive extension; the frozen v0.2.x line uses `tar`',
+	)
 	download_parser.add_argument('--dest', default='.')
 	download_parser.add_argument('--allow-partial', default=False, action='store_true')
 	download_parser.add_argument('--nix-preload', default=False, action='store_true')
@@ -500,6 +507,11 @@ if __name__ == '__main__':
 	download_parser.set_defaults(func=run_download)
 
 	upload_file_parser = subparsers.add_parser('upload')
+	upload_file_parser.add_argument(
+		'--extension',
+		default='zip',
+		help='runner archive extension; the frozen v0.2.x line uses `tar`',
+	)
 	upload_file_parser.add_argument('--root', default='.')
 	upload_file_parser.add_argument('--registry', required=True, metavar='FILE')
 	upload_file_parser.set_defaults(func=run_upload)

@@ -1,10 +1,8 @@
 // This file is auto-generated. Do not edit!
 
-#![allow(dead_code, clippy::redundant_static_lifetimes)]
+#![allow(dead_code, clippy::all)]
 
 use serde::{Deserialize, Serialize};
-
-use std::borrow::Cow;
 
 #[derive(
     Debug,
@@ -88,6 +86,61 @@ impl TryFrom<u8> for Methods {
     ::genlayer_calldata::Decode,
 )]
 #[repr(u8)]
+pub enum ResultCode {
+    Return = 0,
+    UserError = 1,
+    VmError = 2,
+    InternalError = 3,
+    FatalVmError = 4,
+}
+
+impl ResultCode {
+    pub const SIZE: usize = 5;
+    pub fn value(self) -> u8 {
+        match self {
+            ResultCode::Return => 0,
+            ResultCode::UserError => 1,
+            ResultCode::VmError => 2,
+            ResultCode::InternalError => 3,
+            ResultCode::FatalVmError => 4,
+        }
+    }
+    pub fn str_snake_case(self) -> &'static str {
+        match self {
+            ResultCode::Return => "return",
+            ResultCode::UserError => "user_error",
+            ResultCode::VmError => "vm_error",
+            ResultCode::InternalError => "internal_error",
+            ResultCode::FatalVmError => "fatal_vm_error",
+        }
+    }
+}
+
+impl TryFrom<u8> for ResultCode {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, ()> {
+        match value {
+            0 => Ok(ResultCode::Return),
+            1 => Ok(ResultCode::UserError),
+            2 => Ok(ResultCode::VmError),
+            3 => Ok(ResultCode::InternalError),
+            4 => Ok(ResultCode::FatalVmError),
+            _ => Err(()),
+        }
+    }
+}
+#[derive(
+    Debug,
+    PartialEq,
+    Clone,
+    Copy,
+    Serialize,
+    Deserialize,
+    ::genlayer_calldata::Encode,
+    ::genlayer_calldata::Decode,
+)]
+#[repr(u8)]
 pub enum Errors {
     Ok = 0,
     EvmReverted = 1,
@@ -124,34 +177,6 @@ impl TryFrom<u8> for Errors {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct VmErrorDetail(pub Cow<'static, str>);
-
-impl From<VmErrorDetail> for String {
-    fn from(val: VmErrorDetail) -> String {
-        val.0.into()
-    }
-}
-#[rustfmt::skip]
-impl VmErrorDetail {
-    pub const fn internal() -> Self { Self(Cow::Borrowed("internal")) }
-    pub const fn external() -> Self { Self(Cow::Borrowed("external")) }
-}
-
-#[rustfmt::skip]
-impl VmErrorDetail {
-    /// Whether `s` is a well-formed `vm_error_detail` path.
-    pub fn is_valid_(s: &str) -> bool {
-        if matches!(s,
-            "internal" |
-            "external"
-        ) {
-            return true;
-        }
-        false
-    }
-}
-
 pub const CURRENT_MAJOR: u8 = 0;
 pub const CURRENT_MAJOR_STR: &'static str = "v0.0.0";
 

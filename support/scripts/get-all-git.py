@@ -108,7 +108,8 @@ def _read_gitmodules_entries(root: Path) -> dict[str, dict[str, str]]:
 
 
 def _gitlink_hash(root: Path, path: str) -> str:
-	"""The commit ``path`` is pinned to, read from the index like git does.
+	"""
+	The commit ``path`` is pinned to, read from the index like git does.
 
 	Staged and committed agree except right after a gitlink bump, where the
 	index is the one the next commit will carry.
@@ -214,7 +215,8 @@ def has_commit(repo: Path, commit: str) -> bool:
 
 
 def open_cache(root: Path, url: str, env: dict[str, str]) -> Path:
-	"""Create (if needed) and configure the bare cache repo for ``url``.
+	"""
+	Create (if needed) and configure the bare cache repo for ``url``.
 
 	Every submodule sharing this URL is checked out of this one repository, so
 	its objects are fetched once and its refs are what keeps them alive.
@@ -265,7 +267,8 @@ def open_cache(root: Path, url: str, env: dict[str, str]) -> Path:
 def fetch_pins(
 	root: Path, cache: Path, submodules: list[SubmoduleGitInfo], env: dict[str, str]
 ) -> None:
-	"""Make sure every pinned commit is in ``cache``, and keep it reachable.
+	"""
+	Make sure every pinned commit is in ``cache``, and keep it reachable.
 
 	An unreferenced commit is only kept alive by the worktree HEADs pointing at
 	it, and those checkouts do not exist yet — hence a ref per pin.
@@ -338,7 +341,8 @@ def has_staged_changes(path: Path) -> bool:
 
 
 def clear_staging(staging: Path, name: str) -> None:
-	"""Remove ``staging``, provided it is a leftover of an interrupted conversion.
+	"""
+	Remove ``staging``, provided it is a leftover of an interrupted conversion.
 
 	Which holds one `--no-checkout` worktree, so at most a `.git` file. Anything
 	else under that name is somebody's data.
@@ -356,7 +360,8 @@ def clear_staging(staging: Path, name: str) -> None:
 def adopt_as_worktree(
 	root: Path, cache: Path, dest: Path, head: str, env: dict[str, str]
 ) -> None:
-	"""Give the populated directory ``dest`` the `.git` of a worktree at ``head``.
+	"""
+	Give the populated directory ``dest`` the `.git` of a worktree at ``head``.
 
 	`git worktree add` cannot be pointed at a directory that has files in it, so
 	the worktree is created empty beside it and only its `.git` file moves. No
@@ -406,7 +411,8 @@ def adopt_as_worktree(
 def convert_from_dangling(
 	root: Path, cache: Path, submodule: SubmoduleGitInfo, env: dict[str, str]
 ) -> None:
-	"""Re-attach a checkout whose `.git` names a gitdir that is gone.
+	"""
+	Re-attach a checkout whose `.git` names a gitdir that is gone.
 
 	The files are all there is to go on, so the checkout is re-attached at the
 	gitlink. Files that the old checkout had at some other commit stay as they
@@ -422,7 +428,8 @@ def convert_to_worktree(
 	gitdir: Path | None,
 	env: dict[str, str],
 ) -> None:
-	"""Re-point an existing checkout at ``cache``, keeping every file in place.
+	"""
+	Re-point an existing checkout at ``cache``, keeping every file in place.
 
 	Deleting and re-adding the directory would take the ignored content with it
 	— the materialized third-party trees above all — so only the `.git` file is

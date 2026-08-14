@@ -1,3 +1,5 @@
+// genvm-tool-test-tags: feature-prompt-text, feature-prompt-json
+
 // End-to-end tests for the LLM dispatch script after backend selection and the
 // retry state machine were delegated to the `llm_policy` engine. Everything here
 // runs offline against fake local TCP backends; no API keys, no network.

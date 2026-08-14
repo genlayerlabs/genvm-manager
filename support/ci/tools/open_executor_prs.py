@@ -173,7 +173,7 @@ def open_executor_prs(ctx: gh_common.Ctx) -> None:
 			continue
 		url = existing_pr(ctx, head, base) or open_pr(ctx, head, base)
 		print(f'{line}: executor PR {url}')
-		lines.append(f'executor: {url}')
+		lines.append(f'executor: {url} ({line})')
 	if lines:
 		upsert_comment(ctx, lines)
 	else:

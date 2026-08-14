@@ -1,3 +1,5 @@
+// genvm-tool-test-tags: feature-prompt-text, needs-time
+
 use genvm_common::logger;
 use genvm_common::*;
 use std::collections::BTreeMap;
