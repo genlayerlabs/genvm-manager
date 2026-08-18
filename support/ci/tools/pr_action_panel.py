@@ -160,10 +160,10 @@ def head_branch():
 	).strip()
 
 
-def dispatch_full_tests():
+def dispatch_full_tests(*, release_pipeline_test: bool):
 	# Start queue.yaml on the PR head branch so the run's head_sha matches the
-	# PR head (the Merge gate keys off head_sha). A workflow_dispatch fired with
-	# GITHUB_TOKEN does create a run, unlike a bot-applied `labeled` event.
+	# PR head (the Merge gate keys off head_sha). Label edits intentionally do not
+	# trigger queue.yaml; workflow_dispatch is the only panel-driven entry point.
 	branch = head_branch()
 	if not branch:
 		print('could not resolve PR head branch; cannot dispatch full tests')
@@ -178,6 +178,8 @@ def dispatch_full_tests():
 		branch,
 		'-f',
 		f'pr={pr_number()}',
+		'-f',
+		f'release_pipeline_test={str(release_pipeline_test).lower()}',
 	)
 	print(f'dispatched queue.yaml on `{branch}`')
 
@@ -353,7 +355,9 @@ def run_panel():
 	# otherwise queue two runs for the same head, and the second cancels the
 	# first through the `queue.yaml` concurrency group.
 	if dispatch:
-		dispatch_full_tests()
+		dispatch_full_tests(
+			release_pipeline_test='test-release-pipeline' in current,
+		)
 
 	# Provision: momentary -> force-push executor mirror branches and open their PRs.
 	if ACTION_PROVISION in actions:

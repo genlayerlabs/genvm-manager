@@ -1,6 +1,6 @@
 name: branch / post PR action panel
 
-# When a PR is opened against a dev branch (v<X>-dev) we:
+# When a PR is opened against main or a dev branch (v<X>-dev) we:
 #   - post the action panel (checklist comment) that replaces the old
 #     /genvm-* slash commands;
 #   - auto-add `ci-safe` if the PR author has write access, so their PR can
@@ -13,7 +13,7 @@ name: branch / post PR action panel
 
 on:
   pull_request_target:
-    branches: ['v*-dev']
+    branches: [main, 'v*-dev']
     # `edited` fires when the PR base branch is changed, so a PR retargeted
     # onto a dev branch also gets the panel.
     types: [opened, edited]
@@ -72,7 +72,7 @@ jobs:
           - linear history — 0 commits behind base
           - green full GenVM CI and green cross-repo E2E
 
-          Full CI runs only when **`run-full-tests`** or **`rtm`** is set; "Force run full tests" is a sticky toggle for the former.
+          Full CI starts only through "Force" or "Rerun full tests" above. "Force" also sets **`run-full-tests`**, making future pushes run the full suite; **`rtm`** only authorizes Merge.
 
           Every repo lands ONE squashed commit, subject `<PR title> (#N)`.
           </details>

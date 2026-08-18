@@ -468,8 +468,8 @@ def check_gates(pr):
 	check_approval(head_sha, pr['labels'])
 
 	# 3. full GenVM CI (queue.yaml) green on the head commit. The same head may
-	# carry skipped runs (label events that didn't run full tests) alongside the
-	# real one, and the run may have been started by either a push
+	# carry a failed markerless push run alongside the full panel run, and the
+	# successful run may have been started by either a push
 	# (event=pull_request) or the action panel (event=workflow_dispatch) — so we
 	# query all events and require ANY completed run on this exact commit to have
 	# succeeded, not just the most recent.

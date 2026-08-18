@@ -3,8 +3,9 @@ name: GenVM release
 # incl_release_build_test.yaml plus a publisher: it plans, builds every artifact
 # and tests every platform; this workflow attaches what it produced to a
 # genvm-manager release tagged with `version` from .genvm-monorepo-root.
-# `queue.yaml` runs the same pipeline on a PR (label `test-release-pipeline`),
-# so everything below is the only release-only part.
+# `queue.yaml` runs the same pipeline on a PR carrying `test-release-pipeline`
+# when CI starts from the action panel or a push, so everything below is the
+# only release-only part.
 #
 #   genvm-<arch>-<os>.tar.xz  — manager + every active executor line for that
 #                               platform (bin/, lib/, config/, data/, executor/)

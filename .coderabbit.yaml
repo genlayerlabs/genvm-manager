@@ -22,12 +22,10 @@ reviews:
     - "!**/*.hash"
     - "!**/*.lock"
     - "!docs/website/src/_static/**"
-    - "!executors/v0.3.x/runners/py-libs/pure-py/**"
-    - "!executors/v0.3.x/runners/models/**"
-    - "!executors/v0.3.x/runners/softfloat/berkeley-softfloat-3/**"
-    - "!**/fuzz/inputs*/**"
-    # Root-level system-test fixtures (contracts, expected outputs); crate and
-    # runner test code under */tests/ is still reviewed.
-    - "!tests/**"
+    - "!**/fuzz/**"
+    - "!**/*_test.rs"
+    - "!**/*.json"
+    - "!**/tests/**"
+    - "!**/test/**"
     # genvm-tool is internal dev tooling; not worth reviewing.
     - "!support/tools/genvm-tool/**"

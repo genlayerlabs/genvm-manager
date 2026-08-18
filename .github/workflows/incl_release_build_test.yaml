@@ -5,8 +5,9 @@ name: Build and test release artifacts
 #
 # Callers see four artifacts, a tag and the executor lines; the matrices that
 # produce them are an implementation detail. `release.yaml` is this plus a
-# publisher; `queue.yaml` runs it on a PR (label `test-release-pipeline`) to
-# exercise the pipeline itself without releasing anything.
+# publisher; `queue.yaml` runs it on a PR carrying `test-release-pipeline` when
+# CI starts from the action panel or a push, exercising the pipeline itself
+# without releasing anything.
 
 on:
   workflow_call:
