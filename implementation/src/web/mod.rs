@@ -148,3 +148,6 @@ pub fn entrypoint(args: CliArgs) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

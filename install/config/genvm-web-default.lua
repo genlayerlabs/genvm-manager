@@ -16,7 +16,19 @@ function Render(ctx, payload)
 		.. "&waitAfterLoaded="
 		.. tostring(payload.wait_after_loaded or 0)
 
-	local result = lib.rs.request(ctx, {
+	-- This hop goes to *our own* webdriver sidecar, never to the contract's URL,
+	-- so the extent of this `pcall` is exactly the trust boundary: everything it
+	-- can catch is this node's environment failing, and nothing it catches is an
+	-- observation about the page.
+	--
+	-- The `pcall` does NOT soften the failure -- it labels it. A sidecar we
+	-- cannot reach or that answers badly means we have no observation to report,
+	-- so the error stays fatal and this validator abstains (Timeout) rather than
+	-- voting on a result it never computed. Contrast `Request` below, whose URL
+	-- is contract-controlled: a failure there IS an observation, so it is
+	-- lowered to non-fatal. The page's own outcome likewise arrives as a `200`
+	-- plus a `resulting-status` header and is handled further down, non-fatally.
+	local success, result = pcall(lib.rs.request, ctx, {
 		method = "GET",
 		url = web.rs.config.webdriver_host .. "/render" .. url_params,
 		headers = {},
@@ -24,6 +36,10 @@ function Render(ctx, payload)
 		response_body_max_size = payload.size_limit,
 		unfiltered = true,
 	})
+
+	if not success then
+		web.reraise_as_webdriver_unavailable(result)
+	end
 
 	lib.log {
 		level = "debug",
