@@ -15,9 +15,9 @@ pub enum On {
     #[serde(rename = "finalized")]
     #[calldata(rename = "finalized")]
     Finalized,
-    #[serde(rename = "accepted")]
-    #[calldata(rename = "accepted")]
-    Accepted,
+    #[serde(rename = "decided")]
+    #[calldata(rename = "decided")]
+    Decided,
 }
 
 #[derive(

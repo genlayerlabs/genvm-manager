@@ -102,7 +102,7 @@ def _loop_wat(target: Address) -> str:
 			'CallContract': {
 				'address': target,
 				'calldata': {},
-				'state': public_abi.StorageType.LATEST_NON_FINAL,
+				'state': public_abi.StorageType.LATEST_DECIDED,
 			}
 		}
 	)
@@ -549,7 +549,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 							line=3,
 							address=ADDR_CALLER_V03,
 							host_path=mock_host.path,
-							deadline='30s' if mode == 'cancel' else '10s',
+							deadline='30s' if mode == 'cancel' else '3s',
 						)
 					)
 					await asyncio.wait_for(nested_resolved.wait(), timeout=10)
@@ -985,13 +985,13 @@ def collect(
 			'state-mode-nonfinal',
 			'_assert_state_mode_crosses',
 			('state-caller-v03', 'callee-v03'),
-			(False, public_abi.StorageType.LATEST_NON_FINAL),
+			(False, public_abi.StorageType.LATEST_DECIDED),
 		),
 		(
 			'state-mode-final',
 			'_assert_state_mode_crosses',
 			('state-caller-v03', 'callee-v03'),
-			(True, public_abi.StorageType.LATEST_FINAL),
+			(True, public_abi.StorageType.LATEST_FINALIZED),
 		),
 		('deep-chain', '_assert_deep_chain', ('chain-v03', 'chain-v02'), ()),
 		*[

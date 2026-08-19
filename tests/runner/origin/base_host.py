@@ -156,7 +156,7 @@ class PostMessageInner(typing.TypedDict):
 	address: Address
 	calldata: gvm_calldata.Decoded
 	value: int
-	on: typing.Literal['finalized', 'accepted']
+	on: typing.Literal['finalized', 'decided']
 	message_fee: int
 	receipt_fee: int
 	fee_params: fees.InternalMessageParams
@@ -171,7 +171,7 @@ class DeployContractInner(typing.TypedDict):
 	calldata: gvm_calldata.Decoded
 	code: bytes
 	value: int
-	on: typing.Literal['finalized', 'accepted']
+	on: typing.Literal['finalized', 'decided']
 	salt_nonce: int
 	message_fee: int
 	receipt_fee: int
@@ -249,7 +249,7 @@ async def read_contract_major(handler: IHost, message: Message) -> int:
 	if message.get('is_init', False):
 		return UNDEPLOYED_MAJOR
 	octet = await handler.storage_read(
-		public_abi.StorageType.LATEST_NON_FINAL,
+		public_abi.StorageType.LATEST_DECIDED,
 		message['contract_address'].as_bytes,
 		ZERO_SLOT,
 		ROOT_OFFSET_MAJOR,

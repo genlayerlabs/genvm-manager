@@ -34,6 +34,11 @@ def _emit_struct(node: TrieNode, root_name: str, buf: list[str]) -> None:
 		buf.append('\t@staticmethod\n')
 		buf.append(f"\tdef val() -> '{root_name}':\n")
 		buf.append(f"\t\treturn {root_name}('{val}')\n")
+	for name in node.details:
+		val = ' '.join(node.parts)
+		buf.append('\t@staticmethod\n')
+		buf.append(f"\tdef {name.lower()}() -> '{root_name}':\n")
+		buf.append(f"\t\treturn {root_name}('{val} # {name}')\n")
 	for name, parts in node.leaves:
 		val = ' '.join(parts)
 		buf.append('\t@staticmethod\n')
@@ -84,11 +89,6 @@ def _trie(t: StrTrie, buf: list[str]) -> None:
 		buf.append('\t@staticmethod\n')
 		buf.append(f"\tdef {head.lower()}() -> '_{root_name}{child.suffix}':\n")
 		buf.append(f'\t\treturn _{root_name}{child.suffix}()\n')
-	if t.suffix is not None:
-		for name, _parts in t.suffix.leaves:
-			buf.append(f"\tdef {name.lower()}(self) -> '{root_name}':\n")
-			buf.append("\t\tassert ' # ' not in self.value\n")
-			buf.append(f"\t\treturn {root_name}(f'{{self.value}} # {name}')\n")
 	buf.append('\n')
 
 

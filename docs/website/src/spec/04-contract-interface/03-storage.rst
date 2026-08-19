@@ -59,7 +59,7 @@ the following data:
 - ``code_slot``: (offset 5) A raw 32-byte :term:`SlotID`. If it is all-zero (the default),
   the contract code is read from the ``code`` slot (offset 2); otherwise the code is read from
   the slot it points to (same 4-byte-length-prefixed layout). This lets a contract serve its
-  code from an arbitrary slot, including one shared via a ``chain:<address>:<a|f>:<slot>`` runner id.
+  code from an arbitrary slot, including one shared via a ``chain:<address>:<d|f>:<slot>`` runner id.
 - ``permissions``: (offset 37) A 32-byte (``u256``) little-endian permission bitfield read by
   the executor at the start of every load. Bit ``n`` corresponds to the permission whose value
   is ``n`` (currently only bit ``0``, ``can_use_balance_for_message_fees``). It is not reserved:

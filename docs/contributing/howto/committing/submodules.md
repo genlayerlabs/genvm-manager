@@ -79,7 +79,7 @@ are normally ahead-only. Runner hash hygiene first: [runners.md](runners.md)
 
 ## Why There Are Two Runner Trees
 
-Forward-rolling lines share the top-level `runners/<id>/<aa>/<rest>.tar` tree,
-named by Crockford base32 of `sha256(tar)`; frozen v0.2.x keeps
-`executor/<version>/legacy-runners/` with Nix base32 hashes. `flake.nix` splits
+Forward-rolling lines share the top-level `runners/<id>/<aa>/<rest>.zip` tree,
+named by Crockford base32 of `sha256(zip)`; frozen v0.2.x keeps
+`executor/<version>/legacy-runners/` as ustar tars with Nix base32 hashes. `flake.nix` splits
 the runner list per line, and `genvm check` verifies each with its own scheme

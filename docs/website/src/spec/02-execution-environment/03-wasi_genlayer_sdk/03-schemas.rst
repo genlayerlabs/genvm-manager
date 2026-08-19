@@ -38,9 +38,9 @@ Validity Of A Proposed Result
 A result the executor did not compute itself — the leader-proposed
 non-deterministic result consumed in :ref:`gvm-def-sync-mode` and
 :ref:`gvm-def-validator-mode` — is accepted only if it satisfies all of the
-following. A rejected proposal never traps and never bypasses the comparison
-stage; it is replaced by a derived :ref:`gvm-def-vm-error` and handed to the
-comparison as if it had been proposed.
+following. A rejected proposal is replaced by a derived :ref:`gvm-def-vm-error`.
+Sync mode returns that replacement without a vote; validator mode records a
+disagreement without running the comparison stage
 
 #. The buffer is non-empty. An absent or empty proposal yields
    :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-absent`.

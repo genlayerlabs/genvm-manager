@@ -128,14 +128,6 @@ A :term:`sub-VM` that a host delegated to another executor (see
 caller holds. Such a :term:`sub-VM` has no connection to the non-deterministic
 modules, so the permission cannot be served there.
 
-.. _gvm-perm-register-runners:
-
-``register_runners``
-~~~~~~~~~~~~~~~~~~~~
-
-Allows registering runner archives at runtime via
-:ref:`gvm-def-gl-call-register-runner`. Requires :ref:`gvm-perm-deterministic`.
-
 .. _gvm-perm-use-balance-for-message-fees:
 
 ``can_use_balance_for_message_fees``

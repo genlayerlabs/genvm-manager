@@ -5,6 +5,7 @@
 
 /.pre-commit-config.yaml
 .claude/hooks
+.claude/settings.local.json
 .idea
 .envrc
 *.log

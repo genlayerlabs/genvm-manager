@@ -15,8 +15,8 @@ class ResultCode(IntEnum):
 
 class StorageType(IntEnum):
 	DEFAULT = 0
-	LATEST_FINAL = 1
-	LATEST_NON_FINAL = 2
+	LATEST_FINALIZED = 1
+	LATEST_DECIDED = 2
 
 
 class EntryKind(IntEnum):
@@ -135,24 +135,54 @@ class _VmErrorOutOfMemory:
 	def wasm_table() -> 'VmError':
 		return VmError('out_of memory wasm_table')
 
+class _VmErrorOutOfReceiptMessage:
+	@staticmethod
+	def val() -> 'VmError':
+		return VmError('out_of receipt message')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('out_of receipt message # internal')
+
 class _VmErrorOutOfReceipt:
 	@staticmethod
 	def nondet_output() -> 'VmError':
 		return VmError('out_of receipt nondet_output')
 	@staticmethod
-	def message() -> 'VmError':
-		return VmError('out_of receipt message')
-	@staticmethod
 	def event() -> 'VmError':
 		return VmError('out_of receipt event')
+	@staticmethod
+	def message() -> '_VmErrorOutOfReceiptMessage':
+		return _VmErrorOutOfReceiptMessage()
+
+class _VmErrorOutOfMessageFeeTotal:
+	@staticmethod
+	def val() -> 'VmError':
+		return VmError('out_of message_fee total')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('out_of message_fee total # internal')
+	@staticmethod
+	def external() -> 'VmError':
+		return VmError('out_of message_fee total # external')
+
+class _VmErrorOutOfMessageFeeNode:
+	@staticmethod
+	def val() -> 'VmError':
+		return VmError('out_of message_fee node')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('out_of message_fee node # internal')
+	@staticmethod
+	def external() -> 'VmError':
+		return VmError('out_of message_fee node # external')
 
 class _VmErrorOutOfMessageFee:
 	@staticmethod
-	def total() -> 'VmError':
-		return VmError('out_of message_fee total')
+	def total() -> '_VmErrorOutOfMessageFeeTotal':
+		return _VmErrorOutOfMessageFeeTotal()
 	@staticmethod
-	def node() -> 'VmError':
-		return VmError('out_of message_fee node')
+	def node() -> '_VmErrorOutOfMessageFeeNode':
+		return _VmErrorOutOfMessageFeeNode()
 
 class _VmErrorOutOf:
 	@staticmethod
@@ -183,16 +213,27 @@ class _VmErrorOutOf:
 	def message_fee() -> '_VmErrorOutOfMessageFee':
 		return _VmErrorOutOfMessageFee()
 
-class _VmErrorFee:
+class _VmErrorFeeNoMatchingNode:
 	@staticmethod
-	def no_matching_node() -> 'VmError':
+	def val() -> 'VmError':
 		return VmError('fee no_matching_node')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('fee no_matching_node # internal')
+	@staticmethod
+	def external() -> 'VmError':
+		return VmError('fee no_matching_node # external')
+
+class _VmErrorFee:
 	@staticmethod
 	def below_minimum() -> 'VmError':
 		return VmError('fee below_minimum')
 	@staticmethod
 	def too_many_rounds() -> 'VmError':
 		return VmError('fee too_many_rounds')
+	@staticmethod
+	def no_matching_node() -> '_VmErrorFeeNoMatchingNode':
+		return _VmErrorFeeNoMatchingNode()
 
 class _VmErrorEvm:
 	@staticmethod
@@ -276,12 +317,6 @@ class VmError:
 	@staticmethod
 	def invalid_contract() -> '_VmErrorInvalidContract':
 		return _VmErrorInvalidContract()
-	def internal(self) -> 'VmError':
-		assert ' # ' not in self.value
-		return VmError(f'{self.value} # internal')
-	def external(self) -> 'VmError':
-		assert ' # ' not in self.value
-		return VmError(f'{self.value} # external')
 
 
 

@@ -43,17 +43,17 @@ default
 
 Value: ``0``
 
-.. _gvm-def-enum-value-storage-type-latest-final:
+.. _gvm-def-enum-value-storage-type-latest-finalized:
 
-latest_final
-~~~~~~~~~~~~
+latest_finalized
+~~~~~~~~~~~~~~~~
 
 Value: ``1``
 
-.. _gvm-def-enum-value-storage-type-latest-non-final:
+.. _gvm-def-enum-value-storage-type-latest-decided:
 
-latest_non_final
-~~~~~~~~~~~~~~~~
+latest_decided
+~~~~~~~~~~~~~~
 
 Value: ``2``
 
@@ -441,15 +441,40 @@ This error remains terminal for top-level and runner loads. During :ref:`gvm-def
 ``invalid_contract wasm entrypoint``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-detail-vm-error-internal:
+.. _gvm-def-str-trie-detail-vm-error-out-of-receipt-message-internal:
 
-``# internal``
-~~~~~~~~~~~~~~
+``out_of receipt message # internal``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-detail-vm-error-external:
+.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-total-internal:
 
-``# external``
-~~~~~~~~~~~~~~
+``out_of message_fee total # internal``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-total-external:
+
+``out_of message_fee total # external``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-node-internal:
+
+``out_of message_fee node # internal``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-node-external:
+
+``out_of message_fee node # external``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-detail-vm-error-fee-no-matching-node-internal:
+
+``fee no_matching_node # internal``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-detail-vm-error-fee-no-matching-node-external:
+
+``fee no_matching_node # external``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-const-event-max-topics:
 

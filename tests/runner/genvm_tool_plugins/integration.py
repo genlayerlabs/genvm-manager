@@ -756,7 +756,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				default_message_fee_allocation = [
 					fees.DEFAULT_EXTERNAL_MESSAGE_ALLOC,
 					fees.DEFAULT_INTERNAL_FIN_MESSAGE_ALLOC,
-					fees.DEFAULT_INTERNAL_ACC_MESSAGE_ALLOC,
+					fees.DEFAULT_INTERNAL_DEC_MESSAGE_ALLOC,
 				]
 
 				message_fee_allocation: list[fees.MessageAllocationNode] = single_conf.get(

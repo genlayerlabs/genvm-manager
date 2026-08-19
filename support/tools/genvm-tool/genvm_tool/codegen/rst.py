@@ -67,16 +67,13 @@ def render(defs: list[Definition], rst_anchor_ns: str = '', **_opts) -> str:
 					buf.append(f'Param: {param}\n\n')
 				if path in d.docs:
 					buf.append(d.docs[path].rstrip() + '\n\n')
-			if d.suffix is not None:
-				for name, _parts in d.suffix.leaves:
-					path = f'{model.DETAIL_HEAD} {name}'
-					buf.append(
-						f'.. _gvm-def-{ns}str-trie-detail-{_dash(d.name)}-{_dash(name)}:\n\n'
-					)
-					buf.append(f'``{path}``\n')
-					buf.append('~' * (len(path) + 4) + '\n\n')
-					if path in d.docs:
-						buf.append(d.docs[path].rstrip() + '\n\n')
+			for path in model.enumerate_details(d.entries):
+				rst_name = path.replace(' # ', '-').replace('_', '-').replace(' ', '-')
+				buf.append(f'.. _gvm-def-{ns}str-trie-detail-{_dash(d.name)}-{rst_name}:\n\n')
+				buf.append(f'``{path}``\n')
+				buf.append('~' * (len(path) + 4) + '\n\n')
+				if path in d.docs:
+					buf.append(d.docs[path].rstrip() + '\n\n')
 	# Sections are emitted blank-line-separated, so the last one leaves a trailing
 	# blank line that `end-of-file-fixer` would strip — permanent codegen drift.
 	return ''.join(buf).rstrip('\n') + '\n'
