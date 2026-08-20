@@ -3,6 +3,74 @@
 Before changing this repository, read the matching page in `docs/contributing/`:
 a task has a how-to, a design question has an explanation
 
+## Review-Ready
+
+The bar every change must clear before you hand it back. It is called
+**Review-Ready, not Done** — "done" runs on through Darien's review, CI e2e, merge
+and release. Report **Review-Ready**, never "done"; it is binary, no partial
+credit. If any item fails it is not Review-Ready — say so plainly and name the
+blocker.
+
+### Intent
+
+1. **It does what was asked.** Restate the requirement in the PR and trace each
+   part to the evidence showing it met. (Guards against a perfectly-tested
+   implementation of the wrong thing.)
+2. **Prefer one thing**, small enough to review in one sitting — a preference,
+   NOT a gate; not always possible or convenient. What IS firm: a defect you find
+   in your OWN work you fix immediately, without asking — and if you have a
+   concern, ASK. A defect outside the diff gets recorded, not silently folded in
+   and not dropped.
+
+### Proof
+
+3. **Nothing goes to a PR untested.**
+4. **Everything testable locally is tested locally, before pushing** — lint, unit,
+   integration, conformance, compile. In this repo that is the pre-commit hooks
+   (`./support/ci/run.sh pipeline commit-hooks`), the Rust and Python suites plus
+   the integration/system cases via `genvm-tool test run`, and a debug build
+   (`genvm-tool configure && ninja -C build`) when code changed — see
+   [testing](docs/contributing/howto/testing/README.md) and
+   [building](docs/contributing/howto/building/build.md) (runner artifacts build on
+   Linux, not native macOS). CI is not our test runner: it costs real money, so
+   anything reproducible locally is caught locally; CI is for what genuinely cannot
+   be.
+5. **Targeted feature coverage.** Map the change to the affected tests and run them
+   locally before pushing — for VM, executor or protocol changes that is the
+   relevant integration/system cases (`genvm-tool test run --filter-tag ...`) and,
+   for behaviour that can drift nondeterministically, an agentic-fuzzing pass.
+   Never fewer than the tests covering the changed surface — the risk is always
+   underestimating.
+
+### The artifact
+
+6. **Read the entire diff yourself** — every line, including generated and vendored
+   changes you caused.
+7. **No known defects left in the diff** — including comments, help text and docs
+   that assert something false. A WRONG COMMENT IS A DEFECT.
+8. **Docs, the `genvm-tool` man page and `--help` match actual behaviour, same
+   PR** — including the spec or impl-spec page under `docs/website/src` when the
+   change touches documented VM or protocol behaviour, and the matching
+   `docs/contributing/` how-to or explanation page for a workflow change.
+9. **Operationally ready.** Security surface considered (new external surface,
+   secrets/keys, dependency and vendor-hash changes); new behaviour diagnosable from
+   metrics/logs without reading source; config-schema compatibility and a way to
+   back it out. State explicitly when a dimension does not apply.
+
+### The boundary
+
+10. **Review-Ready = the PR is open and its checks are green — without CI e2e**,
+    unless Darien requests it. He reviews and triggers CI e2e himself.
+11. **This list is inspected and adapted.** Every escaped defect asks: which line
+    would have caught it, and why did it not?
+
+**Approval — needs Darien's go:** merges, `--admin`, CI e2e runs, and
+external/irreversible actions outside the PR (Slack, releases, deploys).
+**Forbidden, never even ask:** force-push to a shared branch (`vX.Y`, `vX.Y-dev`) —
+branch protection blocks it too.
+**Not gated:** force-pushing your own PR branch (rebasing is routine); fixing your
+own defects.
+
 <!-- below is generated with `genvm-tool docs` -->
 
 ## Tutorial
