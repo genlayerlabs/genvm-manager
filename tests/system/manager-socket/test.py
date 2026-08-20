@@ -14,6 +14,7 @@ import genvm_tool.tests.stage.collection
 import genvm_tool_plugins.genvm as genvm
 import origin.base_host as base_host
 import origin.calldata as gvm_calldata
+import origin.host_fns as host_fns
 from gvm_extra.mock_host import MockHost, MockStorage
 from origin.calldata import Address
 from origin.manager_api import CURRENT_MAJOR, Errors, Methods
@@ -375,6 +376,15 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 				await _read_error(client, 2, Errors.MALFORMED_FRAME)
 				await client.send(Methods.CANCEL, 3, {'cancel': {'genvm_id': 999}})
 				await _read_error(client, 3, Errors.UNKNOWN_ID)
+
+	async def _fatal_consumed_result_is_rejected(self):
+		raw = bytes([host_fns.ResultCode.FATAL_VM_ERROR]) + gvm_calldata.encode({})
+		try:
+			base_host.ConsumedResult.decode(raw)
+		except base_host.ConsumedResultDecodeError as exc:
+			assert 'fatal_vm_error crossed the top-level result boundary' in str(exc)
+		else:
+			raise AssertionError('fatal consumed_result was accepted')
 
 	async def _oversized_closes_connection(self):
 		async with await self._manager('oversized', max_message_bytes=32) as manager:
@@ -920,6 +930,13 @@ def collect(
 		)
 
 	cases = [
+		(
+			'fatal-result-rejected',
+			'_fatal_consumed_result_is_rejected',
+			{},
+			None,
+			genvm.ManagerService,
+		),
 		(
 			'protocol-errors',
 			'_malformed_unknown_and_survival',

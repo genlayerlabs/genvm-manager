@@ -1387,29 +1387,84 @@ fn nested_internal_error() -> genvm_modules_interfaces::NestedRunReply {
     }
 }
 
+fn result_code_from_byte(
+    value: u8,
+    source: &str,
+) -> anyhow::Result<genvm_modules_interfaces::ResultCode> {
+    match value {
+        0 => Ok(genvm_modules_interfaces::ResultCode::Return),
+        1 => Ok(genvm_modules_interfaces::ResultCode::UserError),
+        2 => Ok(genvm_modules_interfaces::ResultCode::VmError),
+        3 => Ok(genvm_modules_interfaces::ResultCode::InternalError),
+        4 => Ok(genvm_modules_interfaces::ResultCode::FatalVmError),
+        value => anyhow::bail!("{source} returned unknown result code {value}"),
+    }
+}
+
+fn decode_reported_result(
+    data: &[u8],
+    source: &str,
+) -> anyhow::Result<(
+    genvm_modules_interfaces::ResultCode,
+    genvm_modules_interfaces::ReportedResult,
+)> {
+    let (&kind, encoded) = data
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("{source} returned an empty result"))?;
+    let kind = result_code_from_byte(kind, source)?;
+    let reported: genvm_modules_interfaces::ReportedResult = calldata::decode_obj(encoded)?;
+    // The framing byte and reported map must name the same committed result
+    anyhow::ensure!(
+        kind == reported.kind,
+        "{source} result code {kind:?} disagrees with the reported {:?}",
+        reported.kind
+    );
+
+    Ok((kind, reported))
+}
+
+fn downgrade_fatal_reported_result(
+    mut reported: genvm_modules_interfaces::ReportedResult,
+) -> Vec<u8> {
+    debug_assert_eq!(
+        reported.kind,
+        genvm_modules_interfaces::ResultCode::FatalVmError
+    );
+    reported.kind = genvm_modules_interfaces::ResultCode::VmError;
+    let mut normalized = vec![genvm_modules_interfaces::ResultCode::VmError as u8];
+    normalized.extend(calldata::encode_obj(&reported));
+    normalized
+}
+
+fn guard_top_level_consumed_result(data: Vec<u8>, genvm_id: GenVMId) -> anyhow::Result<Vec<u8>> {
+    let (kind, reported) = decode_reported_result(&data, "top-level executor")?;
+    if kind != genvm_modules_interfaces::ResultCode::InternalError {
+        anyhow::ensure!(
+            reported.execution_hash.len() == 32,
+            "top-level executor returned an invalid execution hash length"
+        );
+        anyhow::ensure!(
+            reported.small_hash.len() == 32,
+            "top-level executor returned an invalid small hash length"
+        );
+    }
+    if kind != genvm_modules_interfaces::ResultCode::FatalVmError {
+        return Ok(data);
+    }
+
+    debug_assert_ne!(
+        kind,
+        genvm_modules_interfaces::ResultCode::FatalVmError,
+        "top-level executor returned a fatal VM error after its publication boundary"
+    );
+    log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "top-level executor returned a fatal VM error; downgrading it to vm_error");
+    Ok(downgrade_fatal_reported_result(reported))
+}
+
 fn nested_reply_from_consumed_result(
     data: &[u8],
 ) -> anyhow::Result<genvm_modules_interfaces::NestedRunReply> {
-    let (&kind, encoded) = data
-        .split_first()
-        .ok_or_else(|| anyhow::anyhow!("nested executor returned an empty result"))?;
-    let kind = match kind {
-        0 => genvm_modules_interfaces::ResultCode::Return,
-        1 => genvm_modules_interfaces::ResultCode::UserError,
-        2 => genvm_modules_interfaces::ResultCode::VmError,
-        3 => genvm_modules_interfaces::ResultCode::InternalError,
-        4 => genvm_modules_interfaces::ResultCode::FatalVmError,
-        value => anyhow::bail!("nested executor returned unknown result code {value}"),
-    };
-    let reported: genvm_modules_interfaces::ReportedResult = calldata::decode_obj(encoded)?;
-    // The code is stated twice: once as the framing byte, once inside the
-    // reported map that the execution hash commits to. A disagreement means the
-    // callee is not the implementation we think it is.
-    anyhow::ensure!(
-        kind == reported.kind,
-        "nested executor result code {kind:?} disagrees with the reported {:?}",
-        reported.kind
-    );
+    let (kind, reported) = decode_reported_result(data, "nested executor")?;
     if kind != genvm_modules_interfaces::ResultCode::InternalError {
         anyhow::ensure!(
             reported.small_hash.len() == 32,
@@ -1507,6 +1562,7 @@ fn read_manager_host_stream(
     parent_req: Arc<Request>,
     consumed_result: sync::DArc<tokio::sync::OnceCell<Vec<u8>>>,
     genvm_id: GenVMId,
+    is_top_level: bool,
     stream_state: Arc<ManagerHostStreamState>,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
@@ -1547,6 +1603,17 @@ fn read_manager_host_stream(
                             log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to read consumed result");
                             return;
                         }
+                    };
+                    let data = if is_top_level {
+                        match guard_top_level_consumed_result(data, genvm_id) {
+                            Ok(data) => data,
+                            Err(e) => {
+                                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "refusing invalid top-level consume_result");
+                                return;
+                            }
+                        }
+                    } else {
+                        data
                     };
                     log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, len = data.len(); "manager received consume_result");
                     let _ = consumed_result.set(data);
@@ -2330,7 +2397,6 @@ async fn run_genvm_process(
         _ => req.selector.clone(),
     };
     let version = resolve_selector(&full_ctx.ver_ctx, &selector, req.timestamp, genvm_id).await?;
-
     let ctx = full_ctx.clone().into_gep(|x| &x.run_ctx);
 
     // Capture controls how logs and stdout/stderr are kept: disabled (forwarded
@@ -2443,6 +2509,7 @@ async fn run_genvm_process(
         Arc::new(req.clone()),
         consumed_result,
         genvm_id,
+        is_top_level,
         manager_stream_state.clone(),
     ));
 

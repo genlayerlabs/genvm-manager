@@ -45,8 +45,9 @@ followed by an encoded payload:
 - ``VmError`` — UTF-8 error code from
   :doc:`/spec/appendix/constants` ``vm_error``.
 
-The validator reconstructs an ``rt::vm::RunOk`` from these bytes
-(``genlayer_sdk.rs:1502``) and the contract observes the same value as the leader did.
+The validator reconstructs a catchable contract outcome from these bytes and
+the contract observes the same value as the leader did. Any other result code,
+including ``FatalVmError``, is treated as malformed leader input
 
 Validator Comparison
 --------------------

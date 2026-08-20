@@ -397,6 +397,8 @@ pub struct ReportedResult {
     /// what a caller in another executor folds.
     pub small_hash: bytes::Bytes,
 
+    /// `FatalVmError` is legal only while transporting a nested result; a
+    /// top-level report must publish the same payload as `VmError`
     pub kind: ResultCode,
     pub data: genlayer_calldata::unparsed::Maybe<genlayer_calldata::Value>,
     pub backtrace: Option<Backtrace>,

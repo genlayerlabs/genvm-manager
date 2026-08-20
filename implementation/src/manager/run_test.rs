@@ -567,6 +567,74 @@ fn encoded_nested_result(reported: &genvm_modules_interfaces::ReportedResult) ->
     encoded
 }
 
+#[test]
+fn top_level_guard_accepts_a_valid_report() {
+    let encoded = encoded_nested_result(&clean_reported());
+
+    assert_eq!(
+        guard_top_level_consumed_result(encoded.clone(), GenVMId(1)).unwrap(),
+        encoded
+    );
+}
+
+#[test]
+fn top_level_guard_rejects_disagreeing_result_codes() {
+    let mut encoded = encoded_nested_result(&clean_reported());
+    encoded[0] = genvm_modules_interfaces::ResultCode::VmError as u8;
+
+    assert!(guard_top_level_consumed_result(encoded, GenVMId(1)).is_err());
+}
+
+#[test]
+fn top_level_guard_rejects_invalid_framing() {
+    for encoded in [Vec::new(), vec![5], vec![0]] {
+        assert!(guard_top_level_consumed_result(encoded, GenVMId(1)).is_err());
+    }
+}
+
+#[test]
+fn top_level_guard_rejects_invalid_hash_lengths() {
+    let mut reported = clean_reported();
+    reported.execution_hash = bytes::Bytes::new();
+
+    assert!(guard_top_level_consumed_result(encoded_nested_result(&reported), GenVMId(1)).is_err());
+}
+
+#[cfg(debug_assertions)]
+#[test]
+#[should_panic(expected = "fatal VM error after its publication boundary")]
+fn top_level_guard_asserts_on_fatal_in_debug_builds() {
+    let mut reported = clean_reported();
+    reported.kind = genvm_modules_interfaces::ResultCode::FatalVmError;
+
+    let _ = guard_top_level_consumed_result(encoded_nested_result(&reported), GenVMId(1));
+}
+
+#[cfg(not(debug_assertions))]
+#[test]
+fn top_level_guard_downgrades_fatal_in_release_builds() {
+    let mut reported = clean_reported();
+    reported.kind = genvm_modules_interfaces::ResultCode::FatalVmError;
+
+    let encoded =
+        guard_top_level_consumed_result(encoded_nested_result(&reported), GenVMId(1)).unwrap();
+    let (kind, reported) = decode_reported_result(&encoded, "test").unwrap();
+
+    assert_eq!(kind, genvm_modules_interfaces::ResultCode::VmError);
+    assert_eq!(reported.kind, genvm_modules_interfaces::ResultCode::VmError);
+}
+
+#[test]
+fn fatal_downgrade_updates_both_result_codes() {
+    let mut reported = clean_reported();
+    reported.kind = genvm_modules_interfaces::ResultCode::FatalVmError;
+    let encoded = downgrade_fatal_reported_result(reported);
+    let (kind, reported) = decode_reported_result(&encoded, "test").unwrap();
+
+    assert_eq!(kind, genvm_modules_interfaces::ResultCode::VmError);
+    assert_eq!(reported.kind, genvm_modules_interfaces::ResultCode::VmError);
+}
+
 fn some_storage_delta() -> genvm_modules_interfaces::StorageDelta {
     genvm_modules_interfaces::StorageDelta::new([0; 36], vec![1])
 }

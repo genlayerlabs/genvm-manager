@@ -255,6 +255,24 @@ started with one, ``host_genvm_id``. Variants:
           "artifact_sizes": { "stdout": u64, "stderr": u64,
                               "genvm_log": u64 } } }
 
+For a top-level run, ``consumed_result`` is one outer ``ResultCode`` byte
+followed by a calldata-encoded ``ReportedResult`` map. Before retaining it, the
+manager checks that:
+
+#. The outer byte is a known result code and agrees with the map's ``kind``
+#. The map decodes completely
+#. ``execution_hash`` and ``small_hash`` are each 32 bytes unless the result is
+   ``InternalError``
+
+An invalid report is refused without an acknowledgement and is not published
+as ``consumed_result``. ``FatalVmError`` is also illegal at this boundary: a
+debug manager asserts, while a release manager logs the executor violation and
+rewrites both result-code locations to ``VmError`` before publication. Clients
+therefore never receive a top-level ``FatalVmError``
+
+The manager does not decode entries of the reported ``nondet_results`` vector.
+Those bytes remain opaque, executor-line-specific consensus proposals
+
 Lifecycle guarantees:
 
 - Exactly one terminal event (``failed_to_start`` or ``finished``) per run,

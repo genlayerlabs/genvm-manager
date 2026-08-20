@@ -31,6 +31,13 @@ set. A non-fatal error of a :term:`sub-VM` is returned to its caller as
 terminates with the same VM error, and propagation continues until the topmost
 VM boundary
 
+Nested transport encodes a fatal VM error with result code ``4``. At the
+topmost publication boundary, the executor MUST downgrade it to an ordinary
+:ref:`gvm-def-vm-error` with the same payload before producing the reported
+result. Result code ``4`` is therefore forbidden in a top-level reported
+result. Both its :ref:`gvm-def-execution-hash` and its
+:ref:`gvm-def-subvm-hash` use ``VMError`` as the result kind
+
 .. _gvm-def-vm-error-code:
 
 VM Error Code Format
@@ -105,7 +112,9 @@ Non-Deterministic Block Result Encoding
 - :ref:`gvm-def-vm-error`\: utf-8 string
 
 These three are the only codes a leader-proposed non-deterministic block result
-may carry; validators treat every other byte as a malformed leader result
+may carry; validators treat every other byte as a malformed leader result. A
+fatal VM error computed by a leader's non-deterministic child propagates to its
+caller and MUST NOT be encoded into ``nondet_results``
 
 Contract Result Encoding
 ------------------------
@@ -175,6 +184,9 @@ with the following keys (in this order):
 
 Two runs that agree on the deterministic result produce the same execution hash, so
 consensus can compare a single 32-byte value instead of the full result.
+
+A fatal VM error is committed with ``VMError`` as ``kind``. Fatality controls
+propagation and is not a distinct consensus-visible outcome
 
 ``emissions`` covers the whole content of every emitted message and event, not
 just its metered cost: two emissions can carry different calldata or different

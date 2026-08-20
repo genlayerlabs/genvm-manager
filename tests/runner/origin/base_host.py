@@ -525,6 +525,8 @@ class ConsumedResult:
 			empty = not as_bytes
 			if not empty:
 				result_kind = host_fns.ResultCode(as_bytes[0])
+				if result_kind == host_fns.ResultCode.FATAL_VM_ERROR:
+					raise ValueError('fatal_vm_error crossed the top-level result boundary')
 				decoded = gvm_calldata.decode(as_bytes[1:])
 		except Exception as exc:
 			# Unreadable bytes are a protocol violation rather than a result, so
@@ -540,10 +542,6 @@ class ConsumedResult:
 			return cls.internal_error('empty_result')
 		if not isinstance(decoded, dict):
 			return cls.internal_error('result is not a mapping')
-		# The executor reports fatality; degrading it to an ordinary VM error
-		# is the host's job, so that a caller in another major can still see it
-		if result_kind == host_fns.ResultCode.FATAL_VM_ERROR:
-			result_kind = host_fns.ResultCode.VM_ERROR
 		return cls(
 			execution_hash=decoded.get('execution_hash', b''),
 			result_kind=result_kind,
