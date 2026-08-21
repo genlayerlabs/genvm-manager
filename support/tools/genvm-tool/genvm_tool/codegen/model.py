@@ -56,7 +56,8 @@ class TrieNode:
 	``terminal`` is set does ``' '.join(parts)`` name a leaf. A node is either a
 	*param* node (``param`` set: consumes one typed argument) or a regular node
 	carrying ``leaves`` (terminal strings) and ``methods`` (child nodes), mirroring
-	the original ruby generators.
+	the original ruby generators. ``details`` contains the ``#`` child's terminal
+	values when that child exists.
 	"""
 
 	suffix: str
@@ -65,6 +66,7 @@ class TrieNode:
 	param: tuple[str, list[str]] | None
 	leaves: list[tuple[str, list[str]]]
 	methods: list[tuple[str, 'TrieNode']]
+	details: list[str]
 	# Children in original JSON order, tagged ``('leaf', head, parts)`` or
 	# ``('method', head, child)``. ``leaves``/``methods`` are the grouped views the
 	# struct-based backends (rust, python) want; the go backend, which emits flat
@@ -78,10 +80,6 @@ class StrTrie:
 	root: TrieNode
 	entries: list  # unfolded entries, kept for flat path enumeration (rst)
 	docs: dict[str, str]
-	# Details reachable from any built value, spelled ``<path> # <detail>``. A
-	# root-level ``#`` entry declares them; they are not paths, so they stay out
-	# of ``root``/``entries`` and out of the generated validity check.
-	suffix: TrieNode | None = None
 
 
 Definition = Enum | Const | Consts | StrTrie
@@ -117,8 +115,14 @@ def _build(entries, prefix_parts: list[str], suffix: str, terminal: bool) -> Tri
 		param=None,
 		leaves=[],
 		methods=[],
+		details=[],
 		order=[],
 	)
+	entries, node.details = _split_details(entries)
+	if node.details and not terminal:
+		raise ValueError(
+			f'{" ".join(prefix_parts) or "root"}: details require a public path'
+		)
 	for entry in entries:
 		if entry is None:
 			continue
@@ -135,15 +139,17 @@ def _build(entries, prefix_parts: list[str], suffix: str, terminal: bool) -> Tri
 				param=(param_type, current),
 				leaves=[],
 				methods=[],
+				details=[],
 				order=[],
 			)
 			node.methods.append((head, child))
 			node.order.append(('method', head, child))
 		elif isinstance(tail, list):
 			non_null = [e for e in tail if e is not None]
+			path_children = [e for e in non_null if e['head'] != DETAIL_HEAD]
 			# A trie level is terminal if any sibling was a `null` placeholder (or it
-			# has no real children): the path itself is a valid leaf string.
-			is_terminal = (len(tail) != len(non_null)) or len(non_null) == 0
+			# has no path children): the path itself is a valid leaf string.
+			is_terminal = (len(tail) != len(non_null)) or len(path_children) == 0
 			if len(non_null) == 0:
 				node.leaves.append((head, current))
 				node.order.append(('leaf', head, current))
@@ -161,40 +167,58 @@ def enumerate_paths(entries, prefix: str = ''):
 		if entry is None:
 			continue
 		head = entry['head']
+		if head == DETAIL_HEAD:
+			continue
 		tail = entry['tail']
 		current = head if prefix == '' else f'{prefix} {head}'
 		if isinstance(tail, str) and tail.startswith('$'):
 			result.append((current, tail[1:]))
 		elif isinstance(tail, list):
 			non_null = [e for e in tail if e is not None]
-			is_terminal = (len(tail) != len(non_null)) or len(non_null) == 0
+			path_children = [e for e in non_null if e['head'] != DETAIL_HEAD]
+			is_terminal = (len(tail) != len(non_null)) or len(path_children) == 0
 			if is_terminal:
 				result.append((current, None))
 			result.extend(enumerate_paths(non_null, current))
 	return result
 
 
+def enumerate_details(entries, prefix: str = ''):
+	"""Flatten detail paths to ``<public path> # <detail>`` strings."""
+	result = []
+	for entry in entries:
+		if entry is None or entry['head'] == DETAIL_HEAD:
+			continue
+		head = entry['head']
+		tail = entry['tail']
+		current = head if prefix == '' else f'{prefix} {head}'
+		if not isinstance(tail, list):
+			continue
+		paths, details = _split_details(tail)
+		result.extend(f'{current} # {detail}' for detail in details)
+		result.extend(enumerate_details(paths, current))
+	return result
+
+
 DETAIL_HEAD = '#'
-"""Head of the root entry declaring a trie's detail suffixes."""
+"""Head of an entry declaring details for its parent public path."""
 
 
-def _split_details(name: str, entries: list) -> tuple[list, TrieNode | None]:
-	"""Carve the ``#`` entry out of a trie's root, returning ``(paths, details)``."""
+def _split_details(entries: list) -> tuple[list, list[str]]:
+	"""Carve a ``#`` child out of one trie node."""
 	found = [e for e in entries if e is not None and e['head'] == DETAIL_HEAD]
 	if not found:
-		return entries, None
+		return entries, []
 	if len(found) > 1:
-		raise ValueError(f'{name}: more than one {DETAIL_HEAD!r} entry')
+		raise ValueError(f'more than one {DETAIL_HEAD!r} entry')
 	tail = found[0]['tail']
 	if not isinstance(tail, list):
-		raise ValueError(f'{name}: {DETAIL_HEAD!r} must list details')
+		raise ValueError(f'{DETAIL_HEAD!r} must list details')
 	for detail in tail:
-		# A detail is appended to an already-built value, so it has no place to
-		# hang a subtree off and no argument to render.
 		if detail is None or detail['tail'] != []:
-			raise ValueError(f'{name}: a detail may not be nested or take a parameter')
+			raise ValueError('a detail may not be nested or take a parameter')
 	paths = [e for e in entries if e is None or e['head'] != DETAIL_HEAD]
-	return paths, _build(tail, [], '', False)
+	return paths, [detail['head'] for detail in tail]
 
 
 def parse(data) -> list[Definition]:
@@ -208,14 +232,13 @@ def parse(data) -> list[Definition]:
 		elif kind == 'consts':
 			defs.append(Consts(t['name'], t['repr'], t['values']))
 		elif kind == 'str_trie':
-			entries, details = _split_details(t['name'], [_unfold(e) for e in t['values']])
+			entries = [_unfold(e) for e in t['values']]
 			defs.append(
 				StrTrie(
 					t['name'],
 					_build(entries, [], '', False),
 					entries,
 					t.get('docs', {}),
-					details,
 				)
 			)
 		else:

@@ -13,6 +13,22 @@ v0.3
 Breaking
 ~~~~~~~~
 
+#. The pre-finalization state is spelled *decided* everywhere it is named.
+   :ref:`gvm-def-enum-storage-view` reads ``latest_finalized`` (1) and
+   ``latest_decided`` (2) instead of ``latest_final`` and ``latest_non_final``,
+   the ``on`` field of the ``EmitInternalMessage`` and
+   ``EmitInternalDeployMessage`` ``gl_call``
+   payloads (:doc:`02-execution-environment/03-wasi_genlayer_sdk/02-gl_call`)
+   takes ``"decided"`` instead of ``"accepted"``, and a ``chain:`` runner id
+   selects it with ``d`` rather than ``a`` (see
+   :ref:`gvm-def-chain-runner-state`). Numeric enum values are unchanged; none
+   of the old spellings is accepted
+#. A ``chain:`` runner id resolved while a contract is being deployed
+   canonicalizes to ``i``, which previously spelled the deploy state as ``d``
+#. The ``When`` action's ``cond`` field spells the non-deterministic mode
+   ``!det``; the previous ``nondet`` spelling is rejected, with no
+   back-compat alias. See the ``When`` action in
+   :doc:`02-execution-environment/04-runners`
 #. ``runner.json`` rejects unknown top-level and nested fields; a runner that
    relied on an extra field being silently ignored fails to load. The single
    top-level ``$schema`` string annotation is still accepted. See

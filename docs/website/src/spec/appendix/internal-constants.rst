@@ -127,6 +127,13 @@ wasm_stack_value_slots
 
 Value: ``65535``
 
+.. _gvm-def-consts-value-top-limits-vfs-path-components:
+
+vfs_path_components
+~~~~~~~~~~~~~~~~~~~
+
+Value: ``128``
+
 .. _gvm-def-consts-runner-limits:
 
 runner_limits

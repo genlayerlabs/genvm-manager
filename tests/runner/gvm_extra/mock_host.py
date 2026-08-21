@@ -15,8 +15,8 @@ from origin.base_host import (
 )
 from origin.calldata import Address
 
-type ResolveCallcontractExecutorHook = collections.abc.Callable[
-	[Address, public_abi.StorageType, int],
+type ResolveCallContractExecutorHook = collections.abc.Callable[
+	[Address, public_abi.StorageView, int],
 	bytes | None,
 ]
 
@@ -87,7 +87,7 @@ class MockHost(IHost):
 		running_address: Address,
 		ctx: Context,
 		expected_hello_data: bytes = b'',
-		resolve_callcontract_executor_hook: ResolveCallcontractExecutorHook | None = None,
+		resolve_call_contract_executor_hook: ResolveCallContractExecutorHook | None = None,
 	):
 		self.running_address = running_address
 		self.path = path
@@ -100,7 +100,7 @@ class MockHost(IHost):
 		self.balances = balances
 		self.nondet_disagreement_call_no = None
 		self.expected_hello_data = expected_hello_data
-		self.resolve_callcontract_executor_hook = resolve_callcontract_executor_hook
+		self.resolve_call_contract_executor_hook = resolve_call_contract_executor_hook
 		self.ctx = ctx
 		self._accept_task: asyncio.Task | None = None
 		self._connection_tasks: list[asyncio.Task] = []
@@ -247,34 +247,39 @@ class MockHost(IHost):
 					task.result()
 
 	async def storage_read(
-		self, mode: public_abi.StorageType, account: bytes, slot: bytes, index: int, le: int
+		self,
+		mode: public_abi.StorageView,
+		address: bytes,
+		slot: bytes,
+		offset: int,
+		le: int,
 	) -> bytes:
 		assert self.storage is not None
-		return self.storage.read(Address(account), slot, index, le)
+		return self.storage.read(Address(address), slot, offset, le)
 
-	async def resolve_callcontract_executor(
+	async def resolve_call_contract_executor(
 		self,
 		contract_address: Address,
-		state_mode: public_abi.StorageType,
+		state_mode: public_abi.StorageView,
 		advisory_major: int,
 		/,
 	) -> bytes | None:
-		if self.resolve_callcontract_executor_hook is None:
+		if self.resolve_call_contract_executor_hook is None:
 			return None
-		return self.resolve_callcontract_executor_hook(
+		return self.resolve_call_contract_executor_hook(
 			contract_address,
 			state_mode,
 			advisory_major,
 		)
 
-	async def remaining_fuel_as_gen(self) -> int:
+	async def get_remaining_time_fee_gen_wei(self) -> int:
 		return 2**32
 
-	async def eth_call(self, account: bytes, calldata: bytes, /) -> bytes:
+	async def external_call(self, address: bytes, calldata: bytes, /) -> bytes:
 		raise HostException(host_fns.Errors.EVM_REVERTED)
 
-	async def consume_gas(self, gas: int):
+	async def consume_time_fee_gen_wei(self, time_fee_gen_wei: int):
 		pass
 
-	async def get_balance(self, account: bytes) -> int:
-		return self.balances.get(Address(account), 0)
+	async def get_balance_gen_wei(self, address: bytes) -> int:
+		return self.balances.get(Address(address), 0)

@@ -525,7 +525,7 @@
             done
           '';
 
-          # Merge a { uid -> `<id>/<aa>/<rest>.tar` tree } set into one tree.
+          # Merge a { uid -> `<id>/<aa>/<rest>.zip` tree } set into one tree.
           merge-runner-trees =
             name: uni:
             pkgs.runCommand name { srcs = builtins.attrValues uni; } ''

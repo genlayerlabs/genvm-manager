@@ -72,8 +72,8 @@ pub enum ExecutorSelector {
 #[serde(rename_all = "snake_case")]
 pub enum NestedStorageType {
     Default,
-    LatestFinal,
-    LatestNonFinal,
+    LatestFinalized,
+    LatestDecided,
 }
 
 /// Permission bits carried across an executor boundary.

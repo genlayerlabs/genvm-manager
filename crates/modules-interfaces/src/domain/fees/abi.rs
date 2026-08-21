@@ -109,7 +109,7 @@ fn encode_node(node: &MessageAllocationNode, parent_index: U256) -> Vec<u8> {
     let (message_type, on_acceptance, fee_params) = match &node.fee_params {
         MessageAllocationNodeParams::Internal(params) => (
             MESSAGE_TYPE_INTERNAL,
-            matches!(node.on, On::Accepted),
+            matches!(node.on, On::Decided),
             encode_internal_params(params),
         ),
         // External messages have no acceptance/finalize lifecycle.

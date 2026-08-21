@@ -89,7 +89,7 @@ impl crate::common::MessageHandler<llm_iface::Message, llm_iface::PromptAnswer> 
         match message {
             llm_iface::Message::Prompt {
                 payload,
-                remaining_fuel_as_gen,
+                remaining_time_fee_gen_wei,
             } => {
                 if payload.images.len() > 2 {
                     return Err(ModuleError {
@@ -121,15 +121,15 @@ impl crate::common::MessageHandler<llm_iface::Message, llm_iface::PromptAnswer> 
                     }
                 }
                 self.0
-                    .exec_prompt(self.0.clone(), payload, remaining_fuel_as_gen)
+                    .exec_prompt(self.0.clone(), payload, remaining_time_fee_gen_wei)
                     .await
             }
             llm_iface::Message::PromptTemplate {
                 payload,
-                remaining_fuel_as_gen,
+                remaining_time_fee_gen_wei,
             } => {
                 self.0
-                    .exec_prompt_template(self.0.clone(), payload, remaining_fuel_as_gen)
+                    .exec_prompt_template(self.0.clone(), payload, remaining_time_fee_gen_wei)
                     .await
             }
         }
@@ -208,7 +208,7 @@ impl Inner {
         &self,
         _zelf: Arc<Inner>,
         payload: llm_iface::PromptPayload,
-        remaining_fuel_as_gen: primitive_types::U256,
+        remaining_time_fee_gen_wei: primitive_types::U256,
     ) -> ModuleResult<llm_iface::PromptAnswer> {
         log_debug_into!(&LoggerWithId, payload:serde = payload, genvm_id:id = self.genvm_id.0; "exec_prompt start");
 
@@ -216,13 +216,13 @@ impl Inner {
             .user_vm
             .vm
             .to_value_with(&payload, scripting::DEFAULT_LUA_SER_OPTIONS)?;
-        let fuel = self.u256_to_lua_rat(remaining_fuel_as_gen)?;
+        let time_fee_gen_wei = self.u256_to_lua_rat(remaining_time_fee_gen_wei)?;
 
         let res: Result<mlua::Value, _> = self
             .user_vm
             .call_fn(
                 &self.user_vm.data.exec_prompt,
-                (self.ctx_val.clone(), payload, fuel),
+                (self.ctx_val.clone(), payload, time_fee_gen_wei),
             )
             .await;
 
@@ -240,7 +240,7 @@ impl Inner {
         &self,
         _zelf: Arc<Inner>,
         payload: llm_iface::PromptTemplatePayload,
-        remaining_fuel_as_gen: primitive_types::U256,
+        remaining_time_fee_gen_wei: primitive_types::U256,
     ) -> ModuleResult<llm_iface::PromptAnswer> {
         log_debug_into!(&LoggerWithId, payload:serde = payload, genvm_id:id = self.genvm_id.0; "exec_prompt_template start");
 
@@ -248,13 +248,13 @@ impl Inner {
             .user_vm
             .vm
             .to_value_with(&payload, scripting::DEFAULT_LUA_SER_OPTIONS)?;
-        let fuel = self.u256_to_lua_rat(remaining_fuel_as_gen)?;
+        let time_fee_gen_wei = self.u256_to_lua_rat(remaining_time_fee_gen_wei)?;
 
         let res: Result<mlua::Value, _> = self
             .user_vm
             .call_fn(
                 &self.user_vm.data.exec_prompt_template,
-                (self.ctx_val.clone(), payload, fuel),
+                (self.ctx_val.clone(), payload, time_fee_gen_wei),
             )
             .await;
 

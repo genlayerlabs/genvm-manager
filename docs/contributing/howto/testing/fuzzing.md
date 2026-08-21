@@ -53,6 +53,12 @@ named as a corpus entry) as soon as it is reported, so every later run replays
 it — the next run wipes the crash dir it was saved in. Commit it along with the
 fix; put it in `<corpus>-curated` instead if a corpus update must never drop it
 
+Startup replays every committed entry, and AFL skips the ones it cannot use
+rather than aborting the run: a `-t` ceiling of 5 s (it auto-scales below that)
+keeps a seed that grew slower than AFL's 1 s default from taking the target down.
+A seed that *crashes* is skipped by the same switch, so the case reads it back out
+of the instance logs and fails with the entry's name under `crashing_seeds`
+
 Findings of both languages live under `build/test-artifacts/fuzz/<project>/`.
 Reruns resume from that dir (`AFL_AUTORESUME`) and therefore ignore `-i`: remove
 it to pick up a corpus that changed. Corpus updates `cmin` the fleet's queues

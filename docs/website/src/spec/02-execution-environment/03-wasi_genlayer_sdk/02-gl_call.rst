@@ -1,8 +1,8 @@
 ``gl_call`` Messages
 ====================
 
-``EthSend`` Message
--------------------
+``EmitExternalMessage`` Message
+-------------------------------
 
 Sends transaction to Ethereum address with optional value transfer.
 
@@ -12,7 +12,7 @@ Payload
 .. code-block::
 
    {
-     "EthSend": {
+     "EmitExternalMessage": {
        "address": Address,      // 20-byte target address
        "calldata": Bytes,       // EVM calldata
        "value": U256            // Wei to transfer
@@ -26,8 +26,8 @@ Requirements
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
 
-``EthCall`` Message
--------------------
+``ExternalCall`` Message
+------------------------
 
 Calls Ethereum contract method (read-only operation).
 
@@ -37,7 +37,7 @@ Payload
 .. code-block::
 
    {
-     "EthCall": {
+     "ExternalCall": {
        "address": Address,      // 20-byte target contract address
        "calldata": Bytes        // EVM calldata
      }
@@ -65,7 +65,8 @@ Payload
      "CallContract": {
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
-       "state": Number          // Storage type: 0=default, 1=latest_final, 2=latest_non_final
+       "storage_view": Number,  // Storage view: 0=default, 1=latest_finalized, 2=latest_decided
+       "catch_vm_error": Bool   // optional (default false): take a VM error as the result
      }
    }
 
@@ -77,6 +78,11 @@ Requirements
 #. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
 Creates a :term:`sub-VM`. See :ref:`gvm-meta-property-derivation`.
+
+A :term:`sub-VM` that ends in a :ref:`gvm-def-vm-error` normally ends its caller
+too. With *param* ``catch_vm_error`` set, the caller reads that error as the
+call's result instead. A fatal :ref:`gvm-def-vm-error` is never caught: the flag
+does not apply to it, and the caller ends regardless.
 
 Before every call, :term:`GenVM` asks the :term:`host` whether to delegate the
 callee to another executor. A null answer preserves the local path, including
@@ -92,10 +98,10 @@ answered with ``Errno::Inval`` like the other argument checks and the caller can
 recover — unlike a top-level entry, where the same violation is the execution's
 result (:ref:`gvm-vm-startup-entry-validation`).
 
-.. _gvm-def-post-message:
+.. _gvm-def-emit-internal-message:
 
-``PostMessage`` Message
------------------------
+``EmitInternalMessage`` Message
+-------------------------------
 
 Posts message to GenLayer contract for later execution.
 
@@ -110,11 +116,11 @@ Payload
 .. code-block::
 
    {
-     "PostMessage": {
+     "EmitInternalMessage": {
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
        "value": U256,           // Wei to transfer
-       "on": String,            // "finalized" or "accepted"
+       "on": String,            // "finalized" or "decided"
        "use_balance": Bool,     // optional (default false), see below
        "fee_params": FeeParams  // optional (default absent), required iff use_balance
      }
@@ -144,8 +150,8 @@ transaction's fee configuration and mirrors the chain's
 .. code-block::
 
    FeeParams {
-     "leader_timeunits_allocation": U256,     // per-round leader time units
-     "validator_timeunits_allocation": U256,  // per-round validator time units
+     "leader_time_units_allocation": U256,     // per-round leader time units
+     "validator_time_units_allocation": U256,  // per-round validator time units
      "execution_budget_per_round": U256,      // unified budget per leader round
      "rotations": [U256],                     // per-round rotations; non-empty.
                                               // rotations[0] is the initial round,
@@ -166,7 +172,7 @@ Semantics:
 - The message is excluded from allocation matching, so no matching node is
   required (and none is consulted).
 - The contract must be able to cover ``value + metered_fee`` from its balance;
-  otherwise the call fails with ``Inbalance``.
+  otherwise the call fails with ``InsufficientBalance``.
 - The emitted allocation subtree is **empty**: nesting is fail-closed, so a child
   message must itself set ``use_balance`` or it fails to fund.
 
@@ -181,8 +187,8 @@ Semantics:
 - Out-of-bounds magnitudes: prices and budgets
   (``max_price_gen_per_time_unit``, ``storage_fee_max_gas_price``,
   ``receipt_fee_max_gas_price``, ``execution_budget_per_round``) must be below
-  2\ :sup:`96`; counts (``leader_timeunits_allocation``,
-  ``validator_timeunits_allocation``, each ``rotations`` entry) below
+  2\ :sup:`96`; counts (``leader_time_units_allocation``,
+  ``validator_time_units_allocation``, each ``rotations`` entry) below
   2\ :sup:`32`. These bounds keep the metered floor within ``U256``.
 
 Metering additionally enforces node-configured floors, surfaced as ``VMError``\ s:
@@ -193,8 +199,8 @@ Metering additionally enforces node-configured floors, surfaced as ``VMError``\ 
 - ``fee too_many_rounds`` — ``rotations`` implies more consensus rounds than the
   node's validator table supports (on-chain ``MAX_ROUNDS``).
 
-``DeployContract`` Message
---------------------------
+``EmitInternalDeployMessage`` Message
+------------------------------------
 
 Deploys new intelligent contract to blockchain.
 
@@ -204,11 +210,11 @@ Payload
 .. code-block::
 
    {
-     "DeployContract": {
+     "EmitInternalDeployMessage": {
        "calldata": Calldata,    // Constructor arguments in calldata format
        "code": Bytes,           // Contract bytecode
        "value": U256,           // Wei to transfer
-       "on": String,            // "finalized" or "accepted"
+       "on": String,            // "finalized" or "decided"
        "salt_nonce": U256,      // Salt for CREATE2-style deterministic addressing
        "use_balance": Bool,     // optional (default false)
        "fee_params": FeeParams  // optional (default absent), required iff use_balance
@@ -246,7 +252,8 @@ Payload
        "data_leader": Bytes,       // Code/data for leader execution
        "data_validator": Bytes,    // Code/data for validator execution
        "runner": String,           // optional (default "contract"): runner to execute
-       "custom_runners": [String]  // optional (default absent): custom runners to grant
+       "custom_runners": [String], // optional (default absent): custom runners to grant
+       "catch_vm_error": Bool      // optional (default false): take a VM error as the result
      }
    }
 
@@ -261,6 +268,11 @@ Semantics
 Creates a non-deterministic :term:`sub-VM`. Derivation of its meta-properties,
 including the *param* ``runner`` and *param* ``custom_runners`` semantics, is
 specified in :ref:`gvm-meta-property-derivation`.
+
+A :term:`sub-VM` that ends in a :ref:`gvm-def-vm-error` normally ends its caller
+too. With *param* ``catch_vm_error`` set, the caller reads that error as the
+call's result instead. A fatal :ref:`gvm-def-vm-error` is never caught: the flag
+does not apply to it, and the caller ends regardless.
 
 .. _gvm-def-gl-call-sandbox:
 
@@ -281,8 +293,8 @@ Payload
        "runner": String,                // runner to execute; becomes the child's "contract"
        "allow_write_storage": Bool,     // Whether to allow storage writes
        "allow_send_messages": Bool,     // Whether to allow sending messages
-       "allow_register_runners": Bool,  // Whether to allow registering runners
-       "custom_runners": [String]       // optional (default absent): custom runners to grant
+       "custom_runners": [String],      // optional (default absent): custom runners to grant
+       "changes_on_error": String        // fate of the child's changes on a non-return
      }
    }
 
@@ -295,10 +307,14 @@ meta-properties, including the *param* ``runner`` and *param*
 :ref:`gvm-meta-property-derivation`.
 
 The caller receives the sandbox result (:ref:`gvm-def-subvm-result-encoding`)
-and may handle both :ref:`gvm-def-vm-error` and :ref:`gvm-def-user-error`;
-storage writes performed by the sandbox are not reverted on error. If the
-sandbox terminates with :ref:`gvm-def-fatal-vm-error`, the caller terminates
-with the same fatal VM error instead.
+and may handle both :ref:`gvm-def-vm-error` and :ref:`gvm-def-user-error`.
+If the sandbox terminates with :ref:`gvm-def-fatal-vm-error`, the caller
+terminates with the same fatal VM error instead.
+
+*param* ``changes_on_error`` says what becomes of the storage writes and
+emissions of a sandbox that does not :ref:`gvm-def-return`. ``"inherit"`` is
+its only accepted value: the caller keeps them, exactly as it keeps the ones it
+made itself. Any other value is a malformed message
 
 .. _gvm-def-gl-call-register-runner:
 
@@ -317,7 +333,7 @@ Payload
 
    {
      "RegisterRunner": {
-       "code": Bytes              // runner archive (ustar/zip or commented text)
+       "code": Bytes              // runner archive (zip, raw wasm or commented text)
      }
    }
 
@@ -325,7 +341,6 @@ Requirements
 ~~~~~~~~~~~~
 
 #. :ref:`gvm-perm-deterministic`
-#. :ref:`gvm-perm-register-runners`
 
 Semantics
 ~~~~~~~~~
@@ -339,8 +354,8 @@ enters the caller's loaded set.
 
 The outcomes, in check order, are:
 
-#. Missing :ref:`gvm-def-det-mode` or :ref:`gvm-perm-register-runners`: the call
-   fails with ``Forbidden``. Nothing is charged and no state changes.
+#. Missing :ref:`gvm-def-det-mode`: the call fails with ``Forbidden``. Nothing
+   is charged and no state changes.
 #. Insufficient memory for the charge: the :term:`sub-VM` exits with an
    out-of-memory :ref:`gvm-def-vm-error`. Nothing is charged and the runner is
    not registered.
@@ -393,7 +408,7 @@ Payload
      "WebRender": {
        "mode": String,            // "text", "html", or "screenshot"
        "url": String,             // URL to render
-       "wait_after_loaded": String // Wait duration, e.g. "5s" or "500ms"
+       "post_load_wait": String // Wait duration, e.g. "5s" or "500ms"
      }
    }
 
@@ -623,11 +638,14 @@ Requirements
 
 .. _tracing-runtime-microsec:
 
-``Trace.RuntimeMicroSec`` Sub-Message
--------------------------------------
+``Trace.RuntimeMicroseconds`` Sub-Message
+-----------------------------------------
 
 In :ref:`gvm-def-non-det-mode` returns the elapsed execution time in microseconds since VM start.
-In :ref:`gvm-def-det-mode`, it returns ``0`` — exposing real elapsed time there would break determinism. The sole exception is the ``unsafe-tracing`` debug level (see the executor "Debug modes" section), which returns real elapsed time even in deterministic mode; that level is for local debugging only and must never be used on a consensus network.
+In :ref:`gvm-def-det-mode`, it returns ``0`` — exposing real elapsed time there
+would break determinism. An implementation MAY support a debug mode that
+returns real elapsed time instead; such a mode is for local debugging only and
+MUST NOT be used on a consensus network.
 
 Payload
 ~~~~~~~
@@ -635,13 +653,14 @@ Payload
 .. code-block::
 
    {
-     "Trace": "RuntimeMicroSec"
+     "Trace": "RuntimeMicroseconds"
    }
 
 .. note::
 
    The returned value is not at an implementation's discretion — in
-   :ref:`gvm-def-det-mode` it is exactly ``0``, and the call never fails (see
+   :ref:`gvm-def-det-mode` it is exactly ``0`` unless an implementation's debug
+   mode permits real elapsed time, and the call never fails (see
    :ref:`gvm-def-gl-call-observable-discretion`).
 
 Requirements

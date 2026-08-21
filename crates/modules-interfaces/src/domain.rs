@@ -91,7 +91,7 @@ pub struct NestedExecutionData {
 #[derive(Debug, Clone, PartialEq, Eq, genlayer_calldata::Encode, genlayer_calldata::Decode)]
 #[calldata(tag = "type")]
 pub enum ExecutionEmission {
-    EthSend {
+    ExternalMessage {
         address: genlayer_calldata::Address,
         calldata: Bytes,
         value: U256,
@@ -100,7 +100,7 @@ pub enum ExecutionEmission {
 
         fee_params: fees::ExternalMessageParams,
     },
-    PostMessage {
+    InternalMessage {
         call_key: crate::CallKey,
         address: genlayer_calldata::Address,
         calldata: genlayer_calldata::codec::Maybe<genlayer_calldata::Value>,
@@ -115,7 +115,7 @@ pub enum ExecutionEmission {
         /// balance rather than the sender's prefunded message-fee pool.
         use_balance: bool,
     },
-    DeployContract {
+    InternalDeployMessage {
         calldata: genlayer_calldata::codec::Maybe<genlayer_calldata::Value>,
         code: Bytes,
         value: U256,
@@ -126,10 +126,10 @@ pub enum ExecutionEmission {
 
         fee_params: fees::InternalMessageParams,
         subtree: bytes::Bytes,
-        /// Chain `useBalance`; see `ExecutionEmission::PostMessage::use_balance`.
+        /// Chain `useBalance`; see `ExecutionEmission::InternalMessage::use_balance`.
         use_balance: bool,
     },
-    EmitEvent {
+    Event {
         topics: Vec<Bytes>,
         blob: genlayer_calldata::codec::Maybe<genlayer_calldata::Map<genlayer_calldata::Value>>,
         storage_fee: U256,
@@ -403,7 +403,7 @@ pub struct ReportedResult {
     pub data: genlayer_calldata::unparsed::Maybe<genlayer_calldata::Value>,
     pub backtrace: Option<Backtrace>,
     pub wasm_store_hashes: WasmStoreHashes,
-    pub storage_changes: Vec<StorageDelta>,
+    pub storage_deltas: Vec<StorageDelta>,
 
     pub emissions: Vec<ExecutionEmission>,
 
@@ -413,5 +413,5 @@ pub struct ReportedResult {
     pub data_fees_remaining: Vec<primitive_types::U256>,
     pub data_fees_consumed: BucketsConsumed,
 
-    pub llm_consumption: primitive_types::U256,
+    pub llm_consumed_gen_wei: primitive_types::U256,
 }

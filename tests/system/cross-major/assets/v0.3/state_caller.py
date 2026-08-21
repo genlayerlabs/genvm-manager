@@ -10,8 +10,8 @@ class Contract(gl.contract.Contract):
 	@gl.public.view
 	def call(self, target: Address, final: bool) -> int:
 		mode = (
-			gl.vm.public_abi.StorageType.LATEST_FINAL
+			gl.vm.public_abi.StorageView.LATEST_FINALIZED
 			if final
-			else gl.vm.public_abi.StorageType.LATEST_NON_FINAL
+			else gl.vm.public_abi.StorageView.LATEST_DECIDED
 		)
 		return gl.contract.get_at(target).view(state=mode).answer()

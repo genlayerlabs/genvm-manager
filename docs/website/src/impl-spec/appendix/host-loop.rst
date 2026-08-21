@@ -35,9 +35,9 @@ independently runs the protocol described below.
 
 In the manager deployment, host 0 is the node's host loop and host 1 is a
 socketpair to the manager. The manager serves ``consume_result``, ``run_nested``
-and -- by default -- ``resolve_callcontract_executor`` on host 1.
+and -- by default -- ``resolve_call_contract_executor`` on host 1.
 
-``resolve_callcontract_executor`` moves to host 0 only when the run request sets
+``resolve_call_contract_executor`` moves to host 0 only when the run request sets
 ``hook_cross_contract_calls`` (see :doc:`manager-socket`). Otherwise the manager
 answers it with a null reply, which keeps every ``CallContract`` in-process. A
 host that does not route calls across major boundaries therefore need not
@@ -84,12 +84,12 @@ result, clean-finish vs crash) is reported by the manager's terminal event
      method_id := read_byte
      match method_id
        json/methods/storage_read:
-         read_type := read_byte as json/storage_type
+         read_type := read_byte as json/storage_view
          address := read_bytes(ACCOUNT_ADDR_SIZE)
          slot := read_bytes(SLOT_ID_SIZE)
-         index := read_u32_le
+         offset := read_u32_le
          len := read_u32_le
-         data, err := host_storage_read(read_type, address, slot, index, len)
+         data, err := host_storage_read(read_type, address, slot, offset, len)
          if err != json/errors/ok:
            write_byte err
          else:
@@ -101,35 +101,35 @@ result, clean-finish vs crash) is reported by the manager's terminal event
          # this is needed to ensure that genvm doesn't close socket before all data is read
          write_byte 0x00
 
-       json/methods/consume_fuel:
-         gas := read_u64_le
-         host_consume_fuel(gas)
+       json/methods/consume_time_fee_gen_wei:
+         time_fee_gen_wei := read_u256_le
+         host_consume_time_fee_gen_wei(time_fee_gen_wei)
          # note: this method doesn't send any response
 
-       json/methods/eth_call:
+       json/methods/external_call:
          address := read_bytes(ACCOUNT_ADDR_SIZE)
          calldata := read_slice()
-         result, err := host_eth_call(address, calldata)
+         result, err := host_external_call(address, calldata)
          if err != json/errors/ok:
            write_byte err
          else:
            write_byte json/errors/ok
            write_byte_slice result
 
-       json/methods/get_balance:
+       json/methods/get_balance_gen_wei:
          address := read_bytes(ACCOUNT_ADDR_SIZE)
-         balance, err := host_get_balance(address)
+         balance, err := host_get_balance_gen_wei(address)
          if err != json/errors/ok:
            write_byte err
          else:
            write_byte json/errors/ok
            write_bytes balance.to_le_bytes(32) # 256-bit integer
 
-       json/methods/resolve_callcontract_executor:
+       json/methods/resolve_call_contract_executor:
          address := read_bytes(ACCOUNT_ADDR_SIZE)
-         state := read_byte as json/storage_type
+         state := read_byte as json/storage_view
          advisory_major := read_byte
-         payload, err := host_resolve_callcontract_executor(
+         payload, err := host_resolve_call_contract_executor(
            address, state, advisory_major)
          if err != json/errors/ok:
            write_byte err
@@ -158,13 +158,13 @@ result, clean-finish vs crash) is reported by the manager's terminal event
          }
          write_byte_slice calldata_encode(reply)
 
-       json/methods/remaining_fuel_as_gen:
-         fuel, err := host_remaining_fuel_as_gen()
+       json/methods/get_remaining_time_fee_gen_wei:
+         time_fee_gen_wei, err := host_get_remaining_time_fee_gen_wei()
          if err != json/errors/ok:
            write_byte err
          else:
            write_byte json/errors/ok
-           write_bytes fuel.to_le_bytes(32) # 256-bit unsigned, little-endian, always 32 bytes
+           write_bytes time_fee_gen_wei.to_le_bytes(32) # 256-bit unsigned, little-endian, always 32 bytes
 
        json/methods/notify_nondet_disagreement:
          call_no := read_u32_le

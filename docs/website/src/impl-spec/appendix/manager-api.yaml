@@ -760,7 +760,7 @@ components:
         is_init:
           type: boolean
           description: Whether this is a contract initialization call
-        datetime:
+        transaction_timestamp:
           type: string
           format: date-time
           description: Transaction timestamp
@@ -920,7 +920,7 @@ components:
           type: boolean
           default: false
           description: |
-            Whether the host wants to answer `resolve_callcontract_executor`. When
+            Whether the host wants to answer `resolve_call_contract_executor`. When
             false the manager answers it with a null reply and every `CallContract`
             stays in-process.
         unsafe_overrides:

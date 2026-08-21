@@ -13,10 +13,10 @@ class ResultCode(IntEnum):
 	VM_ERROR = 2
 
 
-class StorageType(IntEnum):
+class StorageView(IntEnum):
 	DEFAULT = 0
-	LATEST_FINAL = 1
-	LATEST_NON_FINAL = 2
+	LATEST_FINALIZED = 1
+	LATEST_DECIDED = 2
 
 
 class EntryKind(IntEnum):
@@ -135,32 +135,62 @@ class _VmErrorOutOfMemory:
 	def wasm_table() -> 'VmError':
 		return VmError('out_of memory wasm_table')
 
+class _VmErrorOutOfReceiptMessage:
+	@staticmethod
+	def val() -> 'VmError':
+		return VmError('out_of receipt message')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('out_of receipt message # internal')
+
 class _VmErrorOutOfReceipt:
 	@staticmethod
 	def nondet_output() -> 'VmError':
 		return VmError('out_of receipt nondet_output')
 	@staticmethod
-	def message() -> 'VmError':
-		return VmError('out_of receipt message')
-	@staticmethod
 	def event() -> 'VmError':
 		return VmError('out_of receipt event')
+	@staticmethod
+	def message() -> '_VmErrorOutOfReceiptMessage':
+		return _VmErrorOutOfReceiptMessage()
+
+class _VmErrorOutOfMessageFeeTotal:
+	@staticmethod
+	def val() -> 'VmError':
+		return VmError('out_of message_fee total')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('out_of message_fee total # internal')
+	@staticmethod
+	def external() -> 'VmError':
+		return VmError('out_of message_fee total # external')
+
+class _VmErrorOutOfMessageFeeAllocationBudget:
+	@staticmethod
+	def val() -> 'VmError':
+		return VmError('out_of message_fee allocation_budget')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('out_of message_fee allocation_budget # internal')
+	@staticmethod
+	def external() -> 'VmError':
+		return VmError('out_of message_fee allocation_budget # external')
 
 class _VmErrorOutOfMessageFee:
 	@staticmethod
-	def total() -> 'VmError':
-		return VmError('out_of message_fee total')
+	def total() -> '_VmErrorOutOfMessageFeeTotal':
+		return _VmErrorOutOfMessageFeeTotal()
 	@staticmethod
-	def node() -> 'VmError':
-		return VmError('out_of message_fee node')
+	def allocation_budget() -> '_VmErrorOutOfMessageFeeAllocationBudget':
+		return _VmErrorOutOfMessageFeeAllocationBudget()
 
 class _VmErrorOutOf:
 	@staticmethod
 	def storage() -> 'VmError':
 		return VmError('out_of storage')
 	@staticmethod
-	def vm_recursion() -> 'VmError':
-		return VmError('out_of vm_recursion')
+	def subvm_recursion() -> 'VmError':
+		return VmError('out_of subvm_recursion')
 	@staticmethod
 	def nondet_blocks() -> 'VmError':
 		return VmError('out_of nondet_blocks')
@@ -183,16 +213,27 @@ class _VmErrorOutOf:
 	def message_fee() -> '_VmErrorOutOfMessageFee':
 		return _VmErrorOutOfMessageFee()
 
-class _VmErrorFee:
+class _VmErrorFeeNoMatchingAllocation:
 	@staticmethod
-	def no_matching_node() -> 'VmError':
-		return VmError('fee no_matching_node')
+	def val() -> 'VmError':
+		return VmError('fee no_matching_allocation')
+	@staticmethod
+	def internal() -> 'VmError':
+		return VmError('fee no_matching_allocation # internal')
+	@staticmethod
+	def external() -> 'VmError':
+		return VmError('fee no_matching_allocation # external')
+
+class _VmErrorFee:
 	@staticmethod
 	def below_minimum() -> 'VmError':
 		return VmError('fee below_minimum')
 	@staticmethod
 	def too_many_rounds() -> 'VmError':
 		return VmError('fee too_many_rounds')
+	@staticmethod
+	def no_matching_allocation() -> '_VmErrorFeeNoMatchingAllocation':
+		return _VmErrorFeeNoMatchingAllocation()
 
 class _VmErrorEvm:
 	@staticmethod
@@ -276,12 +317,6 @@ class VmError:
 	@staticmethod
 	def invalid_contract() -> '_VmErrorInvalidContract':
 		return _VmErrorInvalidContract()
-	def internal(self) -> 'VmError':
-		assert ' # ' not in self.value
-		return VmError(f'{self.value} # internal')
-	def external(self) -> 'VmError':
-		assert ' # ' not in self.value
-		return VmError(f'{self.value} # external')
 
 
 

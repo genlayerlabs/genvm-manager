@@ -56,5 +56,7 @@ class Contract(gl.contract.Contract):
 
 	@gl.public.view
 	def debug_alias(self) -> int:
-		result = gl.vm.spawn_sandbox(lambda: 1, runner='py-genlayer:test')
+		import cloudpickle
+
+		result = gl.vm.spawn_runner('py-genlayer:test', cloudpickle.dumps(lambda: 1))
 		return gl.vm.unpack_result(result)

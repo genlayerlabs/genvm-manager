@@ -285,3 +285,8 @@ def tests(ctx):
 		ctx.collect_dir('tests/system/parse_version')
 
 	ctx.add_collector(collect_parse_version)
+
+	def collect_make_zip(ctx: genvm_tool.tests.stage.collection.Context):
+		ctx.collect_dir('tests/system/make_zip')
+
+	ctx.add_collector(collect_make_zip)
