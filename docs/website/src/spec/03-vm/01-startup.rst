@@ -43,7 +43,8 @@ runner loads. A payload that violates the convention produces the
 :ref:`gvm-def-str-trie-value-vm-error-malformed-entry` as the execution
 result, like any other failure at this point.
 
-Messages emitted by :ref:`gvm-def-post-message` and ``DeployContract`` are
+Messages emitted by :ref:`gvm-def-emit-internal-message` and
+``EmitInternalDeployMessage`` are
 executed later as top-level entries, so they are validated here too.
 
 .. _gvm-vm-startup-message:

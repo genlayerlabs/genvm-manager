@@ -29,28 +29,28 @@ vm_error
 
 Value: ``2``
 
-.. _gvm-def-enum-storage-type:
+.. _gvm-def-enum-storage-view:
 
-storage_type
+storage_view
 ------------
 
 Type: u8
 
-.. _gvm-def-enum-value-storage-type-default:
+.. _gvm-def-enum-value-storage-view-default:
 
 default
 ~~~~~~~
 
 Value: ``0``
 
-.. _gvm-def-enum-value-storage-type-latest-finalized:
+.. _gvm-def-enum-value-storage-view-latest-finalized:
 
 latest_finalized
 ~~~~~~~~~~~~~~~~
 
 Value: ``1``
 
-.. _gvm-def-enum-value-storage-type-latest-decided:
+.. _gvm-def-enum-value-storage-view-latest-decided:
 
 latest_decided
 ~~~~~~~~~~~~~~
@@ -344,15 +344,15 @@ Param: i32
 ``out_of message_fee total``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-out-of-message-fee-node:
+.. _gvm-def-str-trie-value-vm-error-out-of-message-fee-allocation-budget:
 
-``out_of message_fee node``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``out_of message_fee allocation_budget``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-out-of-vm-recursion:
+.. _gvm-def-str-trie-value-vm-error-out-of-subvm-recursion:
 
-``out_of vm_recursion``
-~~~~~~~~~~~~~~~~~~~~~~~
+``out_of subvm_recursion``
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-out-of-nondet-blocks:
 
@@ -374,10 +374,10 @@ Param: i32
 ``out_of fds``
 ~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-value-vm-error-fee-no-matching-node:
+.. _gvm-def-str-trie-value-vm-error-fee-no-matching-allocation:
 
-``fee no_matching_node``
-~~~~~~~~~~~~~~~~~~~~~~~~
+``fee no_matching_allocation``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-str-trie-value-vm-error-fee-below-minimum:
 
@@ -456,25 +456,25 @@ This error remains terminal for top-level and runner loads. During :ref:`gvm-def
 ``out_of message_fee total # external``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-node-internal:
+.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-allocation-budget-internal:
 
-``out_of message_fee node # internal``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``out_of message_fee allocation_budget # internal``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-node-external:
+.. _gvm-def-str-trie-detail-vm-error-out-of-message-fee-allocation-budget-external:
 
-``out_of message_fee node # external``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``out_of message_fee allocation_budget # external``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-detail-vm-error-fee-no-matching-node-internal:
+.. _gvm-def-str-trie-detail-vm-error-fee-no-matching-allocation-internal:
 
-``fee no_matching_node # internal``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``fee no_matching_allocation # internal``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _gvm-def-str-trie-detail-vm-error-fee-no-matching-node-external:
+.. _gvm-def-str-trie-detail-vm-error-fee-no-matching-allocation-external:
 
-``fee no_matching_node # external``
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+``fee no_matching_allocation # external``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. _gvm-def-const-event-max-topics:
 

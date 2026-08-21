@@ -1,8 +1,8 @@
 ``gl_call`` Messages
 ====================
 
-``EthSend`` Message
--------------------
+``EmitExternalMessage`` Message
+-------------------------------
 
 Sends transaction to Ethereum address with optional value transfer.
 
@@ -12,7 +12,7 @@ Payload
 .. code-block::
 
    {
-     "EthSend": {
+     "EmitExternalMessage": {
        "address": Address,      // 20-byte target address
        "calldata": Bytes,       // EVM calldata
        "value": U256            // Wei to transfer
@@ -26,8 +26,8 @@ Requirements
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
 
-``EthCall`` Message
--------------------
+``ExternalCall`` Message
+------------------------
 
 Calls Ethereum contract method (read-only operation).
 
@@ -37,7 +37,7 @@ Payload
 .. code-block::
 
    {
-     "EthCall": {
+     "ExternalCall": {
        "address": Address,      // 20-byte target contract address
        "calldata": Bytes        // EVM calldata
      }
@@ -65,7 +65,7 @@ Payload
      "CallContract": {
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
-       "state": Number,         // Storage type: 0=default, 1=latest_finalized, 2=latest_decided
+       "storage_view": Number,  // Storage view: 0=default, 1=latest_finalized, 2=latest_decided
        "catch_vm_error": Bool   // optional (default false): take a VM error as the result
      }
    }
@@ -98,10 +98,10 @@ answered with ``Errno::Inval`` like the other argument checks and the caller can
 recover — unlike a top-level entry, where the same violation is the execution's
 result (:ref:`gvm-vm-startup-entry-validation`).
 
-.. _gvm-def-post-message:
+.. _gvm-def-emit-internal-message:
 
-``PostMessage`` Message
------------------------
+``EmitInternalMessage`` Message
+-------------------------------
 
 Posts message to GenLayer contract for later execution.
 
@@ -116,7 +116,7 @@ Payload
 .. code-block::
 
    {
-     "PostMessage": {
+     "EmitInternalMessage": {
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
        "value": U256,           // Wei to transfer
@@ -150,8 +150,8 @@ transaction's fee configuration and mirrors the chain's
 .. code-block::
 
    FeeParams {
-     "leader_timeunits_allocation": U256,     // per-round leader time units
-     "validator_timeunits_allocation": U256,  // per-round validator time units
+     "leader_time_units_allocation": U256,     // per-round leader time units
+     "validator_time_units_allocation": U256,  // per-round validator time units
      "execution_budget_per_round": U256,      // unified budget per leader round
      "rotations": [U256],                     // per-round rotations; non-empty.
                                               // rotations[0] is the initial round,
@@ -172,7 +172,7 @@ Semantics:
 - The message is excluded from allocation matching, so no matching node is
   required (and none is consulted).
 - The contract must be able to cover ``value + metered_fee`` from its balance;
-  otherwise the call fails with ``Inbalance``.
+  otherwise the call fails with ``InsufficientBalance``.
 - The emitted allocation subtree is **empty**: nesting is fail-closed, so a child
   message must itself set ``use_balance`` or it fails to fund.
 
@@ -187,8 +187,8 @@ Semantics:
 - Out-of-bounds magnitudes: prices and budgets
   (``max_price_gen_per_time_unit``, ``storage_fee_max_gas_price``,
   ``receipt_fee_max_gas_price``, ``execution_budget_per_round``) must be below
-  2\ :sup:`96`; counts (``leader_timeunits_allocation``,
-  ``validator_timeunits_allocation``, each ``rotations`` entry) below
+  2\ :sup:`96`; counts (``leader_time_units_allocation``,
+  ``validator_time_units_allocation``, each ``rotations`` entry) below
   2\ :sup:`32`. These bounds keep the metered floor within ``U256``.
 
 Metering additionally enforces node-configured floors, surfaced as ``VMError``\ s:
@@ -199,8 +199,8 @@ Metering additionally enforces node-configured floors, surfaced as ``VMError``\ 
 - ``fee too_many_rounds`` — ``rotations`` implies more consensus rounds than the
   node's validator table supports (on-chain ``MAX_ROUNDS``).
 
-``DeployContract`` Message
---------------------------
+``EmitInternalDeployMessage`` Message
+------------------------------------
 
 Deploys new intelligent contract to blockchain.
 
@@ -210,7 +210,7 @@ Payload
 .. code-block::
 
    {
-     "DeployContract": {
+     "EmitInternalDeployMessage": {
        "calldata": Calldata,    // Constructor arguments in calldata format
        "code": Bytes,           // Contract bytecode
        "value": U256,           // Wei to transfer
@@ -408,7 +408,7 @@ Payload
      "WebRender": {
        "mode": String,            // "text", "html", or "screenshot"
        "url": String,             // URL to render
-       "wait_after_loaded": String // Wait duration, e.g. "5s" or "500ms"
+       "post_load_wait": String // Wait duration, e.g. "5s" or "500ms"
      }
    }
 
@@ -638,8 +638,8 @@ Requirements
 
 .. _tracing-runtime-microsec:
 
-``Trace.RuntimeMicroSec`` Sub-Message
--------------------------------------
+``Trace.RuntimeMicroseconds`` Sub-Message
+-----------------------------------------
 
 In :ref:`gvm-def-non-det-mode` returns the elapsed execution time in microseconds since VM start.
 In :ref:`gvm-def-det-mode`, it returns ``0`` — exposing real elapsed time there
@@ -653,7 +653,7 @@ Payload
 .. code-block::
 
    {
-     "Trace": "RuntimeMicroSec"
+     "Trace": "RuntimeMicroseconds"
    }
 
 .. note::

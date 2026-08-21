@@ -172,10 +172,10 @@ class ObservabilityStep(base.CrossMajorStep):
 					and result.result_kind == host_fns.ResultCode.RETURN
 				):
 					assert mock_host.storage is not None
-					base._apply_storage_changes(
+					base._apply_storage_deltas(
 						mock_host.storage,
 						address,
-						result.result_storage_changes,
+						result.result_storage_deltas,
 					)
 				return result
 			finally:
@@ -345,7 +345,7 @@ class ObservabilityStep(base.CrossMajorStep):
 		)
 
 	async def _assert_read_only_storage(self, permissions: str):
-		reads: list[tuple[Address, public_abi.StorageType]] = []
+		reads: list[tuple[Address, public_abi.StorageView]] = []
 		leader, validator, sync = await self._lvs_extended(
 			name=f'storage-{permissions}',
 			line=2,
@@ -362,7 +362,7 @@ class ObservabilityStep(base.CrossMajorStep):
 		self.notes.append(('read-only nested storage', permissions))
 
 	async def _assert_self_recursion(self, budget: int):
-		expected_error = str(public_abi.VmError.out_of().vm_recursion())
+		expected_error = str(public_abi.VmError.out_of().subvm_recursion())
 		leader, validator, sync = await self._lvs_extended(
 			name=f'self-recursion-{budget}',
 			line=3,
@@ -407,8 +407,8 @@ class ObservabilityStep(base.CrossMajorStep):
 		if depth > CROSS_MAJOR_RECURSION:
 			for result in (leader, validator, sync):
 				assert result.result_kind == host_fns.ResultCode.VM_ERROR, result
-				assert result.result_data == 'out_of vm_recursion', (depth, result)
-			outcome: int | str = 'out_of vm_recursion'
+				assert result.result_data == 'out_of subvm_recursion', (depth, result)
+			outcome: int | str = 'out_of subvm_recursion'
 		else:
 			expected = sum(3 if index % 2 == 0 else 2 for index in range(depth + 1))
 			for result in (leader, validator, sync):

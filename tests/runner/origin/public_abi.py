@@ -13,7 +13,7 @@ class ResultCode(IntEnum):
 	VM_ERROR = 2
 
 
-class StorageType(IntEnum):
+class StorageView(IntEnum):
 	DEFAULT = 0
 	LATEST_FINALIZED = 1
 	LATEST_DECIDED = 2
@@ -165,32 +165,32 @@ class _VmErrorOutOfMessageFeeTotal:
 	def external() -> 'VmError':
 		return VmError('out_of message_fee total # external')
 
-class _VmErrorOutOfMessageFeeNode:
+class _VmErrorOutOfMessageFeeAllocationBudget:
 	@staticmethod
 	def val() -> 'VmError':
-		return VmError('out_of message_fee node')
+		return VmError('out_of message_fee allocation_budget')
 	@staticmethod
 	def internal() -> 'VmError':
-		return VmError('out_of message_fee node # internal')
+		return VmError('out_of message_fee allocation_budget # internal')
 	@staticmethod
 	def external() -> 'VmError':
-		return VmError('out_of message_fee node # external')
+		return VmError('out_of message_fee allocation_budget # external')
 
 class _VmErrorOutOfMessageFee:
 	@staticmethod
 	def total() -> '_VmErrorOutOfMessageFeeTotal':
 		return _VmErrorOutOfMessageFeeTotal()
 	@staticmethod
-	def node() -> '_VmErrorOutOfMessageFeeNode':
-		return _VmErrorOutOfMessageFeeNode()
+	def allocation_budget() -> '_VmErrorOutOfMessageFeeAllocationBudget':
+		return _VmErrorOutOfMessageFeeAllocationBudget()
 
 class _VmErrorOutOf:
 	@staticmethod
 	def storage() -> 'VmError':
 		return VmError('out_of storage')
 	@staticmethod
-	def vm_recursion() -> 'VmError':
-		return VmError('out_of vm_recursion')
+	def subvm_recursion() -> 'VmError':
+		return VmError('out_of subvm_recursion')
 	@staticmethod
 	def nondet_blocks() -> 'VmError':
 		return VmError('out_of nondet_blocks')
@@ -213,16 +213,16 @@ class _VmErrorOutOf:
 	def message_fee() -> '_VmErrorOutOfMessageFee':
 		return _VmErrorOutOfMessageFee()
 
-class _VmErrorFeeNoMatchingNode:
+class _VmErrorFeeNoMatchingAllocation:
 	@staticmethod
 	def val() -> 'VmError':
-		return VmError('fee no_matching_node')
+		return VmError('fee no_matching_allocation')
 	@staticmethod
 	def internal() -> 'VmError':
-		return VmError('fee no_matching_node # internal')
+		return VmError('fee no_matching_allocation # internal')
 	@staticmethod
 	def external() -> 'VmError':
-		return VmError('fee no_matching_node # external')
+		return VmError('fee no_matching_allocation # external')
 
 class _VmErrorFee:
 	@staticmethod
@@ -232,8 +232,8 @@ class _VmErrorFee:
 	def too_many_rounds() -> 'VmError':
 		return VmError('fee too_many_rounds')
 	@staticmethod
-	def no_matching_node() -> '_VmErrorFeeNoMatchingNode':
-		return _VmErrorFeeNoMatchingNode()
+	def no_matching_allocation() -> '_VmErrorFeeNoMatchingAllocation':
+		return _VmErrorFeeNoMatchingAllocation()
 
 class _VmErrorEvm:
 	@staticmethod

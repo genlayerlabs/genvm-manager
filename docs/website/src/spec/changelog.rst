@@ -14,9 +14,10 @@ Breaking
 ~~~~~~~~
 
 #. The pre-finalization state is spelled *decided* everywhere it is named.
-   :ref:`gvm-def-enum-storage-type` reads ``latest_finalized`` (1) and
+   :ref:`gvm-def-enum-storage-view` reads ``latest_finalized`` (1) and
    ``latest_decided`` (2) instead of ``latest_final`` and ``latest_non_final``,
-   the ``on`` field of the ``PostMessage`` and ``DeployContract`` ``gl_call``
+   the ``on`` field of the ``EmitInternalMessage`` and
+   ``EmitInternalDeployMessage`` ``gl_call``
    payloads (:doc:`02-execution-environment/03-wasi_genlayer_sdk/02-gl_call`)
    takes ``"decided"`` instead of ``"accepted"``, and a ``chain:`` runner id
    selects it with ``d`` rather than ``a`` (see

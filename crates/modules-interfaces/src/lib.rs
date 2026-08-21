@@ -537,11 +537,11 @@ pub mod llm {
     pub enum Message {
         Prompt {
             payload: PromptPayload,
-            remaining_fuel_as_gen: primitive_types::U256,
+            remaining_time_fee_gen_wei: primitive_types::U256,
         },
         PromptTemplate {
             payload: PromptTemplatePayload,
-            remaining_fuel_as_gen: primitive_types::U256,
+            remaining_time_fee_gen_wei: primitive_types::U256,
         },
     }
 

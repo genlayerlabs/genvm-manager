@@ -102,7 +102,7 @@ def _loop_wat(target: Address) -> str:
 			'CallContract': {
 				'address': target,
 				'calldata': {},
-				'state': public_abi.StorageType.LATEST_DECIDED,
+				'storage_view': public_abi.StorageView.LATEST_DECIDED,
 			}
 		}
 	)
@@ -179,7 +179,7 @@ def _message(address: Address, *, is_init: bool) -> base_host.Message:
 		'chain_id': 61999,
 		'value': 0,
 		'is_init': is_init,
-		'datetime': TIMESTAMP,
+		'transaction_timestamp': TIMESTAMP,
 	}
 
 
@@ -198,7 +198,7 @@ def _assert_hashes_agree(label: str, runs: list[tuple[str, typing.Any]]) -> None
 	)
 
 
-def _apply_storage_changes(
+def _apply_storage_deltas(
 	storage: MockStorage,
 	address: Address,
 	changes: list[tuple[bytes, bytes]],
@@ -332,7 +332,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		name: str,
 		running_address: Address,
 		resolve_hook=None,
-		read_log: list[tuple[Address, public_abi.StorageType]] | None = None,
+		read_log: list[tuple[Address, public_abi.StorageView]] | None = None,
 		host_fuel: int | None = None,
 	) -> MockHost:
 		ctx = _TestContext(self.case.shared.logger)
@@ -349,22 +349,24 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			storage_path_post=self.storage_path,
 			balances={},
 			running_address=running_address,
-			resolve_callcontract_executor_hook=resolve_hook,
+			resolve_call_contract_executor_hook=resolve_hook,
 		)
 		if read_log is not None:
 			original = host.storage_read
 
-			async def logged(mode, account, slot, index, le, /):
-				read_log.append((Address(account), mode))
-				return await original(mode, account, slot, index, le)
+			async def logged(mode, address, slot, offset, le, /):
+				read_log.append((Address(address), mode))
+				return await original(mode, address, slot, offset, le)
 
 			host.storage_read = logged  # type: ignore[method-assign]
 		if host_fuel is not None:
 
-			async def remaining_fuel_as_gen() -> int:
+			async def get_remaining_time_fee_gen_wei() -> int:
 				return host_fuel
 
-			host.remaining_fuel_as_gen = remaining_fuel_as_gen  # type: ignore[method-assign]
+			host.get_remaining_time_fee_gen_wei = (  # type: ignore[method-assign]
+				get_remaining_time_fee_gen_wei
+			)
 		return host
 
 	async def _execute(
@@ -382,7 +384,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		is_sync: bool = True,
 		leader_nondet_results: list[bytes] | None = None,
 		apply_changes: bool = True,
-		read_log: list[tuple[Address, public_abi.StorageType]] | None = None,
+		read_log: list[tuple[Address, public_abi.StorageView]] | None = None,
 		host_fuel: int | None = None,
 		hook_cross_contract_calls: bool = True,
 	):
@@ -419,10 +421,10 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 					)
 				if apply_changes and result.result_kind == host_fns.ResultCode.RETURN:
 					assert mock_host.storage is not None
-					_apply_storage_changes(
+					_apply_storage_deltas(
 						mock_host.storage,
 						address,
-						result.result_storage_changes,
+						result.result_storage_deltas,
 					)
 				return result
 			finally:
@@ -752,16 +754,16 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 	async def _assert_state_mode_crosses(
 		self,
 		final: bool,
-		expected: public_abi.StorageType,
+		expected: public_abi.StorageView,
 	):
 		"""
 		The caller's state mode selects which chain view the callee reads, so
 		the boundary must hand the callee exactly the mode the in-process route
 		would have used."""
-		modes: dict[bool, set[public_abi.StorageType]] = {}
+		modes: dict[bool, set[public_abi.StorageView]] = {}
 		for nested in (False, True):
-			resolved: list[public_abi.StorageType] = []
-			read_log: list[tuple[Address, public_abi.StorageType]] = []
+			resolved: list[public_abi.StorageView] = []
+			read_log: list[tuple[Address, public_abi.StorageView]] = []
 
 			def resolve(address, state, _major, nested=nested, resolved=resolved):
 				if address != ADDR_CALLEE_V03:
@@ -926,7 +928,9 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			len(resolved),
 			resolved[-3:],
 		)
-		assert result.result_data == str(public_abi.VmError.out_of().vm_recursion()), result
+		assert result.result_data == str(public_abi.VmError.out_of().subvm_recursion()), (
+			result
+		)
 		assert len(resolved) == 2, len(resolved)
 		# Neither line can report a meaningful major: v0.3 forwards the raw root
 		# byte and v0.2 has no such byte at all, so both send the unwritten
@@ -985,13 +989,13 @@ def collect(
 			'state-mode-nonfinal',
 			'_assert_state_mode_crosses',
 			('state-caller-v03', 'callee-v03'),
-			(False, public_abi.StorageType.LATEST_DECIDED),
+			(False, public_abi.StorageView.LATEST_DECIDED),
 		),
 		(
 			'state-mode-final',
 			'_assert_state_mode_crosses',
 			('state-caller-v03', 'callee-v03'),
-			(True, public_abi.StorageType.LATEST_FINALIZED),
+			(True, public_abi.StorageView.LATEST_FINALIZED),
 		),
 		('deep-chain', '_assert_deep_chain', ('chain-v03', 'chain-v02'), ()),
 		*[

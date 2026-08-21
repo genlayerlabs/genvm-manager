@@ -720,7 +720,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			balances={Address(k): v for k, v in single_conf.get('balances', {}).items()},
 			running_address=running_address,
 			ctx=ctx,
-			resolve_callcontract_executor_hook=resolve_executor,
+			resolve_call_contract_executor_hook=resolve_executor,
 		)
 
 		host.balances.setdefault(running_address, 0)
@@ -826,7 +826,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						f'nondet disagreement: {mock_host.nondet_disagreement_call_no}\n'
 					)
 
-				for k, v in res.result_storage_changes:
+				for k, v in res.result_storage_deltas:
 					assert len(k) == 36
 					index = int.from_bytes(k[32:], byteorder='big')
 					index *= 32

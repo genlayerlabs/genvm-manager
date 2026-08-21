@@ -259,10 +259,11 @@ Message-Fee Allocation Matching
 The ``a.matchedFeeParams`` above is selected per outbound message from the call's
 allocation list (``accumulator.message_fee_allocation``). A node
 (``domain/fees.rs``, ``matches_internal`` / ``matches_external``) matches on kind
-(``External`` for ``EthSend``, else ``Internal``), ``on`` (internal only), and
+(``External`` for ``EmitExternalMessage``, else ``Internal``), ``on`` (internal
+only), and
 ``recipient`` / ``call_key`` (each a wildcard ``None`` or an exact match). Selection
 is **first-match-wins** in list order (``find_map``); no match yields the
-``fee no_matching_node`` VM error.
+``fee no_matching_allocation`` VM error.
 
 Wildcards are not reordered, so a wildcard node shadows every more-specific node
 after it: producers are advised to sort more-specific nodes ahead of wildcard ones.
@@ -275,13 +276,14 @@ An outgoing internal message is funded one of two ways:
 - **Allocation-matched (default).** The fee is matched against the allocation
   tree as above, capped by the matched node's ``budget``, and consumes both the
   ``message_fee`` and ``message_receipt`` buckets.
-- **Balance-funded (``use_balance``).** When a ``PostMessage`` / ``DeployContract``
+- **Balance-funded (``use_balance``).** When an ``EmitInternalMessage`` /
+  ``EmitInternalDeployMessage``
   sets ``use_balance`` (the chain's ``useBalance``, gated on
   :ref:`gvm-perm-use-balance-for-message-fees`), allocation matching is skipped
   entirely. The fee is metered from the guest-supplied ``fee_params`` and that
   metered amount is the child's ``declaredBudget``, reserved from the emitting
   contract's balance (jointly with ``value``; insufficient balance yields
-  ``Inbalance``). The ``message_fee`` bucket is **not** consumed (the message is
+  ``InsufficientBalance``). The ``message_fee`` bucket is **not** consumed (the message is
   excluded from the sender pool on-chain); only ``message_receipt`` is. The emitted
   allocation subtree is empty, so nested child messages must each fund themselves.
 
