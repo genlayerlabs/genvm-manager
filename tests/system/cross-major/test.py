@@ -96,13 +96,14 @@ def _wat_data(data: bytes) -> str:
 	return ''.join(f'\\{byte:02x}' for byte in data)
 
 
-def _loop_wat(target: Address) -> str:
+def _loop_wat(target: Address, *, caller_line: typing.Literal[2, 3]) -> str:
+	storage_field = 'storage_view' if caller_line == 3 else 'state'
 	call = gvm_calldata.encode(
 		{
 			'CallContract': {
 				'address': target,
 				'calldata': {},
-				'storage_view': public_abi.StorageView.LATEST_DECIDED,
+				storage_field: public_abi.StorageView.LATEST_DECIDED,
 			}
 		}
 	)
@@ -310,10 +311,10 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			await self._deploy(line, address, code)
 		if 'loop-v03' in self.case.fixtures:
 			loop_v03 = await self._compile_wat(
-				_loop_wat(ADDR_LOOP_V02), work_dir / 'loop-v03'
+				_loop_wat(ADDR_LOOP_V02, caller_line=3), work_dir / 'loop-v03'
 			)
 			loop_v02 = await self._compile_wat(
-				_loop_wat(ADDR_LOOP_V03), work_dir / 'loop-v02'
+				_loop_wat(ADDR_LOOP_V03, caller_line=2), work_dir / 'loop-v02'
 			)
 			self._replace_code(ADDR_LOOP_V03, LOOP_V03, loop_v03)
 			self._replace_code(ADDR_LOOP_V02, LOOP_V02, loop_v02)
