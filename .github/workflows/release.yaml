@@ -43,18 +43,50 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - name: Ensure tag is free
         env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ github.sha }}
           VERSION_OVERRIDE: ${{ inputs.version_override }}
         run: |
           set -euo pipefail
           tag="${VERSION_OVERRIDE:-$(jq -r .version .genvm-monorepo-root)}"
-          if git ls-remote --exit-code origin "refs/tags/$tag" > /dev/null; then
-            echo "::error::tag $tag already exists on origin"
-            exit 1
+          release=$(
+            gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" \
+              | jq -c --arg tag "$tag" \
+                  '[.[][] | select(.tag_name == $tag)] | first // empty'
+          )
+          tag_sha=$(git ls-remote origin "refs/tags/$tag" | awk 'NR == 1 {print $1}')
+
+          if [[ -z "${release}" && -z "${tag_sha}" ]]; then
+            echo "tag $tag is free"
+            exit 0
           fi
-          echo "tag $tag is free"
+
+          draft=$(jq -r '.draft // false' <<<"${release:-{}}")
+          author=$(jq -r '.author.login // ""' <<<"${release:-{}}")
+          target=$(jq -r '.target_commitish // ""' <<<"${release:-{}}")
+          if [[ "${draft}" == "true" \
+            && "${author}" == "github-actions[bot]" \
+            && ( "${target}" == "${SOURCE_SHA}" || "${tag_sha}" == "${SOURCE_SHA}" ) ]]; then
+            echo "Recovering bot-owned draft release $tag at ${SOURCE_SHA}."
+            exit 0
+          fi
+
+          if [[ -n "${release}" ]]; then
+            echo "::error::release $tag already exists and is not a recoverable bot-owned draft at ${SOURCE_SHA}"
+          else
+            echo "::error::tag $tag already exists on origin at ${tag_sha}"
+          fi
+          if [[ -n "${tag_sha}" ]]; then
+            echo "::error::existing tag SHA: ${tag_sha}"
+          fi
+          if [[ -n "${release}" ]]; then
+            jq '{id, tag_name, target_commitish, draft, immutable, author: .author.login}' <<<"${release}"
+          fi
+          exit 1
 
   # Plan -> build every artifact -> test every platform. Its matrices are an
   # implementation detail; all we consume are the four artifact names.
@@ -70,38 +102,40 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write  # Needed for creating releases
+      attestations: write  # Signed provenance for the exact release assets
+      contents: write      # Tag and release creation
+      id-token: write      # Short-lived Sigstore signing identity
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           # Full history + tags: the release-notes step diffs against the
           # previous tag via `git describe`.
           fetch-depth: 0
 
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.build-and-test.outputs.artifact_notes }}
           path: artifacts/notes
       # Each artifact holds exactly one tarball, already named as the asset it
       # is published as, so they all land in one dir and need no renaming.
       - name: Download universal artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.build-and-test.outputs.artifact_universal }}
           path: release-assets
       - name: Download amd64-linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.build-and-test.outputs.artifact_amd64_linux }}
           path: release-assets
       - name: Download arm64-linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.build-and-test.outputs.artifact_arm64_linux }}
           path: release-assets
       - name: Download arm64-macos artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: ${{ needs.build-and-test.outputs.artifact_arm64_macos }}
           path: release-assets
@@ -117,20 +151,28 @@ jobs:
             }
           done
 
-      - name: Tag the release
-        env:
-          TAG: ${{ needs.build-and-test.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git tag "$TAG"
-          git push origin "$TAG"
+      - name: Attest release asset build provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: release-assets/*.tar.xz
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: release-assets/*.tar.xz
           name: Release ${{ needs.build-and-test.outputs.tag }}
           tag_name: ${{ needs.build-and-test.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           body_path: artifacts/notes/${{ needs.build-and-test.outputs.notes_file }}
-          draft: false
+          # Immutable releases lock as soon as they are published. Build the
+          # complete release as a draft so every attested asset is attached
+          # before publication.
+          draft: true
+          overwrite_files: true
           prerelease: ${{ contains(needs.build-and-test.outputs.tag, '-') }}
+
+      - name: Publish immutable release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.build-and-test.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false

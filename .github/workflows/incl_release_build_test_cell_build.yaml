@@ -39,7 +39,7 @@ jobs:
     runs-on: ${{ inputs.runs_on }}
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # Guards the "Job:" step below: every key must have a step, every step a key.
       - name: Check job keys
@@ -47,7 +47,7 @@ jobs:
           JOB_JSON: ${{ inputs.job_json }}
         run: ./support/ci/run.sh pipeline check-cell-keys --job-json "$JOB_JSON" build
 
-      - uses: insightsengineering/disk-space-reclaimer@v1
+      - uses: insightsengineering/disk-space-reclaimer@dae9fabcb8febe09f6585471948acf9dc9a57489 # v1
         with:
           tools-cache: false
           swap-storage: false
@@ -80,7 +80,7 @@ jobs:
           exclude: genvm-cpython-objs
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: ${{ inputs.artifact_name }}
           # upload-artifact strips the common prefix, so entries land flat as

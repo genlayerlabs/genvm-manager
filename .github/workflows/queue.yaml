@@ -119,6 +119,13 @@ jobs:
       pr: ${{ github.event.pull_request.number || inputs.pr }}
     secrets: inherit
 
+  release-workflow-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Validate immutable release workflow policy
+        run: python3 support/ci/check_release_workflow_policy.py
+
   # Precondition (run.sh tool pr-branches check): the PR must be landable via the
   # panel (Provision then Merge), which lands the manager and its executors almost-
   # atomically. So every repo (manager + each executor line) must be rebased on its
@@ -230,6 +237,7 @@ jobs:
     if: ${{ always() }}
     needs:
       - initial
+      - release-workflow-policy
       - gate-check
       - matrix-tests
     env:
@@ -240,6 +248,10 @@ jobs:
           # initial (pre-commit + 0-behind) must always pass.
           if [ "${{ needs.initial.result }}" != "success" ]; then
             echo "::error::initial checks failed"
+            exit 1
+          fi
+          if [ "${{ needs.release-workflow-policy.result }}" != "success" ]; then
+            echo "::error::release workflow policy failed"
             exit 1
           fi
           # No run-full-tests marker -> heavy tests were skipped; keep the
