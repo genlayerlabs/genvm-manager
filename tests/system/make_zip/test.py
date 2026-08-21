@@ -10,6 +10,7 @@ so a drift in either is consensus-visible.
 """
 
 import io
+import importlib.util
 import json
 import os
 import subprocess
@@ -25,6 +26,11 @@ FIXTURE = {
 	'main.wasm': b'\x00asm\x01\x00\x00\x00',
 	'lib/mod.py': b'VALUE = 1\n',
 }
+PYC_NAME = importlib.util.cache_from_source('lib/mod.py', optimization='')
+IGNORED_FIXTURE = {
+	PYC_NAME: b'stale bytecode',
+	'lib/stale.pyo': b'stale optimized bytecode',
+}
 
 
 def _build(script: Path, work: Path, out: Path) -> None:
@@ -32,7 +38,7 @@ def _build(script: Path, work: Path, out: Path) -> None:
 	Lay out the tree make-zip.py expects (a `scripts/` dir plus exactly one
 	source dir) and run it."""
 	pkg = work / 'pkg'
-	for name, contents in FIXTURE.items():
+	for name, contents in (FIXTURE | IGNORED_FIXTURE).items():
 		path = pkg / name
 		path.parent.mkdir(parents=True, exist_ok=True)
 		path.write_bytes(contents)
@@ -44,6 +50,36 @@ def _build(script: Path, work: Path, out: Path) -> None:
 	env['out'] = str(out)
 	subprocess.run(
 		[sys.executable, 'scripts/make-zip.py'],
+		cwd=work,
+		env=env,
+		check=True,
+		capture_output=True,
+	)
+
+
+def _check_add_file_edges(work: Path, out: Path) -> None:
+	env = dict(os.environ)
+	env['out'] = str(out)
+	subprocess.run(
+		[
+			sys.executable,
+			'-c',
+			"""
+import runpy
+
+namespace = runpy.run_path('scripts/make-zip.py')
+add_file = namespace['add_file']
+add_file(namespace['importlib'].util.cache_from_source('lib/mod.py'), b'stale')
+add_file('lib/stale.pyo', b'kept', skip_pyc=False)
+add_file('lib/stale.pyo', b'stale')
+try:
+	add_file('runner.json', b'')
+except KeyError as exc:
+	assert 'runner.json' in str(exc), exc
+else:
+	raise AssertionError('duplicate entry did not raise KeyError')
+""",
+		],
 		cwd=work,
 		env=env,
 		check=True,
@@ -66,6 +102,7 @@ def _add_case(
 		second = artifacts_dir / 'second.zip'
 		_build(script, artifacts_dir / 'run-a', first)
 		_build(script, artifacts_dir / 'run-b', second)
+		_check_add_file_edges(artifacts_dir / 'run-a', artifacts_dir / 'collision.zip')
 
 		if first.read_bytes() != second.read_bytes():
 			return Result(
@@ -87,6 +124,19 @@ def _add_case(
 			names = sorted(zf.namelist())
 			contents = {name: zf.read(name) for name in names}
 			infos = {name: zf.getinfo(name) for name in names}
+
+		if contents.get(PYC_NAME) in (None, IGNORED_FIXTURE[PYC_NAME]):
+			return Result(
+				passed=False,
+				context={'reason': 'stale bytecode was not replaced', 'entry': PYC_NAME},
+				elapsed_seconds=0,
+			)
+		if 'lib/stale.pyo' in contents:
+			return Result(
+				passed=False,
+				context={'reason': 'stale optimized bytecode was included'},
+				elapsed_seconds=0,
+			)
 
 		for name, expected in FIXTURE.items():
 			if name == 'runner.json':
