@@ -9,7 +9,7 @@
 
     "definitions": {
       "WasmMode": {
-        "enum": ["det", "nondet"]
+        "enum": ["det", "!det"]
       },
       "runner-id": {
         "type": "string",

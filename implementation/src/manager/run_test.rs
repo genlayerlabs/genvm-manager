@@ -550,13 +550,13 @@ fn clean_reported() -> genvm_modules_interfaces::ReportedResult {
         data: calldata::Value::Null.into(),
         backtrace: None,
         wasm_store_hashes: Default::default(),
-        storage_changes: Vec::new(),
+        storage_deltas: Vec::new(),
         emissions: Vec::new(),
         nondet_disagreement: None,
         nondet_results: Vec::new(),
         data_fees_remaining: Vec::new(),
         data_fees_consumed: Default::default(),
-        llm_consumption: primitive_types::U256::zero(),
+        llm_consumed_gen_wei: primitive_types::U256::zero(),
     }
 }
 
@@ -640,7 +640,7 @@ fn some_storage_delta() -> genvm_modules_interfaces::StorageDelta {
 }
 
 fn some_emission() -> genvm_modules_interfaces::ExecutionEmission {
-    genvm_modules_interfaces::ExecutionEmission::EmitEvent {
+    genvm_modules_interfaces::ExecutionEmission::Event {
         topics: Vec::new(),
         blob: calldata::Map::new().into(),
         storage_fee: primitive_types::U256::zero(),
@@ -660,16 +660,16 @@ fn nested_reply_refuses_every_reported_effect() {
     // end to end -- the boundary derivation clears the permission behind each of
     // them -- so this is the only place the refusal is exercised.
     let mutate: [(&str, fn(&mut genvm_modules_interfaces::ReportedResult)); 10] = [
-        ("storage_changes", |r| {
-            r.storage_changes.push(some_storage_delta())
+        ("storage_deltas", |r| {
+            r.storage_deltas.push(some_storage_delta())
         }),
         ("emissions", |r| r.emissions.push(some_emission())),
         ("nondet_disagreement", |r| r.nondet_disagreement = Some(0)),
         ("nondet_results", |r| {
             r.nondet_results.push(bytes::Bytes::from_static(&[1]))
         }),
-        ("llm_consumption", |r| {
-            r.llm_consumption = primitive_types::U256::one()
+        ("llm_consumed_gen_wei", |r| {
+            r.llm_consumed_gen_wei = primitive_types::U256::one()
         }),
         ("storage", |r| {
             r.data_fees_consumed.storage = primitive_types::U256::one()
@@ -892,7 +892,7 @@ fn message_schema_matches_the_rust_struct() {
             chain_id,
             value,
             is_init,
-            datetime,
+            transaction_timestamp,
         } = message;
     };
 
@@ -904,7 +904,7 @@ fn message_schema_matches_the_rust_struct() {
         "chain_id",
         "value",
         "is_init",
-        "datetime",
+        "transaction_timestamp",
     ]
     .map(str::to_owned)
     .to_vec();

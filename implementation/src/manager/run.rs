@@ -1028,7 +1028,7 @@ pub struct Request {
     #[calldata(default = default_host_hello_data)]
     pub host_hello_data: Vec<bytes::Bytes>,
     /// Whether the host wants to be asked where a `CallContract` should run.
-    /// When false the manager answers `resolve_callcontract_executor` itself
+    /// When false the manager answers `resolve_call_contract_executor` itself
     /// with a null reply, so every call stays in-process and the host never
     /// has to implement that method.
     #[serde(default)]
@@ -1509,7 +1509,7 @@ fn nested_effect(reported: &genvm_modules_interfaces::ReportedResult) -> Option<
         wasm_store_hashes: _,
         // A remaining budget is a report, not a consumption.
         data_fees_remaining: _,
-        storage_changes,
+        storage_deltas,
         emissions,
         nondet_disagreement,
         nondet_results,
@@ -1521,11 +1521,11 @@ fn nested_effect(reported: &genvm_modules_interfaces::ReportedResult) -> Option<
                 message_fee,
                 event,
             },
-        llm_consumption,
+        llm_consumed_gen_wei,
     } = reported;
 
-    if !storage_changes.is_empty() {
-        return Some("storage_changes");
+    if !storage_deltas.is_empty() {
+        return Some("storage_deltas");
     }
     if !emissions.is_empty() {
         return Some("emissions");
@@ -1536,8 +1536,8 @@ fn nested_effect(reported: &genvm_modules_interfaces::ReportedResult) -> Option<
     if !nondet_results.is_empty() {
         return Some("nondet_results");
     }
-    if !llm_consumption.is_zero() {
-        return Some("llm_consumption");
+    if !llm_consumed_gen_wei.is_zero() {
+        return Some("llm_consumed_gen_wei");
     }
 
     for (bucket, name) in [
@@ -1678,23 +1678,23 @@ fn read_manager_host_stream(
                         log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to send run_nested reply");
                     }
                 }
-                Ok(host_fns::Methods::ResolveCallcontractExecutor) => {
+                Ok(host_fns::Methods::ResolveCallContractExecutor) => {
                     // The do-nothing route: a request that did not opt into
                     // `hook_cross_contract_calls` gets this arm instead of the
                     // node's host, and a null reply means "stay in-process".
                     let mut request = [0u8; calldata::ADDRESS_SIZE + 2];
                     if let Err(e) = reader.read_exact(&mut request).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read resolve_callcontract_executor request");
+                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read resolve_call_contract_executor request");
                         return;
                     }
                     let encoded = calldata::encode_obj(&calldata::Value::Null);
                     let mut writer = writer.lock().await;
                     if let Err(e) = writer.write_all(&[host_fns::Errors::Ok as u8]).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to send resolve_callcontract_executor status");
+                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to send resolve_call_contract_executor status");
                         return;
                     }
                     if let Err(e) = write_length_prefixed(&mut *writer, &encoded).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to send resolve_callcontract_executor reply");
+                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to send resolve_call_contract_executor reply");
                         return;
                     }
                 }
@@ -1936,7 +1936,7 @@ fn execution_data_from_request(req: &Request) -> genvm_modules_interfaces::Execu
     method_hosts[host_fns::Methods::ConsumeResult as usize] = 1;
     method_hosts[host_fns::Methods::RunNested as usize] = 1;
     if !req.hook_cross_contract_calls {
-        method_hosts[host_fns::Methods::ResolveCallcontractExecutor as usize] = 1;
+        method_hosts[host_fns::Methods::ResolveCallContractExecutor as usize] = 1;
     }
 
     genvm_modules_interfaces::ExecutionData {
@@ -2157,7 +2157,7 @@ impl Ctx {
             max_execution_minutes: parent_req.max_execution_minutes,
             bucket_totals: Vec::new(),
             host_data: parent_req.host_data.clone(),
-            timestamp: envelope.message.datetime,
+            timestamp: envelope.message.transaction_timestamp,
             host: parent_req.host.clone(),
             extra_args: Vec::new(),
             calldata: envelope.calldata.clone(),
@@ -2434,7 +2434,7 @@ async fn run_genvm_process(
     let mut proc = build_genvm_command(command_path, &req, genvm_id, &write_fd);
 
     // Setup manager host socketpair (host id=1 for consume_result, run_nested
-    // and -- unless the request hooks them -- resolve_callcontract_executor)
+    // and -- unless the request hooks them -- resolve_call_contract_executor)
     let (manager_parent, manager_child) = FdWrapper::socketpair()?;
     manager_parent.set_cloexec(true)?;
     manager_child.set_cloexec(false)?;

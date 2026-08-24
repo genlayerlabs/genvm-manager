@@ -128,7 +128,7 @@ class Message(typing.TypedDict):
 	chain_id: int
 	value: typing.NotRequired[int]
 	is_init: bool
-	datetime: typing.NotRequired[str]
+	transaction_timestamp: typing.NotRequired[str]
 
 
 class FingerprintFrame(typing.TypedDict):
@@ -141,8 +141,8 @@ class ResultFingerprint(typing.TypedDict):
 	module_instances: dict[str, typing.Any]
 
 
-class EthSendInner(typing.TypedDict):
-	type: typing.Literal['EthSend']
+class ExternalMessageInner(typing.TypedDict):
+	type: typing.Literal['ExternalMessage']
 	address: Address
 	calldata: bytes
 	value: int
@@ -151,12 +151,12 @@ class EthSendInner(typing.TypedDict):
 	fee_params: fees.ExternalMessageParams
 
 
-class PostMessageInner(typing.TypedDict):
-	type: typing.Literal['PostMessage']
+class InternalMessageInner(typing.TypedDict):
+	type: typing.Literal['InternalMessage']
 	address: Address
 	calldata: gvm_calldata.Decoded
 	value: int
-	on: typing.Literal['finalized', 'accepted']
+	on: typing.Literal['finalized', 'decided']
 	message_fee: int
 	receipt_fee: int
 	fee_params: fees.InternalMessageParams
@@ -166,12 +166,12 @@ class PostMessageInner(typing.TypedDict):
 	use_balance: bool
 
 
-class DeployContractInner(typing.TypedDict):
-	type: typing.Literal['DeployContract']
+class InternalDeployMessageInner(typing.TypedDict):
+	type: typing.Literal['InternalDeployMessage']
 	calldata: gvm_calldata.Decoded
 	code: bytes
 	value: int
-	on: typing.Literal['finalized', 'accepted']
+	on: typing.Literal['finalized', 'decided']
 	salt_nonce: int
 	message_fee: int
 	receipt_fee: int
@@ -182,18 +182,18 @@ class DeployContractInner(typing.TypedDict):
 	use_balance: bool
 
 
-class EmitEventInner(typing.TypedDict):
-	type: typing.Literal['EmitEvent']
+class EventInner(typing.TypedDict):
+	type: typing.Literal['Event']
 	topics: list[bytes]
 	blob: dict[str, gvm_calldata.Decoded]
 	storage_fee: int
 
 
 type ResultEmission = typing.Union[
-	EthSendInner,
-	PostMessageInner,
-	DeployContractInner,
-	EmitEventInner,
+	ExternalMessageInner,
+	InternalMessageInner,
+	InternalDeployMessageInner,
+	EventInner,
 ]
 
 
@@ -204,31 +204,31 @@ class IHost(metaclass=abc.ABCMeta):
 	@abc.abstractmethod
 	async def storage_read(
 		self,
-		mode: public_abi.StorageType,
-		account: bytes,
+		mode: public_abi.StorageView,
+		address: bytes,
 		slot: bytes,
-		index: int,
+		offset: int,
 		le: int,
 		/,
 	) -> bytes: ...
 
-	async def resolve_callcontract_executor(
+	async def resolve_call_contract_executor(
 		self,
 		contract_address: Address,
-		state_mode: public_abi.StorageType,
+		state_mode: public_abi.StorageView,
 		advisory_major: int,
 		/,
 	) -> bytes | None:
 		return None
 
 	@abc.abstractmethod
-	async def consume_gas(self, gas: int, /) -> None: ...
+	async def consume_time_fee_gen_wei(self, time_fee_gen_wei: int, /) -> None: ...
 	@abc.abstractmethod
-	async def eth_call(self, account: bytes, calldata: bytes, /) -> bytes: ...
+	async def external_call(self, address: bytes, calldata: bytes, /) -> bytes: ...
 	@abc.abstractmethod
-	async def get_balance(self, account: bytes, /) -> int: ...
+	async def get_balance_gen_wei(self, address: bytes, /) -> int: ...
 	@abc.abstractmethod
-	async def remaining_fuel_as_gen(self, /) -> int: ...
+	async def get_remaining_time_fee_gen_wei(self, /) -> int: ...
 	@abc.abstractmethod
 	async def notify_nondet_disagreement(self, call_no: int, /) -> None: ...
 
@@ -249,7 +249,7 @@ async def read_contract_major(handler: IHost, message: Message) -> int:
 	if message.get('is_init', False):
 		return UNDEPLOYED_MAJOR
 	octet = await handler.storage_read(
-		public_abi.StorageType.LATEST_NON_FINAL,
+		public_abi.StorageView.LATEST_DECIDED,
 		message['contract_address'].as_bytes,
 		ZERO_SLOT,
 		ROOT_OFFSET_MAJOR,
@@ -401,26 +401,26 @@ async def host_loop_on(
 		match meth_id:
 			case host_fns.Methods.STORAGE_READ:
 				mode = await read_exact(1)
-				mode = public_abi.StorageType(mode[0])
-				account = await read_exact(ACCOUNT_ADDR_SIZE)
+				mode = public_abi.StorageView(mode[0])
+				address = await read_exact(ACCOUNT_ADDR_SIZE)
 				slot = await read_exact(SLOT_ID_SIZE)
-				index = await recv_int()
+				offset = await recv_int()
 				le = await recv_int()
 				try:
-					res = await handler.storage_read(mode, account, slot, index, le)
+					res = await handler.storage_read(mode, address, slot, offset, le)
 					assert len(res) == le
 				except HostException as e:
 					await send_all(bytes([e.error_code]))
 				else:
 					await send_all(bytes([host_fns.Errors.OK]))
 					await send_all(res)
-			case host_fns.Methods.RESOLVE_CALLCONTRACT_EXECUTOR:
+			case host_fns.Methods.RESOLVE_CALL_CONTRACT_EXECUTOR:
 				contract_address = Address(await read_exact(ACCOUNT_ADDR_SIZE))
-				state_mode = public_abi.StorageType((await read_exact(1))[0])
+				state_mode = public_abi.StorageView((await read_exact(1))[0])
 				advisory_major = await recv_int(1)
 
 				try:
-					res = await handler.resolve_callcontract_executor(
+					res = await handler.resolve_call_contract_executor(
 						contract_address,
 						state_mode,
 						advisory_major,
@@ -436,39 +436,41 @@ async def host_loop_on(
 				raise Exception(
 					'CONSUME_RESULT is not supported in this host loop implementation, use manager provided one'
 				)
-			case host_fns.Methods.CONSUME_FUEL:
-				gas = await recv_int(32)
-				await handler.consume_gas(gas)
-			case host_fns.Methods.ETH_CALL:
-				account = await read_exact(ACCOUNT_ADDR_SIZE)
+			case host_fns.Methods.CONSUME_TIME_FEE_GEN_WEI:
+				time_fee_gen_wei = await recv_int(32)
+				await handler.consume_time_fee_gen_wei(time_fee_gen_wei)
+			case host_fns.Methods.EXTERNAL_CALL:
+				address = await read_exact(ACCOUNT_ADDR_SIZE)
 				calldata_len = await recv_int()
 				calldata = await read_exact(calldata_len)
 
 				try:
-					res = await handler.eth_call(account, calldata)
+					res = await handler.external_call(address, calldata)
 				except HostException as e:
 					await send_all(bytes([e.error_code]))
 				else:
 					await send_all(bytes([host_fns.Errors.OK]))
 					await send_int(len(res))
 					await send_all(res)
-			case host_fns.Methods.GET_BALANCE:
-				account = await read_exact(ACCOUNT_ADDR_SIZE)
+			case host_fns.Methods.GET_BALANCE_GEN_WEI:
+				address = await read_exact(ACCOUNT_ADDR_SIZE)
 				try:
-					res = await handler.get_balance(account)
+					res = await handler.get_balance_gen_wei(address)
 				except HostException as e:
 					await send_all(bytes([e.error_code]))
 				else:
 					await send_all(bytes([host_fns.Errors.OK]))
 					await send_all(res.to_bytes(32, byteorder='little', signed=False))
-			case host_fns.Methods.REMAINING_FUEL_AS_GEN:
+			case host_fns.Methods.GET_REMAINING_TIME_FEE_GEN_WEI:
 				try:
-					res = await handler.remaining_fuel_as_gen()
+					time_fee_gen_wei = await handler.get_remaining_time_fee_gen_wei()
 				except HostException as e:
 					await send_all(bytes([e.error_code]))
 				else:
 					await send_all(bytes([host_fns.Errors.OK]))
-					await send_all(res.to_bytes(32, byteorder='little', signed=False))
+					await send_all(
+						time_fee_gen_wei.to_bytes(32, byteorder='little', signed=False)
+					)
 			case host_fns.Methods.NOTIFY_NONDET_DISAGREEMENT:
 				call_no = await recv_int()
 				await handler.notify_nondet_disagreement(call_no)
@@ -498,7 +500,7 @@ class ConsumedResult:
 	result_kind: host_fns.ResultCode
 	result_data: gvm_calldata.Decoded
 	result_fingerprint: ResultFingerprint | None = None
-	result_storage_changes: list[tuple[bytes, bytes]] = field(default_factory=list)
+	result_storage_deltas: list[tuple[bytes, bytes]] = field(default_factory=list)
 	result_emissions: list[ResultEmission] = field(default_factory=list)
 	result_nondet_results: list[bytes] = field(default_factory=list)
 	data_fees_remaining: list[int] = field(default_factory=list)
@@ -547,7 +549,7 @@ class ConsumedResult:
 			result_kind=result_kind,
 			result_data=decoded.get('data'),
 			result_fingerprint=decoded.get('fingerprint'),
-			result_storage_changes=decoded.get('storage_changes', []),
+			result_storage_deltas=decoded.get('storage_deltas', []),
 			result_emissions=decoded.get('emissions', []),
 			result_nondet_results=decoded.get('nondet_results', []),
 			data_fees_remaining=decoded.get('data_fees_remaining', []),
@@ -567,7 +569,7 @@ class RunHostAndProgramRes:
 	result_kind: host_fns.ResultCode
 	result_data: gvm_calldata.Decoded
 	result_fingerprint: ResultFingerprint | None
-	result_storage_changes: list[tuple[bytes, bytes]]
+	result_storage_deltas: list[tuple[bytes, bytes]]
 	result_emissions: list[ResultEmission]
 	result_nondet_results: list[bytes]
 	data_fees_remaining: list[int]
@@ -1190,7 +1192,7 @@ async def run_genvm(
 		max_exec_mins = 20
 		if timeout is not None:
 			max_exec_mins = int(max(max_exec_mins, (timeout * 1.5 + 59) // 60))
-		timestamp = message.get('datetime', '2024-11-26T06:42:42.424242Z')
+		timestamp = message.get('transaction_timestamp', '2024-11-26T06:42:42.424242Z')
 		deadline = _duration_string(timeout)
 		host_genvm_id = typing.cast(str | None, request_extra.get('host_genvm_id'))
 		if host_genvm_id is None:
@@ -1379,7 +1381,7 @@ async def run_genvm(
 			result_kind=consumed.result_kind,
 			result_data=consumed.result_data,
 			result_fingerprint=consumed.result_fingerprint,
-			result_storage_changes=consumed.result_storage_changes,
+			result_storage_deltas=consumed.result_storage_deltas,
 			result_emissions=consumed.result_emissions,
 			result_nondet_results=consumed.result_nondet_results,
 			data_fees_remaining=consumed.data_fees_remaining,

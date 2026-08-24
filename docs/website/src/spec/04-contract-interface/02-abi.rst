@@ -60,7 +60,7 @@ and :ref:`gvm-def-gl-call-call-contract`.
 Call Key
 --------
 
-Every emitted message (see :ref:`gvm-def-post-message`) carries a ``call_key``:
+Every emitted message (see :ref:`gvm-def-emit-internal-message`) carries a ``call_key``:
 a 256-bit unsigned integer that identifies which method the message targets.
 It serves the same role as a function selector in EVM, but is derived
 differently and is not truncated.

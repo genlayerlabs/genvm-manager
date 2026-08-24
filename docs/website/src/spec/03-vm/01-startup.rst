@@ -43,7 +43,8 @@ runner loads. A payload that violates the convention produces the
 :ref:`gvm-def-str-trie-value-vm-error-malformed-entry` as the execution
 result, like any other failure at this point.
 
-Messages emitted by :ref:`gvm-def-post-message` and ``DeployContract`` are
+Messages emitted by :ref:`gvm-def-emit-internal-message` and
+``EmitInternalDeployMessage`` are
 executed later as top-level entries, so they are validated here too.
 
 .. _gvm-vm-startup-message:
@@ -139,7 +140,7 @@ Initial Entry
   the contract's root slot.
 - :ref:`gvm_vm_field_state_mode` is the default storage view.
 - :ref:`gvm_vm_field_topmost_runner_id` is the deployment runner or the
-  contract's accepted code runner.
+  contract's decided code runner.
 - :ref:`gvm_vm_field_det_subvm_hashes` and
   :ref:`gvm_vm_field_granted_custom` are empty.
 
@@ -160,7 +161,7 @@ The child is read-only.
   keeps the parent's value (the plain copy rule), so by default the callee
   observes a view at least as recent as its caller's. Because the child
   cannot write, its :ref:`gvm-def-enum-value-storage-type-default` view is
-  the accepted state: it never includes the calling transaction's uncommitted
+  the decided state: it never includes the calling transaction's uncommitted
   writes (see :ref:`contract-execution-flow`).
 - :ref:`gvm_vm_field_topmost_runner_id` is the callee's contract runner.
 - :ref:`gvm_vm_field_granted_custom` is the caller's entire loaded
@@ -195,8 +196,6 @@ inherited permission, never add one.
   - :ref:`gvm-perm-use-balance-for-message-fees` is cleared unless *param*
     ``allow_send_messages`` is set: balance-funded fees only affect message
     emission, so they are gated by the same flag
-  - :ref:`gvm-perm-register-runners` is cleared unless *param*
-    ``allow_register_runners`` is set
 
 - :ref:`gvm_vm_field_topmost_runner_id` is the *param* ``runner``, resolved in
   the caller's scope.

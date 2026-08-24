@@ -103,7 +103,7 @@ Request payload: the same logical structure as the deprecated
   (currently index 1, the ``consume_result`` socketpair).
 - ``hook_cross_contract_calls`` (bool, optional, default ``false``) -- whether
   this host wants to be asked where a ``CallContract`` runs. When false the
-  manager answers ``resolve_callcontract_executor`` itself with a null reply,
+  manager answers ``resolve_call_contract_executor`` itself with a null reply,
   so every call stays in-process and the host need not implement that method.
   When true the question is routed to host 0 and the host may send the caller
   across a major boundary (see :doc:`host-loop`). A nested run inherits the

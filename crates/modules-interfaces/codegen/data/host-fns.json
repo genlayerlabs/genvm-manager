@@ -5,13 +5,13 @@
     "name": "methods",
     "values": {
       "storage_read": 0,
-      "consume_fuel": 1,
-      "eth_call": 2,
-      "get_balance": 3,
-      "remaining_fuel_as_gen": 4,
+      "consume_time_fee_gen_wei": 1,
+      "external_call": 2,
+      "get_balance_gen_wei": 3,
+      "get_remaining_time_fee_gen_wei": 4,
       "notify_nondet_disagreement": 5,
       "consume_result": 6,
-      "resolve_callcontract_executor": 7,
+      "resolve_call_contract_executor": 7,
       "run_nested": 8
     }
   },

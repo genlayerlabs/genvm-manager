@@ -11,7 +11,7 @@ runs its own cases against its own built executor, via `build/info.json`
 
 A step may declare `executor_routes: {'<address>': <route>}` to send a
 `CallContract` on that address to another executor line instead of running it
-in-process — the mock host answers `resolve_callcontract_executor` with that
+in-process — the mock host answers `resolve_call_contract_executor` with that
 route, and the manager spawns the nested run. A route is a major (an integer,
 resolved by the manifest's rules) or a version string naming the line outright,
 `re:`-prefixed to match manifest keys rather than name a directory. Prefer a

@@ -17,13 +17,13 @@ use serde::{Deserialize, Serialize};
 #[repr(u8)]
 pub enum Methods {
     StorageRead = 0,
-    ConsumeFuel = 1,
-    EthCall = 2,
-    GetBalance = 3,
-    RemainingFuelAsGen = 4,
+    ConsumeTimeFeeGenWei = 1,
+    ExternalCall = 2,
+    GetBalanceGenWei = 3,
+    GetRemainingTimeFeeGenWei = 4,
     NotifyNondetDisagreement = 5,
     ConsumeResult = 6,
-    ResolveCallcontractExecutor = 7,
+    ResolveCallContractExecutor = 7,
     RunNested = 8,
 }
 
@@ -32,26 +32,26 @@ impl Methods {
     pub fn value(self) -> u8 {
         match self {
             Methods::StorageRead => 0,
-            Methods::ConsumeFuel => 1,
-            Methods::EthCall => 2,
-            Methods::GetBalance => 3,
-            Methods::RemainingFuelAsGen => 4,
+            Methods::ConsumeTimeFeeGenWei => 1,
+            Methods::ExternalCall => 2,
+            Methods::GetBalanceGenWei => 3,
+            Methods::GetRemainingTimeFeeGenWei => 4,
             Methods::NotifyNondetDisagreement => 5,
             Methods::ConsumeResult => 6,
-            Methods::ResolveCallcontractExecutor => 7,
+            Methods::ResolveCallContractExecutor => 7,
             Methods::RunNested => 8,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
         match self {
             Methods::StorageRead => "storage_read",
-            Methods::ConsumeFuel => "consume_fuel",
-            Methods::EthCall => "eth_call",
-            Methods::GetBalance => "get_balance",
-            Methods::RemainingFuelAsGen => "remaining_fuel_as_gen",
+            Methods::ConsumeTimeFeeGenWei => "consume_time_fee_gen_wei",
+            Methods::ExternalCall => "external_call",
+            Methods::GetBalanceGenWei => "get_balance_gen_wei",
+            Methods::GetRemainingTimeFeeGenWei => "get_remaining_time_fee_gen_wei",
             Methods::NotifyNondetDisagreement => "notify_nondet_disagreement",
             Methods::ConsumeResult => "consume_result",
-            Methods::ResolveCallcontractExecutor => "resolve_callcontract_executor",
+            Methods::ResolveCallContractExecutor => "resolve_call_contract_executor",
             Methods::RunNested => "run_nested",
         }
     }
@@ -63,13 +63,13 @@ impl TryFrom<u8> for Methods {
     fn try_from(value: u8) -> Result<Self, ()> {
         match value {
             0 => Ok(Methods::StorageRead),
-            1 => Ok(Methods::ConsumeFuel),
-            2 => Ok(Methods::EthCall),
-            3 => Ok(Methods::GetBalance),
-            4 => Ok(Methods::RemainingFuelAsGen),
+            1 => Ok(Methods::ConsumeTimeFeeGenWei),
+            2 => Ok(Methods::ExternalCall),
+            3 => Ok(Methods::GetBalanceGenWei),
+            4 => Ok(Methods::GetRemainingTimeFeeGenWei),
             5 => Ok(Methods::NotifyNondetDisagreement),
             6 => Ok(Methods::ConsumeResult),
-            7 => Ok(Methods::ResolveCallcontractExecutor),
+            7 => Ok(Methods::ResolveCallContractExecutor),
             8 => Ok(Methods::RunNested),
             _ => Err(()),
         }

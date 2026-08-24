@@ -89,7 +89,7 @@ Represents a user-produced error in utf-8 format.
 
 Only a :ref:`gvm-def-return` carries effects. A topmost run that ends in
 :ref:`gvm-def-user-error` or :ref:`gvm-def-vm-error` reports no
-``storage_changes`` and no ``emissions``, whatever it wrote or emitted before
+``storage_deltas`` and no ``emissions``, whatever it wrote or emitted before
 failing, and its :ref:`gvm-def-execution-hash` covers those empty fields.
 
 .. _gvm-def-internal-error:
@@ -178,7 +178,7 @@ with the following keys (in this order):
 #. ``data_fees_remaining``
 #. ``emissions`` — emitted messages and events, in emission order
 #. ``kind`` — the :ref:`gvm-def-vm-result` result code
-#. ``storage_changes``
+#. ``storage_deltas``
 #. ``subvm_hashes`` — see :ref:`gvm-def-subvm-hash`
 #. ``wasm_store_hashes``
 

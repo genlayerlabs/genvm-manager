@@ -611,7 +611,6 @@ def cargo_fuzz(
 			out_dir=out_dir,
 			launcher=['cargo-afl', 'afl', 'fuzz'],
 			target=[fuzz_binary],
-			extra_args=['-t', '5000'],
 			status_command=['cargo-afl', 'afl', 'whatsup', '-s', out_dir],
 			# A persistent-mode target expects a forkserver, so replaying an input
 			# means going through AFL rather than piping it into the binary. The

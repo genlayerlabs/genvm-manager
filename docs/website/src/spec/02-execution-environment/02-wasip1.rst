@@ -181,36 +181,47 @@ File Metadata
 
 The :ref:`gvm-def-vfs` stores no metadata, so every ``Filestat`` reports
 ``dev``, ``ino``, ``atim``, ``mtim`` and ``ctim`` as ``0``; ``size`` is the
-file's length in octets and ``0`` for a directory. Timestamps are **not**
-derived from the transaction timestamp — a file has no modification time at
-all.
+file's length in octets and ``0`` for a directory, and ``nlink`` is ``1``.
+Timestamps are **not** derived from the transaction timestamp — a file has no
+modification time at all.
+
+Operations represented in a target type's supported base mask require the
+corresponding right on a descriptor returned by ``path_open`` and fail with
+``Notcapable`` when it is absent. Supported masks are defined by
+:ref:`gvm-def-wasi-descriptor-rights`.
 
 ``path_open`` Function
 ~~~~~~~~~~~~~~~~~~~~~~
 
 #. The path is resolved as in `Path Resolution`_.
-#. ``oflags``, ``fs_rights_base``, ``fs_rights_inheriting`` and ``fdflags`` are
-   ignored. The :ref:`gvm-def-vfs` is read-only, so ``creat``, ``excl`` and
+#. The directory descriptor requires the ``path_open`` base right, otherwise
+   the call fails with ``Notcapable``.
+#. If ``oflags::directory`` targets a regular file, the call fails with
+   ``Notdir``. The :ref:`gvm-def-vfs` is read-only, so ``creat``, ``excl`` and
    ``trunc`` never take effect — opening a non-existent path fails with
-   ``Noent`` rather than creating it — and ``directory`` does not restrict the
-   result.
+   ``Noent`` rather than creating it. ``fdflags`` are ignored.
+#. The new descriptor's base and inheriting rights are limited by the
+   corresponding requested rights and the parent descriptor's inheriting
+   rights. Unsupported target-type rights are then removed as defined in
+   :ref:`gvm-def-wasi-descriptor-rights`.
 #. On success a fresh descriptor is allocated (see
    :ref:`gvm-def-fd-allocation`) that refers to the resolved file or directory.
    A file descriptor starts at offset ``0``.
-#. The descriptor is released again if the call fails, so a failed open leaks
-   neither a descriptor nor its :ref:`gvm-def-ram-consumption`.
+#. A failed call allocates no descriptor and consumes no descriptor
+   :ref:`gvm-def-ram-consumption`.
 
 ``path_filestat_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Resolves the path as in `Path Resolution`_ and returns the ``Filestat``
 described in `File Metadata`_ with ``filetype`` ``regular_file`` or
-``directory`` and ``nlink`` ``0``.
+``directory``.
 
 ``fd_readdir`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-A descriptor that is not a directory fails with ``Badf``.
+After the rights check, a descriptor that is not a directory fails with
+``Badf``.
 
 The entry sequence of a directory is fixed and does not depend on how the
 :ref:`gvm-def-vfs` was populated:
@@ -241,12 +252,12 @@ Returns the descriptor's current offset. ``stdout``/``stderr`` fail with
 ``fd_datasync`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
-Does nothing and always returns success.
+Does nothing and returns success after the rights check.
 
 ``fd_sync`` Function
 ~~~~~~~~~~~~~~~~~~~~
 
-Does nothing and always returns success.
+Does nothing and returns success after the rights check.
 
 ``fd_seek`` Function
 ~~~~~~~~~~~~~~~~~~~~
@@ -262,27 +273,29 @@ Moves a file descriptor's offset and returns the new value.
 ``fd_prestat_dir_name`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Writes the preopened directory's name — the last component of its path, or ``/``
-for the root. ``fd_prestat_get`` returns the ``Prestat`` whose ``pr_name_len``
-determines the name's length. A buffer shorter than that name fails with
-``Overflow``; any non-directory descriptor fails with ``Badf``.
+The only preopened directory is the VFS root. This function writes its
+guest-visible name, ``/``. ``fd_prestat_get`` returns the ``Prestat`` whose
+``pr_name_len`` is therefore ``1``. A buffer shorter than that fails with
+``Overflow``; every descriptor other than the root preopen, including a
+directory returned by ``path_open``, fails with ``Badf``.
 
 ``fd_prestat_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-#. If the descriptor refers to a preopened directory, returns its ``Prestat``
-   (a ``Dir`` whose ``pr_name_len`` is the length of the directory's last path
-   component). This is required for libc preopen discovery.
+#. For the root preopen, returns a ``Dir`` whose ``pr_name_len`` is ``1``, the
+   length of its guest-visible name ``/``. This is required for libc preopen
+   discovery.
 #. For any other descriptor (``stdin``/``stdout``/``stderr``, a regular file, or a
-   non-existent descriptor) returns ``Badf``.
+   directory returned by ``path_open``, or a non-existent descriptor) returns
+   ``Badf``.
 
 ``fd_write`` Function
 ~~~~~~~~~~~~~~~~~~~~~
 
-Only ``stdout`` and ``stderr`` are writable; a file or directory descriptor
-fails with ``Rofs``. The written octets are diagnostic output: they are not part
-of the :ref:`gvm-def-vm-result` and are not covered by the
-:ref:`gvm-def-execution-hash`.
+After the rights check, only ``stdout`` and ``stderr`` are writable; a file or
+directory descriptor fails with ``Rofs``. The written octets are diagnostic
+output: they are not part of the :ref:`gvm-def-vm-result` and are not covered
+by the :ref:`gvm-def-execution-hash`.
 
 The call reports every supplied octet as written and never fails on the
 underlying stream, so a contract cannot observe whether the :term:`Host`
@@ -312,18 +325,24 @@ Returns the ``Filestat`` described in `File Metadata`_ with ``nlink`` ``1`` and
 - ``directory`` for a directory descriptor
 - ``character_device`` for ``stdout``/``stderr``
 
+.. _gvm-def-wasi-descriptor-rights:
+
 ``fd_fdstat_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 ``fs_flags`` is always empty — no descriptor is appending, non-blocking or
-synchronous — and ``fs_rights_inheriting`` always equals ``fs_rights_base``.
-The rights are fixed per descriptor kind and never include a mutating right:
+synchronous. The maximum read-only rights are:
 
-- a file descriptor: ``regular_file`` with the read, seek, tell, advise, sync,
-  datasync, readdir, readlink, ``path_open`` and filestat-get rights
-- a directory descriptor: ``directory`` with the read, ``path_open``, readdir,
-  readlink and filestat-get rights
-- ``stdout``/``stderr``: ``unknown`` filetype with the write right only
+- A regular-file descriptor has the read, seek, tell, advise, sync, datasync
+  and fd-filestat-get base rights, and no inheriting rights
+- A directory descriptor has the ``path_open``, readdir, path-filestat-get and
+  fd-filestat-get base rights; its supported inheriting rights are the union of
+  the regular-file and directory base rights
+- ``stdout``/``stderr`` have ``unknown`` filetype and the write right in both
+  masks
+
+The root preopen receives the full directory masks. For a descriptor returned
+by ``path_open``, both masks are further limited as described in that function.
 
 ``fd_close`` Function
 ~~~~~~~~~~~~~~~~~~~~~
@@ -335,7 +354,7 @@ descriptor fails with ``Badf``.
 ``fd_advise`` Function
 ~~~~~~~~~~~~~~~~~~~~~~
 
-Does nothing and always returns success.
+Does nothing and returns success after the rights check.
 
 ``clock_time_get`` Function
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~

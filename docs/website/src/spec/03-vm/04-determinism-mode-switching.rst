@@ -37,16 +37,14 @@ so the resulting :ref:`gvm-def-vm-result` is simply the call's result.
 Validator Mode
 --------------
 
-The proposed result is accepted or replaced per
-:ref:`gvm-def-proposed-result-validity`, then handed to the :term:`sub-VM` for
-comparison. That :term:`sub-VM` must :ref:`gvm-def-return` a ``bool`` value:
-whether the validator accepts the leader's result. Any other result has the same
-effect as producing ``bool(false)``.
+An accepted proposal is handed to the :term:`sub-VM` for comparison. That
+:term:`sub-VM` must :ref:`gvm-def-return` a ``bool`` value: whether the validator
+accepts the leader's result. Any other result has the same effect as producing
+``bool(false)``
 
-A replaced proposal takes this same path — the derived code is compared like any
-other, so the vote stays contract-controlled and no branch bypasses the
-comparison. The replacement is a pure function of the proposed bytes, so every
-honest validator derives the same value and votes identically.
+A rejected proposal records a disagreement without running the comparison
+stage. The contract cannot vote away bytes that no honest leader could have
+produced
 
 Returns the accepted or replaced result.
 

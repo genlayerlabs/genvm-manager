@@ -5,6 +5,7 @@ import contextlib
 import functools
 import math
 import os
+import re
 import shutil
 import signal
 import tempfile
@@ -41,6 +42,14 @@ FUZZ_ONLY_ENV = (
 	'AFL_NO_FASTRESUME',
 	'AFL_TRY_AFFINITY',
 )
+
+# Ceiling for `-t`, whose auto-scaling stays below it. Chosen against the slowest
+# committed seed rather than against the mean: what it has to survive is one
+# entry of an existing corpus, on a core slower than the one that harvested it
+EXEC_TIMEOUT_MS = 5000
+
+# How AFL reports a seed it refused to fuzz because the target died on it
+SEED_CRASH_RE = re.compile(r"Test case '([^']*)' results in a crash")
 
 
 def register(ctx: genvm_tool.tests.stage.configuration.Context) -> None:
@@ -151,6 +160,25 @@ def environment(base: dict[str, str]) -> dict[str, str]:
 	return env
 
 
+def crashing_seeds(out_dir: Path) -> list[str]:
+	"""
+	Committed inputs an instance found to crash the target while starting up.
+
+	`-t` makes AFL skip a problematic seed instead of aborting, which is what a
+	corpus that only grows needs for a slow entry — but a crashing one is a
+	finding, and skipped it would be reported nowhere. Read back out of the logs
+	rather than prevented, since the two share the one switch.
+	"""
+	found: list[str] = []
+	for log in sorted(out_dir.glob('*.log')):
+		for match in SEED_CRASH_RE.finditer(log.read_text(errors='replace')):
+			name = match.group(1)
+			_, _, original = name.rpartition('orig:')
+			if (original or name) not in found:
+				found.append(original or name)
+	return found
+
+
 def output_dir(
 	shared: genvm_tool.tests.SharedContext, project_dir: Path, name: str
 ) -> Path:
@@ -236,7 +264,6 @@ def fleet_steps(
 	out_dir: Path,
 	launcher: Command,
 	target: Command,
-	extra_args: Command = (),
 	wrap: Wrapper = lambda argv: argv,
 	prepare_command: Command | None = None,
 	status_command: Command | None = None,
@@ -268,6 +295,12 @@ def fleet_steps(
 				# these targets, see the fuzzing explanation page
 				'-c',
 				'-',
+				# A ceiling on the auto-scaled per-exec timeout. AFL's own default
+				# is 1000ms, and a corpus entry above it aborts the whole run
+				# rather than being skipped; python targets run traced and a slow
+				# CI core is enough to cross it
+				'-t',
+				f'{EXEC_TIMEOUT_MS}+',
 				role,
 				instance,
 				'-i',
@@ -276,7 +309,6 @@ def fleet_steps(
 				out_dir,
 				'-V',
 				str(timeout(ctx)),
-				*extra_args,
 				*target,
 			]
 		)
@@ -402,6 +434,9 @@ def fleet_steps(
 
 		crashes = [crash for path in crash_dirs() for crash in saved_findings(path)]
 		context = dict(result.context)
+		bad_seeds = crashing_seeds(out_dir)
+		if bad_seeds:
+			context['crashing_seeds'] = bad_seeds
 		if crashes:
 			context['crashes'] = [str(crash) for crash in crashes]
 			if replay is not None:
@@ -432,7 +467,7 @@ def fleet_steps(
 				context['fleet'] = f'{status_command[0]}: {error}'
 
 		return genvm_tool.tests.test.Result(
-			passed=result.passed and not crashes,
+			passed=result.passed and not crashes and not bad_seeds,
 			context=context,
 			elapsed_seconds=result.elapsed_seconds,
 		)

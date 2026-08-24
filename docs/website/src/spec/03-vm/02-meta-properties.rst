@@ -45,7 +45,7 @@ Internal field containing the permission meta-properties granted to the
 ~~~~~~~~~~~~~~
 
 Internal field selecting the storage view used by reads
-(a :ref:`gvm-def-enum-storage-type`).
+(a :ref:`gvm-def-enum-storage-view`).
 
 .. _gvm_vm_field_topmost_runner_id:
 
@@ -102,8 +102,8 @@ iff it can write storage.
 ``send_messages``
 ~~~~~~~~~~~~~~~~~
 
-Allows sending messages to other addresses. Required by ``EthSend``,
-``PostMessage``, and ``DeployContract``. Requires
+Allows sending messages to other addresses. Required by ``EmitExternalMessage``,
+``EmitInternalMessage``, and ``EmitInternalDeployMessage``. Requires
 :ref:`gvm-perm-deterministic`.
 
 .. _gvm-perm-call-others:
@@ -111,7 +111,7 @@ Allows sending messages to other addresses. Required by ``EthSend``,
 ``call_others``
 ~~~~~~~~~~~~~~~
 
-Allows calling other contracts. Required by ``EthCall`` and
+Allows calling other contracts. Required by ``ExternalCall`` and
 :ref:`gvm-def-gl-call-call-contract`.
 Requires :ref:`gvm-perm-deterministic`.
 
@@ -128,22 +128,14 @@ A :term:`sub-VM` that a host delegated to another executor (see
 caller holds. Such a :term:`sub-VM` has no connection to the non-deterministic
 modules, so the permission cannot be served there.
 
-.. _gvm-perm-register-runners:
-
-``register_runners``
-~~~~~~~~~~~~~~~~~~~~
-
-Allows registering runner archives at runtime via
-:ref:`gvm-def-gl-call-register-runner`. Requires :ref:`gvm-perm-deterministic`.
-
 .. _gvm-perm-use-balance-for-message-fees:
 
 ``can_use_balance_for_message_fees``
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Allows the contract to draw on its own balance to pay fees for outgoing
-internal messages (``PostMessage``, ``DeployContract``). The flag has no effect
-on external ``EthSend`` messages.
+internal messages (``EmitInternalMessage``, ``EmitInternalDeployMessage``). The
+flag has no effect on ``EmitExternalMessage``.
 
 Unlike the meta-properties above, this one is stored as a bit in the root slot's
 inline ``permissions`` bitfield and read before execution begins. The bit offset

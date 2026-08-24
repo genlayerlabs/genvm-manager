@@ -17,11 +17,11 @@ forms (see the ``runner-id`` definition in the runner.json schema):
 - ``<human-readable-id>:<hash>`` — a packaged runner. ``human-readable-id`` is
   provided for convenience; ``hash`` is a hash of its contents (see `Hash Format`_).
 - ``contract`` — the runner of the contract currently being executed.
-- ``chain:<address>[:<a|f>[:<slot>]]`` — a runner code blob read from a storage
-  slot of an arbitrary contract (``a`` = accepted, ``f`` = finalized). ``<address>``
+- ``chain:<address>[:<d|f>[:<slot>]]`` — a runner code blob read from a storage
+  slot of an arbitrary contract (``d`` = decided, ``f`` = finalized). ``<address>``
   is a ``0x`` 20 byte hex address and ``<slot>`` is a :term:`SlotID` encoded with
-  :doc:`../04-contract-interface/06-gvm32`. Both ``<a|f>`` and ``<slot>`` are
-  optional: ``<a|f>`` defaults to ``a`` and ``<slot>`` to the target contract's
+  :doc:`../04-contract-interface/06-gvm32`. Both ``<d|f>`` and ``<slot>`` are
+  optional: ``<d|f>`` defaults to ``d`` and ``<slot>`` to the target contract's
   root code slot.
 - ``custom:<hash>`` — a runner registered at runtime via the ``RegisterRunner``
   ``gl_call``, looked up by its hash.
@@ -41,8 +41,8 @@ A ``chain:`` id is code, but its resolution is an ordinary
    by consensus, not against whatever a node's chain tip happens to be. Every
    validator of the transaction therefore reads the same octets, whichever
    :term:`Host` serves them.
-#. ``f`` (finalized) reads the state at the last finalized block; ``a``
-   (accepted, the default) reads the accepted state — the same view a
+#. ``f`` (finalized) reads the state at the last finalized block; ``d``
+   (decided, the default) reads the decided state — the same view a
    read-only :ref:`gvm-def-gl-call-call-contract` child observes by default
    (see :ref:`contract-execution-flow`). Neither view includes the executing
    transaction's own uncommitted writes, so a contract cannot deploy code and
@@ -110,6 +110,11 @@ Creates a minimal :term:`runner` configuration
     version = v0.1.0
     runner.json = { "StartWasm": "file" }
     file = # source bytes
+
+Both defaults can be overridden by the module itself, through custom sections:
+``genvm.version`` supplies the version string and ``genvm.runner.json`` the
+whole ``runner.json``. This is how a single wasm file declares dependencies
+without being repackaged as a ZIP
 
 3. Text-based
 ~~~~~~~~~~~~~
@@ -320,7 +325,7 @@ Conditionally executes an action based on WebAssembly execution mode.
 Properties
 ^^^^^^^^^^
 
-- ``cond``: WebAssembly mode, either ``det`` (deterministic) or ``nondet`` (non-deterministic)
+- ``cond``: WebAssembly mode, either ``det`` (deterministic) or ``!det`` (non-deterministic)
 - ``action``: Action to execute when condition is met
 
 Example

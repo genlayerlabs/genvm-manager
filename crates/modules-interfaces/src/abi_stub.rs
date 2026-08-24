@@ -15,9 +15,9 @@ pub enum On {
     #[serde(rename = "finalized")]
     #[calldata(rename = "finalized")]
     Finalized,
-    #[serde(rename = "accepted")]
-    #[calldata(rename = "accepted")]
-    Accepted,
+    #[serde(rename = "decided")]
+    #[calldata(rename = "decided")]
+    Decided,
 }
 
 #[derive(
@@ -57,21 +57,21 @@ pub struct MessageData {
     pub value: num_bigint::BigInt,
     pub is_init: bool,
     /// Transaction timestamp
-    #[serde(default = "default_datetime")]
+    #[serde(default = "default_transaction_timestamp")]
     #[calldata(
-        serialize_with = encode_datetime_rfc3339,
-        deserialize_with = decode_datetime_rfc3339
+        serialize_with = encode_transaction_timestamp_rfc3339,
+        deserialize_with = decode_transaction_timestamp_rfc3339
     )]
-    #[calldata(default = default_datetime)]
-    pub datetime: chrono::DateTime<chrono::Utc>,
+    #[calldata(default = default_transaction_timestamp)]
+    pub transaction_timestamp: chrono::DateTime<chrono::Utc>,
 }
 
-fn decode_datetime_rfc3339(
+fn decode_transaction_timestamp_rfc3339(
     val: genlayer_calldata::Value,
 ) -> Result<chrono::DateTime<chrono::Utc>, genlayer_calldata::codec::DecodeError> {
     let genlayer_calldata::Value::Str(s) = val else {
         return Err(genlayer_calldata::codec::DecodeError::Unexpected(
-            "expected string for datetime",
+            "expected string for transaction_timestamp",
         ));
     };
     chrono::DateTime::parse_from_rfc3339(&s)
@@ -79,7 +79,7 @@ fn decode_datetime_rfc3339(
         .map_err(|e| genlayer_calldata::codec::DecodeError::UserError(Box::new(e)))
 }
 
-fn encode_datetime_rfc3339<W: genlayer_calldata::Writer>(
+fn encode_transaction_timestamp_rfc3339<W: genlayer_calldata::Writer>(
     dt: &chrono::DateTime<chrono::Utc>,
     enc: &mut genlayer_calldata::Encoder<W>,
 ) -> Result<(), W::Error> {
@@ -88,7 +88,7 @@ fn encode_datetime_rfc3339<W: genlayer_calldata::Writer>(
     enc.push_str(&s)
 }
 
-fn default_datetime() -> chrono::DateTime<chrono::Utc> {
+fn default_transaction_timestamp() -> chrono::DateTime<chrono::Utc> {
     chrono::DateTime::parse_from_rfc3339("2024-11-26T06:42:42.424242Z")
         .unwrap()
         .to_utc()

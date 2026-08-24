@@ -18,8 +18,9 @@ There are two independent notions of "version" in play:
 Detection from contract bytes
 -----------------------------
 
-``executor/src/runners/parse.rs::detect_version_from_wasm`` walks the WASM custom sections
-and returns the contents of the ``genvm.version`` section as the runner version string.
+``executor/src/runners/parse.rs::describe_wasm`` walks the WASM custom sections in one
+pass and returns the contents of the ``genvm.version`` section as the runner version
+string, alongside the optional ``genvm.runner.json`` section.
 When the contract is not a raw WASM but a zip-packaged archive the version is read from
 the ``version`` file in the archive. For single-file text contracts (Python source) the
 first comment line is inspected: if it starts with ``v`` it is taken as the version
