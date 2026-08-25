@@ -28,7 +28,7 @@ pub struct ExecutionData {
     pub message: super::abi_stub::MessageData,
     pub host_data: String,
     pub code: Option<Bytes>,
-    pub leader_nondet_results: Option<Vec<Bytes>>,
+    pub leader_public_data: Option<Bytes>,
     /// Maps each host method (by index) to a host id. When empty, all methods use host 0.
     pub method_hosts: Vec<u8>,
     /// Raw bytes written to each host connection before the first method byte.
@@ -408,7 +408,7 @@ pub struct ReportedResult {
     pub emissions: Vec<ExecutionEmission>,
 
     pub nondet_disagreement: Option<u32>,
-    pub nondet_results: Vec<bytes::Bytes>,
+    pub leader_public_data: bytes::Bytes,
 
     pub data_fees_remaining: Vec<primitive_types::U256>,
     pub data_fees_consumed: BucketsConsumed,

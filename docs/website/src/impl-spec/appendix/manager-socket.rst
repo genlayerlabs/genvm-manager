@@ -270,8 +270,8 @@ debug manager asserts, while a release manager logs the executor violation and
 rewrites both result-code locations to ``VmError`` before publication. Clients
 therefore never receive a top-level ``FatalVmError``
 
-The manager does not decode entries of the reported ``nondet_results`` vector.
-Those bytes remain opaque, executor-line-specific consensus proposals
+The manager does not decode reported ``leader_public_data``. The bytes remain
+opaque, executor-line-specific consensus proposals
 
 Lifecycle guarantees:
 

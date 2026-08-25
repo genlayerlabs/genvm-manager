@@ -179,7 +179,7 @@ def _run_request(
 			'extra_args': extra_args or [],
 			'code': (root / HELLO_WORLD).read_bytes(),
 			'calldata': gvm_calldata.encode({}),
-			'leader_nondet_results': None,
+			'leader_public_data': None,
 			'bucket_totals': [2**200] * 20,
 			'gas_data': base_host.DEFAULT_GAS_DATA,
 			'message_fee_allocation': [],

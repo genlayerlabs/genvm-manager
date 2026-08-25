@@ -40,6 +40,7 @@ from genvm_tool.tests.exec.command import Command, RunMode
 from gvm_extra.mock_host import MockHost as MockHost
 from gvm_extra.mock_host import MockStorage as MockStorage
 from origin.calldata import Address
+from origin.leader_public_data import LeaderPublicData
 
 if typing.TYPE_CHECKING:
 	import _jsonnet
@@ -73,6 +74,7 @@ def _is_ignore_hash_enabled() -> bool:
 # line's cases dir and reroute target). The harness itself (templates, runner) is
 # version-independent and lives in the manager root.
 TEMPLATES_DIR = local_ctx.shared.root_dir.joinpath('tests', 'templates')
+
 
 # Default environment for tests
 default_env = {
@@ -636,7 +638,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		)
 
 		path_to_which_leader_puts_result = my_tmp_dir.parent.joinpath(
-			my_tmp_dir.name[:-1] + '_leader_nondet.pickle'
+			my_tmp_dir.name[:-1] + '_leader_public_data.bin'
 		)
 
 		# Set up paths
@@ -646,18 +648,18 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 
 		is_leader = single_conf.get('mode') == 'l'
 
-		# Load leader nondet results if available (for v/s modes)
+		# Load leader public data if available (for v/s modes)
 		if is_leader:
-			leader_nondet = None
+			leader_public_data = None
 		else:
-			leader_nondet = single_conf.get('leader_nondet', None)
-			if leader_nondet is None:
-				leader_nondet = pickle.loads(
-					await gvm_io.read_file_bytes(path_to_which_leader_puts_result)
+			leader_nondet_fixture = single_conf.get('leader_nondet', None)
+			if leader_nondet_fixture is None:
+				leader_public_data = await gvm_io.read_file_bytes(
+					path_to_which_leader_puts_result
 				)
-			if leader_nondet is not None:
+			else:
 				encoded_nondet = []
-				for res in leader_nondet:
+				for res in leader_nondet_fixture:
 					if isinstance(res, (bytes, bytearray, memoryview)):
 						encoded_nondet.append(bytes(res))
 					elif res['kind'] == 'return':
@@ -688,7 +690,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						encoded_nondet.append(bytes(res['value']))
 					else:
 						raise ValueError(f'unknown leader_nondet kind: {res["kind"]}')
-				leader_nondet = encoded_nondet
+				leader_public_data = LeaderPublicData(encoded_nondet).encode()
 
 		# Create mock host
 		running_address = single_conf['message']['contract_address']
@@ -785,7 +787,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						calldata=calldata_bytes,
 						bucket_totals=bucket_totals,
 						gas_data=single_conf.get('gas_data'),
-						leader_nondet_results=leader_nondet,
+						leader_public_data=leader_public_data,
 						message_fee_allocation=message_fee_allocation,
 						unsafe_overrides=base_host.UnsafeOverrides(
 							reroute_to=single_conf.get('reroute_to', reroute_to)
@@ -852,10 +854,10 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 
 		# Save leader nondet results for v/s modes
 		if is_leader:
-			nondet_list = res.result_nondet_results
+			leader_public_data = res.result_leader_public_data
 
 			await gvm_io.write_file_bytes(
-				path_to_which_leader_puts_result, pickle.dumps(nondet_list)
+				path_to_which_leader_puts_result, leader_public_data
 			)
 
 		# Save outputs

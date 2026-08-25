@@ -247,7 +247,7 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 				'calldata': gvm_calldata.encode({}),
 				'bucket_totals': [2**200] * 20,
 				'no_modules': True,
-				'leader_nondet_results': [],
+				'leader_public_data': b'',
 				'initial_time_units_allocation': 60,
 			}
 		)
@@ -297,7 +297,7 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 			'calldata': gvm_calldata.encode({}),
 			'bucket_totals': [2**200] * 20,
 			'no_modules': True,
-			'leader_nondet_results': [],
+			'leader_public_data': b'',
 			'initial_time_units_allocation': 60,
 			'unsafe_overrides': base_host.UnsafeOverrides(
 				reroute_to=self._reroute_to,

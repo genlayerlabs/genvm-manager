@@ -18,6 +18,7 @@ import origin.calldata as gvm_calldata
 from gvm_extra.mock_host import MockHost, MockStorage
 from origin import host_fns, public_abi
 from origin.calldata import Address
+from origin.leader_public_data import LeaderPublicData
 
 # One directory per line, because a contract is written against its own sdk.
 # Their `@RUNNER_LATEST_...@` tokens stand for the uids of the last build;
@@ -44,6 +45,10 @@ SENDER = Address('0x' + '01' * 20)
 MANAGER_MAX_MESSAGE_BYTES = 1 * 1024 * 1024
 BLOB_BYTES = 2 * 1024 * 1024
 TIMESTAMP = '2024-11-26T06:42:42.424242Z'
+
+
+def _leader_public_data(output: bytes) -> bytes:
+	return LeaderPublicData([output]).encode()
 
 
 def resolve_runners(code: bytes | None, root_dir: Path) -> bytes | None:
@@ -383,7 +388,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		timeout: float = 30,
 		debug_initial_recursion: int | None = None,
 		is_sync: bool = True,
-		leader_nondet_results: list[bytes] | None = None,
+		leader_public_data: bytes | None = None,
 		apply_changes: bool = True,
 		read_log: list[tuple[Address, public_abi.StorageView]] | None = None,
 		host_fuel: int | None = None,
@@ -402,7 +407,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 						manager_client=manager_client,
 						ctx=ctx,
 						is_sync=is_sync,
-						leader_nondet_results=leader_nondet_results,
+						leader_public_data=leader_public_data,
 						message=_message(address, is_init=is_init),
 						host_data='{"node_address":"test","tx_id":"cross-major"}',
 						host='unix://' + mock_host.path,
@@ -514,7 +519,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			'extra_args': [],
 			'code': None,
 			'calldata': _calldata('call', ADDR_BUSY_V02),
-			'leader_nondet_results': None,
+			'leader_public_data': None,
 			'bucket_totals': [2**200] * 20,
 			'gas_data': base_host.DEFAULT_GAS_DATA,
 			'message_fee_allocation': [],
@@ -638,7 +643,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 
 		leader = await one('leader', is_sync=False)
 		validator = await one(
-			'validator', is_sync=False, leader_nondet_results=leader.result_nondet_results
+			'validator', is_sync=False, leader_public_data=leader.result_leader_public_data
 		)
 		sync = await one('sync', is_sync=True)
 		return leader, validator, sync
@@ -659,9 +664,24 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			),
 			apply_changes=False,
 			is_sync=False,
-			leader_nondet_results=[gvm_calldata.encode({})],
+			leader_public_data=_leader_public_data(gvm_calldata.encode({})),
 		)
 		assert bogus.result_kind == host_fns.ResultCode.VM_ERROR, bogus
+
+		for line, address in ((2, ADDR_CALLEE_V02), (3, ADDR_CALLER_V03)):
+			malformed = await self._execute(
+				name=f'malformed-leader-public-data-v0.{line}',
+				line=line,
+				address=address,
+				calldata=gvm_calldata.encode({}),
+				code=None,
+				is_init=False,
+				apply_changes=False,
+				is_sync=False,
+				leader_public_data=b'\xc0',
+			)
+			assert malformed.result_kind == host_fns.ResultCode.VM_ERROR, malformed
+			assert malformed.result_data == 'leader_fault nondet_output malformed'
 
 	async def _assert_lvs_direction(
 		self,
