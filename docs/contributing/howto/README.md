@@ -3,6 +3,7 @@
 - [setup.md](setup.md) — first-time clone: submodules, vendored trees, nix/direnv dev shell
 - [genvm-tool.md](genvm-tool.md) — the umbrella tool: man page, test and git subcommands, codegen
 - [pr.md](pr.md) — branch model, PR action panel, `ci-safe` / `run-full-tests`, merge gates
+- [review-ready.md](review-ready.md) — the checks a change must pass before it is put up for review
 
 ## building/
 - [build.md](building/build.md) — debug build: configure + ninja, targets, outputs, cargo quirks
@@ -35,3 +36,4 @@
 - [modify-runner.md](extending/modify-runner.md) — runner dev-mode and hash refresh
 - [modify-wasmtime.md](extending/modify-wasmtime.md) — patching vendored wasmtime, trap plumbing
 - [write-a-script.md](extending/write-a-script.md) — conventions for helper scripts and pre-commit hooks
+- [add-a-skill.md](extending/add-a-skill.md) — agent skills in `.agents/`, the frontmatter trigger, the symlink, skill vs how-to

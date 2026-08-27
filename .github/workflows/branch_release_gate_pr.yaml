@@ -1,0 +1,67 @@
+name: branch / open release-gate PR
+
+# On each push to v<X>-dev, ensure its standing PR into v<X> exists. Unlike
+# provision-branches, derive the pair from the pushed ref, covering manual dev
+# branches. Skip a missing base, no commits ahead or an existing PR. GITHUB_TOKEN
+# does not trigger `pull_request` workflows; close and reopen if checks must run before a push
+
+on:
+  push:
+    branches: ['v*-dev']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+# Serialize the non-atomic existence check and creation per dev branch
+concurrency:
+  group: release-gate-pr-${{ github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history for comparing the remote branches
+          fetch-depth: 0
+
+      - name: Open release-gate PR if missing
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEV="${GITHUB_REF_NAME}"
+          BASE="${DEV%-dev}"
+
+          git fetch origin --prune
+
+          if ! git show-ref --verify --quiet "refs/remotes/origin/${BASE}"; then
+            echo "Base branch ${BASE} does not exist; nothing to do"
+            exit 0
+          fi
+
+          # Same tip or behind base: there is nothing to merge
+          AHEAD="$(git rev-list --count "origin/${BASE}..origin/${DEV}")"
+          if [ "$AHEAD" -eq 0 ]; then
+            echo "${DEV} has no commits beyond ${BASE}; nothing to do"
+            exit 0
+          fi
+
+          EXISTING="$(gh pr list --repo "$GITHUB_REPOSITORY" --base "$BASE" --head "$DEV" --state open --json number --jq '.[0].number // ""')"
+          if [ -n "$EXISTING" ]; then
+            echo "Release-gate PR ${DEV} -> ${BASE} already open (#${EXISTING})"
+            exit 0
+          fi
+
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base "$BASE" \
+            --head "$DEV" \
+            --title "chore(release): gate ${DEV} into ${BASE} 🚀" \
+            --body "Standing release-gate PR. \`${DEV}\` accumulates incremental work; it merges into the release-ready \`${BASE}\` branch only once the cross-repo E2E pipeline is green. It may stay red while the train is in progress."

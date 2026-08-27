@@ -44,6 +44,14 @@ Each repo gains one commit per PR. Executor lines are always squashed onto
 `<line>-dev`, so the manager commit is rewritten to gitlink the new commit. A
 manager PR that is a single commit and rewrites no gitlink keeps its sha
 
+## Authority
+
+Needs a maintainer: merging, `--admin`, cross-repo E2E runs, and anything
+irreversible outside the PR — releases, deploys, messages to other teams. Never
+force-push a shared branch (`v<X>.x`, `v<X>-dev`); branch protection refuses it
+anyway. Force-pushing your own PR branch is routine and needs no one, and so
+does fixing a defect you find in your own diff
+
 ## Troubleshooting
 
 | Symptom | Fix |

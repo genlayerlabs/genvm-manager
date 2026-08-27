@@ -11,6 +11,7 @@ a task has a how-to, a design question has an explanation
 ## Howto
 - [genvm-tool.md](docs/contributing/howto/genvm-tool.md) — the umbrella tool: man page, test and git subcommands, codegen
 - [pr.md](docs/contributing/howto/pr.md) — branch model, PR action panel, `ci-safe` / `run-full-tests`, merge gates
+- [review-ready.md](docs/contributing/howto/review-ready.md) — the checks a change must pass before it is put up for review
 - [setup.md](docs/contributing/howto/setup.md) — first-time clone: submodules, vendored trees, nix/direnv dev shell
 
 ## Howto/Building
@@ -27,6 +28,7 @@ a task has a how-to, a design question has an explanation
 - [style.md](docs/contributing/howto/docs/style.md) — prose conventions for guides, specs, ADRs and commit bodies
 
 ## Howto/Extending
+- [add-a-skill.md](docs/contributing/howto/extending/add-a-skill.md) — agent skills in `.agents/`, the frontmatter trigger, the symlink, skill vs how-to
 - [add-host-function.md](docs/contributing/howto/extending/add-host-function.md) — new executor↔host protocol method
 - [add-llm-provider.md](docs/contributing/howto/extending/add-llm-provider.md) — new LLM backend in the manager
 - [add-wasi-function.md](docs/contributing/howto/extending/add-wasi-function.md) — new gl_call method or raw WASI function
@@ -40,7 +42,7 @@ a task has a how-to, a design question has an explanation
 
 ## Howto/Testing
 - [README.md](docs/contributing/howto/testing/README.md) — `genvm-tool test`: filters, presets, continue files
-- [fuzzing.md](docs/contributing/howto/testing/fuzzing.md) — AFL fuzz targets, host sysctl prep
+- [fuzzing.md](docs/contributing/howto/testing/fuzzing.md) — AFL fuzz targets, seeding a corpus from a run, host sysctl prep
 - [integration.md](docs/contributing/howto/testing/integration.md) — jsonnet cases, tags, golden `.stdout`/`.hash` files, services
 - [python.md](docs/contributing/howto/testing/python.md) — Python tests, direct pytest for genlayer-py-std
 - [rust.md](docs/contributing/howto/testing/rust.md) — Rust tests: where they go, how to run them, coverage

@@ -122,7 +122,9 @@ class ProvisionBranches(ci_lib.Tool):
 				'--head',
 				dev_branch,
 				'--title',
-				f'Release gate: {dev_branch} -> {version_branch}',
+				# A conventional-commit subject: the title is what `pr-title` and the
+				# Merge action validate, and it lands verbatim as a squashed subject.
+				f'chore(release): gate {dev_branch} into {version_branch} 🚀',
 				'--body',
 				f'Standing release-gate PR. `{dev_branch}` accumulates incremental v{version} work; this PR merges into the release-ready `{version_branch}` branch only once the cross-repo E2E pipeline is green. Comment `/run-e2e v{version}` to fire it (genlayerlabs/genlayer-e2e). It may stay red while the v{version} train is in progress.',
 			)

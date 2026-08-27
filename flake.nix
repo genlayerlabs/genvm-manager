@@ -349,6 +349,17 @@
                 entry = "${hooks-python}/bin/python3 support/scripts/md-local-links.py";
                 types = [ "markdown" ];
               };
+              # AGENTS.md carries a generated index of docs/contributing/, and
+              # every agent session loads it — a stale copy misroutes work
+              # silently. `--check` also fails when a quadrant README and the
+              # files on disk disagree.
+              check-docs-index = {
+                enable = true;
+                name = "check-docs-index";
+                entry = "${genvm-tool}/bin/genvm-tool docs --check";
+                files = "^(AGENTS\\.md|docs/contributing/.*)$";
+                pass_filenames = false;
+              };
               check-source-text = {
                 enable = true;
                 name = "check-source-text";
