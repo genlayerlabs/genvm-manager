@@ -1,15 +1,18 @@
-import puppeteer, * as pup from 'puppeteer-core';
+import type * as pup from 'puppeteer-core';
 import http from 'http';
 import { Command } from 'commander';
 
 import * as logger from './logging.js';
 import * as chromeBrowser from './browser/chrome.js';
-import * as ssrf from './ssrf.js';
+import {
+	renderPageWithBrowser,
+	statusIsGood,
+	type RenderOptions,
+} from './render.js';
 import {
 	envDurationMs,
 	envInt,
 	envPositiveInt,
-	envSize,
 	formatDurationMs,
 } from './duration.js';
 import {
@@ -18,19 +21,6 @@ import {
 	SemaphoreQueueFull,
 	SemaphoreTimeout,
 } from './semaphore.js';
-
-interface NavigationOptions {
-	waitUntil?: pup.PuppeteerLifeCycleEvent;
-	timeout?: number;
-}
-
-interface RenderOptions {
-	loadTimeout?: number;
-	waitAfterLoaded?: number;
-	waitUntil?: pup.PuppeteerLifeCycleEvent;
-	maxPageHeapMB?: number;
-	maxResponseChars?: number;
-}
 
 const program = new Command();
 program
@@ -42,11 +32,7 @@ program
 
 const options = program.opts();
 
-const STATUS_I_AM_A_TEAPOT = 418;
-const STATUS_INSUFFICIENT_STORAGE = 507;
 const STATUS_SERVICE_UNAVAILABLE = 503;
-
-const DEFAULT_MAX_PAGE_HEAP_MB = envInt('GVM_WEBDRIVER_MAX_PAGE_HEAP_MB', 1024);
 
 // peak_mem ~= MAX_CONCURRENT_RENDERS * (page heap + extracted response) + browser baseline
 //
@@ -56,11 +42,6 @@ const MAX_CONCURRENT_RENDERS = envPositiveInt(
 	'GVM_WEBDRIVER_MAX_CONCURRENT_RENDERS',
 	128,
 );
-
-// Counted in characters, which is what bounds the string materialized in this
-// process. One character encodes to at most 4 UTF-8 bytes on the wire, and
-// occupies 2 bytes in V8 for the common (BMP) case.
-const MAX_RESPONSE_CHARS = envSize('GVM_WEBDRIVER_MAX_RESPONSE', '5MiB');
 
 // Waiting callers are cheap but not free: each holds a live connection. Past
 // this depth the service is not going to work through the backlog before
@@ -80,11 +61,6 @@ const renderSlots = new Semaphore({
 	maxQueued: MAX_RENDER_QUEUE,
 });
 
-const MAX_WAIT_AFTER_LOADED_MS = envDurationMs(
-	'GVM_WEBDRIVER_MAX_WAIT_AFTER_LOADED',
-	'60s',
-);
-
 const HEALTHCHECK_CACHE_DURATION_MS = envDurationMs(
 	'GVM_WEBDRIVER_HEALTHCHECK_CACHE_DURATION',
 	'5m',
@@ -93,203 +69,6 @@ let lastSuccessfulRenderTime: number = 0;
 
 function updateLastSuccessfulRenderTime() {
 	lastSuccessfulRenderTime = Date.now();
-}
-
-function normalizeWhitespace(contents: string): string {
-	return contents
-		.split('\n')
-		.map((line) => line.trim().replace(/\s+/g, ' '))
-		.join('\n')
-		.replace(/\n{2,}/g, '\n\n');
-}
-
-function getNavigationErrorStatus(error: any): number {
-	if (error.name === 'TimeoutError') {
-		return 408; // Request Timeout
-	} else if (error.message?.includes('net::ERR_NAME_NOT_RESOLVED')) {
-		return 502; // Bad Gateway
-	} else if (error.message?.includes('net::ERR_CONNECTION_REFUSED')) {
-		return 503; // Service Unavailable
-	} else if (error.message?.includes('net::ERR_CERT_')) {
-		return 495; // SSL Certificate Error
-	} else if (error.message?.includes('net::ERR_INTERNET_DISCONNECTED')) {
-		return 503; // Service Unavailable
-	} else if (error.message?.includes('net::ERR_BLOCKED_BY_CLIENT')) {
-		return 403; // Forbidden (SSRF guard)
-	}
-	return STATUS_I_AM_A_TEAPOT; // Unknown error
-}
-
-function getNavigationErrorMessage(error: any): string {
-	if (error.name === 'TimeoutError') {
-		return 'Navigation timeout';
-	} else if (error.message?.includes('net::ERR_NAME_NOT_RESOLVED')) {
-		return 'DNS resolution failed';
-	} else if (error.message?.includes('net::ERR_CONNECTION_REFUSED')) {
-		return 'Connection refused';
-	} else if (error.message?.includes('net::ERR_CERT_')) {
-		return 'SSL certificate error';
-	} else if (error.message?.includes('net::ERR_INTERNET_DISCONNECTED')) {
-		return 'No internet connection';
-	} else if (error.message?.includes('net::ERR_BLOCKED_BY_CLIENT')) {
-		return 'Blocked by SSRF guard: address not allowed';
-	}
-	return `Navigation error: ${error.message || 'Unknown error'}`;
-}
-
-async function navigateToPage(
-	page: pup.Page,
-	targetUrl: string,
-	options: NavigationOptions = {},
-): Promise<{ status: number; error?: string; response?: pup.HTTPResponse }> {
-	const { waitUntil = 'domcontentloaded', timeout = 30000 } = options;
-
-	try {
-		const response = await page.goto(targetUrl, {
-			waitUntil,
-			timeout,
-		});
-
-		if (!response) {
-			return {
-				status: STATUS_I_AM_A_TEAPOT,
-				error: 'Navigation did not result in a valid HTTP response',
-			};
-		}
-
-		return { status: response.status(), response };
-	} catch (navigationError: any) {
-		logger.log('error', 'navigation Error', navigationError);
-		const statusCode = getNavigationErrorStatus(navigationError);
-		const errorMessage = getNavigationErrorMessage(navigationError);
-		return { status: statusCode, error: errorMessage };
-	}
-}
-
-/**
- * Read `innerText` or `innerHTML`, rejecting oversized documents *in the page*.
- *
- * The size test has to happen on the browser side. Pulling the string across
- * first and measuring it here would already have paid the memory cost we are
- * trying to avoid — this process would hold the whole document no matter what
- * any downstream limit says.
- */
-async function extractBounded(
-	page: pup.Page,
-	kind: 'innerText' | 'innerHTML',
-	maxChars: number,
-): Promise<string> {
-	const extracted = await page.evaluate(
-		(k, limit) => {
-			const raw =
-				k === 'innerText' ? document.body.innerText : document.body.innerHTML;
-			return raw.length > limit
-				? { tooLarge: true as const, length: raw.length }
-				: { tooLarge: false as const, content: raw };
-		},
-		kind,
-		maxChars,
-	);
-
-	if (extracted.tooLarge) {
-		throw new ResponseLimitExceeded(extracted.length, maxChars);
-	}
-	return extracted.content;
-}
-
-async function asText(page: pup.Page, maxChars: number) {
-	return normalizeWhitespace(await extractBounded(page, 'innerText', maxChars));
-}
-
-async function asHTML(page: pup.Page, maxChars: number) {
-	return await extractBounded(page, 'innerHTML', maxChars);
-}
-
-async function asScreenshot(page: pup.Page, maxChars: number) {
-	// Screenshots are viewport-sized rather than full-page, so this is a
-	// backstop rather than a limit anyone should reach.
-	const image = await page.screenshot();
-	if (image.length > maxChars) {
-		throw new ResponseLimitExceeded(image.length, maxChars);
-	}
-	return image;
-}
-
-class HeapLimitExceeded extends Error {
-	constructor(heapMB: number, maxHeapMB: number) {
-		super(`Page JS heap ${heapMB.toFixed(1)}MB exceeds limit ${maxHeapMB}MB`);
-	}
-}
-
-class ResponseLimitExceeded extends Error {
-	constructor(size: number, maxSize: number) {
-		super(`Rendered response ${size} exceeds limit ${maxSize}`);
-	}
-}
-
-const HEAP_CHECK_INTERVAL_MS = envInt(
-	'GVM_WEBDRIVER_HEAP_CHECK_INTERVAL_MS',
-	200,
-);
-
-async function withHeapMonitor<T>(
-	page: pup.Page,
-	maxHeapMB: number,
-	fn: () => Promise<T>,
-): Promise<T> {
-	let stopped = false;
-	let stopResolve: () => void;
-	const stopPromise = new Promise<void>((r) => {
-		stopResolve = r;
-	});
-	const monitor = (async () => {
-		while (!stopped) {
-			await new Promise((r) => setTimeout(r, HEAP_CHECK_INTERVAL_MS));
-			if (stopped) break;
-			let totalMB: number;
-			try {
-				totalMB = await page.evaluate(
-					() => (performance as any).memory?.totalJSHeapSize / 1024 / 1024,
-				);
-			} catch {
-				await stopPromise;
-				return;
-			}
-			logger.log('debug', 'heap monitor check', {
-				heapMB: totalMB.toFixed(1),
-			});
-			if (totalMB > maxHeapMB) {
-				throw new HeapLimitExceeded(totalMB, maxHeapMB);
-			}
-		}
-	})();
-
-	try {
-		const result = await Promise.race([
-			fn(),
-			monitor.then(() => undefined as never),
-		]);
-		let totalMB: number;
-		try {
-			totalMB = await page.evaluate(
-				() => (performance as any).memory?.totalJSHeapSize / 1024 / 1024,
-			);
-		} catch {
-			return result;
-		}
-		if (totalMB > maxHeapMB) {
-			throw new HeapLimitExceeded(totalMB, maxHeapMB);
-		}
-		return result;
-	} finally {
-		stopped = true;
-		stopResolve!();
-		await monitor.catch(() => {});
-	}
-}
-
-function statusIsGood(status: number): boolean {
-	return (status >= 200 && status < 300) || status === 304;
 }
 
 async function renderPage(
@@ -339,120 +118,6 @@ async function renderPage(
 		}
 	} finally {
 		renderSlots.release();
-	}
-}
-
-async function renderPageWithBrowser(
-	browserInstance: pup.Browser,
-	targetUrl: string,
-	mode: 'text' | 'html' | 'screenshot',
-	options: RenderOptions = {},
-): Promise<{ status: number; body: any }> {
-	const {
-		loadTimeout = 30000,
-		waitAfterLoaded = 0,
-		waitUntil = 'domcontentloaded',
-		maxPageHeapMB = DEFAULT_MAX_PAGE_HEAP_MB,
-		maxResponseChars = MAX_RESPONSE_CHARS,
-	} = options;
-
-	// Each render runs in its own browser context so cookies, localStorage,
-	// IndexedDB, service workers and HSTS state never leak between tenants
-	// sharing this long-lived browser.
-	const context = await browserInstance.createBrowserContext();
-
-	// `newPage` fails when the shared browser is under pressure, and the cleanup
-	// below only runs once execution is inside the try. Without this the context
-	// survives for the browser's whole lifetime — and since pressure is exactly
-	// what makes `newPage` fail, the response to it would be to leak more.
-	let page: pup.Page;
-	try {
-		page = await context.newPage();
-	} catch (e) {
-		await context.close().catch(() => {});
-		throw e;
-	}
-
-	try {
-		await ssrf.installSsrfGuard(page);
-		context.on('targetcreated', async (target) => {
-			const p = await target.page();
-			if (p && p !== page) {
-				await ssrf.installSsrfGuard(p);
-			}
-		});
-		page.setViewport({ width: 1920 / 2, height: 1080 / 2 });
-
-		return await withHeapMonitor(page, maxPageHeapMB, async () => {
-			const navigationResult = await navigateToPage(page, targetUrl, {
-				waitUntil,
-				timeout: loadTimeout,
-			});
-
-			if (navigationResult.error) {
-				return {
-					status: navigationResult.status,
-					body: navigationResult.error,
-				};
-			}
-
-			const statusCode = navigationResult.status;
-
-			if (statusIsGood(statusCode) && waitAfterLoaded > 0) {
-				let waitMs = Math.floor(waitAfterLoaded * 1000);
-				if (waitMs > MAX_WAIT_AFTER_LOADED_MS) {
-					logger.log('warn', 'waitAfterLoaded clamped to maximum', {
-						url: targetUrl,
-						requested: formatDurationMs(waitMs),
-						max: formatDurationMs(MAX_WAIT_AFTER_LOADED_MS),
-					});
-					waitMs = MAX_WAIT_AFTER_LOADED_MS;
-				}
-				await new Promise((resolve) => setTimeout(resolve, waitMs));
-			}
-
-			let data;
-			switch (mode) {
-				case 'text':
-					data = await asText(page, maxResponseChars);
-					break;
-				case 'html':
-					data = await asHTML(page, maxResponseChars);
-					break;
-				case 'screenshot':
-					data = await asScreenshot(page, maxResponseChars);
-					break;
-				default:
-					data = 'Invalid mode';
-			}
-
-			return { status: statusCode, body: data };
-		});
-	} catch (e) {
-		// Both limits are reported as render results, not transport failures: a
-		// transport failure aborts the caller's whole execution, and a page too
-		// big for this host is a thing the contract can reasonably be told about
-		// and handle, like any other page it could not load.
-		if (e instanceof HeapLimitExceeded) {
-			logger.log('warn', 'page heap limit exceeded', {
-				url: targetUrl,
-				error: e.message,
-			});
-		} else if (e instanceof ResponseLimitExceeded) {
-			logger.log('warn', 'rendered response limit exceeded', {
-				url: targetUrl,
-				mode,
-				error: e.message,
-			});
-		} else {
-			throw e;
-		}
-
-		return { status: STATUS_INSUFFICIENT_STORAGE, body: e.message };
-	} finally {
-		// Close the page and its context together; the context teardown is what
-		// actually discards the per-request browsing state.
-		await Promise.allSettled([page.close(), context.close()]);
 	}
 }
 
@@ -554,6 +219,14 @@ async function handleRenderRequest(
 			);
 			return;
 		}
+		// Everything still reaching here is this sidecar failing, not the page:
+		// page outcomes are *returned* as a status. The module reads this `500`
+		// as a fatal `WEBDRIVER_UNAVAILABLE` and the validator abstains, so leave
+		// a local trace -- otherwise the only record is the message below.
+		logger.log('error', 'render request failed', {
+			url: query.get('url') ?? '',
+			error: (error as Error).message,
+		});
 		res.writeHead(500, { 'Content-Type': 'application/json' });
 		res.end(
 			JSON.stringify({
