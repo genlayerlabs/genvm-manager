@@ -1,32 +1,31 @@
 name: GenVM full
 
-# Full GenVM CI. The repo has NO GitHub merge queue: this is the
-# authoritative "genvm CI" gate the Merge action
-# (branch_merge_into_dev.yaml) requires to be green on the exact head it
-# fast-forwards.
+# Full GenVM CI. The App-owned E2E merge train revalidates this native check on
+# the exact manager head before it squash-merges the tested snapshot.
 #
 # For every push to a PR targeting a dev branch (v<X>-dev):
 #   - `initial` (cheap pre-commit + 0-behind) and `check-executor-prs` (the
 #     executor landability precondition) ALWAYS run, in parallel;
 #   - `gate-check` aggregates them and plans the test matrix (plan-queue-matrix);
-#     the heavy `matrix-tests` cells run only when a run-full-tests marker is set
-#     — the `run-full-tests` label ("Force run full tests" sets it) or the `rtm`
-#     label, which marks the PR ready to merge and so needs the full run anyway.
+#     the heavy `matrix-tests` cells run when the `run-full-tests` label is set
+#     or `/genvm-run-tests` dispatches a one-shot run. Neither authorizes the App
+#     to merge.
 #     Without a marker the plan is empty, so matrix-tests is skipped;
 #   - without a marker `validate-end` fails, so the CI check stays red
 #     until a full run has happened.
 #
-# Labels are passive: adding `rtm`, `run-full-tests`, or any unrelated label
-# never starts or cancels CI. "Force" and "Rerun full tests" on the action panel
-# dispatch this workflow explicitly; a push still starts the always-on checks.
+# Labels are passive: adding `run-full-tests` or any unrelated label never starts
+# or cancels CI. "Force run full tests" on the action panel and the
+# `/genvm-run-tests` command dispatch this workflow explicitly; a push still
+# starts the always-on checks.
 on:
   pull_request:
     branches: ['v*-dev']
     # Deliberately NOT `edited`: this workflow's concurrency group cancels
     # in-flight runs, so a typo fix in the PR body would kill a running
     # matrix-tests cell (over an hour of work). The PR title can therefore be
-    # edited to something invalid after `initial / pr-title` went green — the
-    # Merge action re-checks it against the title it is about to land.
+    # edited to something invalid after `initial / pr-title` went green. Title
+    # edits should be followed by a fresh run before the App merge is requested.
     types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -41,22 +40,36 @@ on:
         type: boolean
         required: false
         default: false
+      request_comment:
+        description: "`/genvm-run-tests` comment id, empty for other triggers"
+        type: string
+        required: false
+        default: ""
+      request_id:
+        description: Unique `/genvm-run-tests` handler run and attempt
+        type: string
+        required: false
+        default: ""
+      expected_sha:
+        description: Exact manager SHA requested by `/genvm-run-tests`
+        type: string
+        required: false
+        default: ""
 
 run-name: >-
-  GenVM full${{ github.event_name == 'workflow_dispatch' && format(' (manual, PR #{0})', inputs.pr) || '' }}
+  GenVM full${{ github.event_name == 'workflow_dispatch' && format(' (manual, PR #{0})', inputs.pr) || '' }}${{ inputs.request_id != '' && format(' [request={0};comment={1};pr={2}]', inputs.request_id, inputs.request_comment, inputs.pr) || '' }}
 
 permissions:
   contents: read
   pull-requests: read
 
-# One in-flight full run per PR head branch; a newer push cancels the stale run.
-# `github.head_ref` is the PR head branch on pull_request events. Cancelling a
-# superseded head's run is safe: the Merge gate only consumes CI that is green on
-# the exact head it fast-forwards, which is always the newest one. Panel dispatches
-# have no head_ref, so each falls back to its unique run id and never cancels (or
-# is cancelled by) another PR's run.
+# One in-flight full run per PR; a newer push cancels the stale run.
+# The PR number unifies push- and command-triggered runs. Cancelling a
+# superseded head's run is safe: the App only consumes CI that is green on the
+# exact head it merges, which is always the newest one. A command therefore
+# replaces an older run for the same PR rather than duplicating the full matrix.
 concurrency:
-  group: genvm-full-${{ github.head_ref || github.run_id }}
+  group: genvm-full-${{ github.event.pull_request.number || inputs.pr || github.run_id }}
   cancel-in-progress: true
 
 defaults:
@@ -76,6 +89,9 @@ jobs:
           TRIGGERING_ACTOR: ${{ github.triggering_actor }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           PR: ${{ inputs.pr }}
+          REQUEST_COMMENT: ${{ inputs.request_comment }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
           RUN_SHA: ${{ github.sha }}
         run: |
           if [ "$RUN_ATTEMPT" != 1 ]; then
@@ -92,6 +108,31 @@ jobs:
           fi
           if [[ ! "$PR" =~ ^[1-9][0-9]*$ ]]; then
             echo "::error::invalid PR number: $PR"
+            exit 1
+          fi
+          if [ -n "$REQUEST_COMMENT" ] && [[ ! "$REQUEST_COMMENT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::invalid request comment id: $REQUEST_COMMENT"
+            exit 1
+          fi
+          if [ -n "$REQUEST_ID" ] && [[ ! "$REQUEST_ID" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            echo "::error::invalid request id: $REQUEST_ID"
+            exit 1
+          fi
+          if { [ -n "$REQUEST_ID" ] && [ -z "$REQUEST_COMMENT" ]; } || \
+             { [ -z "$REQUEST_ID" ] && [ -n "$REQUEST_COMMENT" ]; }; then
+            echo "::error::request id and request comment must be supplied together"
+            exit 1
+          fi
+          if [ -n "$REQUEST_ID" ] && [ -z "$EXPECTED_SHA" ]; then
+            echo "::error::command dispatch must include the requested SHA"
+            exit 1
+          fi
+          if [ -n "$EXPECTED_SHA" ] && [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid expected SHA: $EXPECTED_SHA"
+            exit 1
+          fi
+          if [ -n "$EXPECTED_SHA" ] && [ "$EXPECTED_SHA" != "$RUN_SHA" ]; then
+            echo "::error::requested SHA is $EXPECTED_SHA, but dispatch resolved $RUN_SHA"
             exit 1
           fi
 
@@ -115,19 +156,18 @@ jobs:
       # checks run on BOTH a push and a panel dispatch. They used to test
       # `github.event_name == 'pull_request'` themselves and so skipped on every
       # dispatched run — while that run could still conclude `success` and be
-      # accepted by the Merge gate, which takes ANY green run on the head sha.
+      # accepted by the App, which takes a green run on the exact head sha.
       pr: ${{ github.event.pull_request.number || inputs.pr }}
     secrets: inherit
 
-  # Precondition (run.sh tool pr-branches check): the PR must be landable via the
-  # panel (Provision then Merge), which lands the manager and its executors almost-
-  # atomically. So every repo (manager + each executor line) must be rebased on its
-  # base, and every executor line present at base must have its pinned commit in the
-  # executor repo (ahead-of-base is fine — that work lands with the PR; a commit
-  # missing from the executor repo is not). Read-only (gh API, no submodule checkout).
+  # Precondition (run.sh tool pr-branches check): every repo must be rebased on
+  # its base, and every executor line must have its pinned commit in the executor
+  # repo. Ahead-of-base executor work is expected: after the App
+  # lands manager, branch_sync_executors.yaml fast-forwards the executor dev refs.
+  # Read-only (gh API, no submodule checkout).
   #
   # Runs on same-repo PRs AND on workflow_dispatch with a PR number (the panel's
-  # rerun path, whose run the Merge gate consumes — so the precondition must hold
+  # rerun path, whose run the App consumes — so the precondition must hold
   # there too; the PR number then comes from inputs.pr). Fork PRs are skipped: they
   # get no secrets (the executor PAT would be empty) and cannot push executor mirror
   # branches, so there is nothing to gate. It checks out the PR being validated
@@ -152,7 +192,7 @@ jobs:
           # Read-only gh API calls; nothing here pushes, so the checkout
           # credential should not survive into the PR code this job runs.
           persist-credentials: false
-      - name: Executor mirror PRs are landed
+      - name: Executor gitlinks are available
         env:
           PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
           MANAGER_REPO: ${{ github.repository }}
@@ -192,7 +232,7 @@ jobs:
         env:
           # Heavy cells run only with a marker; without one the plan is empty and
           # matrix-tests is skipped.
-          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') || contains(github.event.pull_request.labels.*.name, 'rtm') }}
+          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
         run: ./support/ci/run.sh pipeline plan-queue-matrix
 
   matrix-tests:
@@ -233,7 +273,7 @@ jobs:
       - gate-check
       - matrix-tests
     env:
-      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') || contains(github.event.pull_request.labels.*.name, 'rtm') }}
+      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
     steps:
       - name: check
         run: |
@@ -245,7 +285,7 @@ jobs:
           # No run-full-tests marker -> heavy tests were skipped; keep the
           # gate red so the PR is not mergeable until they run.
           if [ "$HAS_MARKER" != "true" ]; then
-            echo "::error::full tests have not run — tick 'Force run full tests' or 'Rerun full tests' on the action panel"
+            echo "::error::full tests have not run — tick 'Force run full tests' or comment '/genvm-run-tests'"
             exit 1
           fi
           results="${{ needs.matrix-tests.result }}"

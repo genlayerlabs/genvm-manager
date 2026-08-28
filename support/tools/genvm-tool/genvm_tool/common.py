@@ -147,9 +147,9 @@ def executor_rel(version: str) -> str:
 	return f'executors/v{_bare(version)}.x'
 
 
-# Release/branch-model branches (`main`, a version branch `v0.3.x`, or a dev
-# branch `v0.3-dev`) — already line-scoped, so they are never feature-namespaced.
-_MODEL_BRANCH = re.compile(r'main|v[\d.]+\.x|v[\d.]+-dev')
+# Release/branch-model branches (`main`, a manager branch `v0.6`, an executor
+# branch `v0.3.x`, or a dev branch) are never feature-namespaced.
+_MODEL_BRANCH = re.compile(r'main|v\d+\.\d+(?:\.x|-dev)?')
 
 
 class Repo:
@@ -185,9 +185,9 @@ class Repo:
 		would collide between two active lines that branch off it at once. So an
 		executor feature branch is namespaced under `pr/<line>/` (e.g.
 		`pr/v0.3/<name>`) — the `<line>` segment is what keeps the two lines
-		distinct, matching how the release branches (`v0.3-dev`, `v0.3.x`) are
-		already line-scoped and thus never clash. Release-model branches and an
-		already-prefixed `name` pass through unchanged (idempotent).
+		distinct, matching how executor release branches (`v0.3-dev`, `v0.3.x`)
+		are already line-scoped and thus never clash. Branch-model branches and
+		an already-prefixed `name` pass through unchanged (idempotent).
 		"""
 		line = self.line
 		if line is None or name.startswith(f'pr/{line}/') or _MODEL_BRANCH.fullmatch(name):

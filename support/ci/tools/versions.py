@@ -37,7 +37,7 @@ def manager_version() -> str:
 	The manager's own release train as bare major.minor (e.g. '0.6').
 
 	Read from the `version` field. The manager dev/release branches
-	(`v<X>-dev`, `v<X>.x`) are named after this — NOT after the executor lines
+	(`v<X>-dev`, `v<X>`) are named after this — NOT after the executor lines
 	in `active-versions`, which move independently (currently v0.2 / v0.3).
 	"""
 	return major_minor(load_root_conf()['version'])

@@ -10,7 +10,7 @@ a task has a how-to, a design question has an explanation
 
 ## Howto
 - [genvm-tool.md](docs/contributing/howto/genvm-tool.md) — the umbrella tool: man page, test and git subcommands, codegen
-- [pr.md](docs/contributing/howto/pr.md) — branch model, PR action panel, `ci-safe` / `run-full-tests`, merge gates
+- [pr.md](docs/contributing/howto/pr.md) — branch model, PR action panel, App-owned landing and executor projection
 - [review-ready.md](docs/contributing/howto/review-ready.md) — the checks a change must pass before it is put up for review
 - [setup.md](docs/contributing/howto/setup.md) — first-time clone: submodules, vendored trees, nix/direnv dev shell
 
@@ -51,6 +51,6 @@ a task has a how-to, a design question has an explanation
 - [docs-layout.md](docs/contributing/explanation/docs-layout.md) — the 4 kinds of page and where each belongs
 - [executor-lines.md](docs/contributing/explanation/executor-lines.md) — why several executor lines ship side by side, and what it costs
 - [fuzz.md](docs/contributing/explanation/fuzz.md) — why fuzz targets get fake entropy and no CmpLog
-- [merge-model.md](docs/contributing/explanation/merge-model.md) — why merging is a maintainer panel rather than a merge queue
+- [merge-model.md](docs/contributing/explanation/merge-model.md) — why manager branch tips own executor refs
 - [shared-submodule-cache.md](docs/contributing/explanation/shared-submodule-cache.md) — why submodules are worktrees of one cache repo, not clones
 - [vendored-trees.md](docs/contributing/explanation/vendored-trees.md) — why third-party sources are patch series, not forks

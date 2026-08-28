@@ -71,6 +71,7 @@ class RepoInfo:
 	ahead_by: int | None
 	behind_by: int | None
 	pr_url: str | None  # open PR head_ref -> base_ref, or None if none is open
+	landable: bool  # pinned head exists remotely and is comparable when required
 
 	@property
 	def moved(self) -> bool:
@@ -97,12 +98,9 @@ class RepoInfo:
 	@property
 	def synced(self) -> bool:
 		"""
-		The head gitlink is present in the executor repo (comparable to base), so
-		it can land together with the manager commit. Being ahead of base is normal —
-		manager and executors land almost-atomically — so only a head commit missing
-		from the executor repo (ahead_by is None) is unsynced.
+		The head gitlink can be projected onto the executor repository.
 		"""
-		return self.ahead_by is not None
+		return self.landable
 
 	def as_dict(self) -> dict:
 		"""
@@ -172,6 +170,13 @@ def submodule_sha(
 	return data['sha']
 
 
+def commit_exists(repo: str, sha: str, token: str | None) -> bool:
+	"""Whether `sha` is present in `repo`."""
+	return (
+		_api(f'repos/{repo}/git/commits/{sha}', token=token, allow_missing=True) is not None
+	)
+
+
 def existing_pr(repo: str, head: str, base: str, token: str | None) -> str | None:
 	"""
 	URL of the open PR `head -> base` in `repo`, or None if none is open.
@@ -223,6 +228,7 @@ def manager_info(
 		ahead_by=ahead_by,
 		behind_by=behind_by,
 		pr_url=pr['html_url'],
+		landable=True,
 	)
 
 
@@ -252,6 +258,7 @@ def executor_info(
 	if base_sha is not None and head_sha is not None:
 		if base_sha == head_sha:
 			ahead_by, behind_by = 0, 0  # gitlink unchanged; no need to ask the executor
+			landable = True
 		else:
 			# The gitlink moved. Ask the executor repo how far. allow_missing: the
 			# head gitlink may not be pushed to the executor yet (a PR that bumped the
@@ -260,9 +267,16 @@ def executor_info(
 				executor_repo, base_sha, head_sha, executor_token, allow_missing=True
 			)
 			ahead_by, behind_by = (None, None) if cmp is None else (cmp[1], cmp[2])
-	else:
-		# Line added (no base) or removed (no head): moved, but nothing to compare.
+			landable = cmp is not None
+	elif head_sha is not None:
+		# A newly added line has no old gitlink to compare against, but its pinned
+		# commit still has to be available for the post-merge branch creation.
 		ahead_by, behind_by = None, None
+		landable = commit_exists(executor_repo, head_sha, executor_token)
+	else:
+		# Line removed: moved, but there is no head to project.
+		ahead_by, behind_by = None, None
+		landable = False
 
 	return RepoInfo(
 		path=path,
@@ -275,6 +289,7 @@ def executor_info(
 		ahead_by=ahead_by,
 		behind_by=behind_by,
 		pr_url=existing_pr(executor_repo, head_ref, base_ref, executor_token),
+		landable=landable,
 	)
 
 

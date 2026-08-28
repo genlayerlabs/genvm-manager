@@ -8,7 +8,7 @@ name: branch / not-rebased watch
 # It gates nothing: it posts a red `not rebased` check-run (visible on the PR
 # page) and a red `not rebased` label (the surface visible in the PR list), and
 # clears both once the branch is 0 behind again. The enforcing checks are
-# unchanged — `initial / behind-check` and the Merge action.
+# unchanged — `initial / behind-check` remains the enforcing check.
 #
 # Triggers:
 #   - push to a dev branch -> re-evaluate every open PR targeting it (this is

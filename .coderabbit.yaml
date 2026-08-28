@@ -1,5 +1,6 @@
 # yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
+  request_changes_workflow: true
   auto_review:
     # `base_branches` MUST live here, under `auto_review` — not directly under
     # `reviews`. The schema defines no `reviews.base_branches`, and `reviews`

@@ -2,17 +2,16 @@
 """
 One definition of "how far behind its base is this branch".
 
-The repo merges by fast-forward only, so "0 commits behind base" is a hard
-precondition in three separate places:
+Repository policy requires a PR head to contain its base tip before it enters
+the App-owned merge train, so "0 commits behind base" appears in 2 places:
 
-- `incl_initial.yaml`'s always-on gate, which fails a PR the moment it falls
-	behind (`check-behind`, below);
+- `incl_initial.yaml`'s always-on gate, backed by `pipelines/checks.py`, which
+	fails a PR the moment it falls behind;
 - `tools/rebase_watch.py`, the advisory check-run/label sweep that re-evaluates
 	when the BASE moves;
-- `tools/genvm_merge_into_dev.py`, the authoritative check at merge time.
 
-Each used to compute it its own way — two flavours of `git` plus the compare
-API — so the three could disagree about the same PR. The measurement lives here
+The callers used to compute it separately, so they could disagree about the
+same PR. The measurement lives here
 once, in the two flavours the callers genuinely need:
 
 - `behind_by_api` for callers with no checkout (a `pull_request_target` sweep);
@@ -20,7 +19,7 @@ once, in the two flavours the callers genuinely need:
 
 Both answer the same question with the same meaning: the number of commits
 reachable from `base` that `head` does not contain. Zero means the head
-contains the base tip, i.e. it can be fast-forwarded.
+contains the base tip.
 """
 
 import json

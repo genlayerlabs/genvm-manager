@@ -4,14 +4,13 @@ Flag open PRs whose branch has fallen behind its `v<X>-dev` base.
 
 `initial / behind-check` (incl_initial.yaml) already asserts 0-behind, but it only
 runs when the PR is pushed — a PR goes stale when the BASE moves, and nothing
-re-evaluates it then. So a PR can sit green for days and only discover at Merge
-time that it is unmergeable (the Merge action fast-forwards, so behind > 0 is
-fatal there).
+re-evaluates it then. So a PR can sit green for days even though repository
+policy requires it to contain the base tip before entering the merge train.
 
 This tool re-evaluates on the other edge: every push to a dev branch sweeps the
 PRs targeting it. It is deliberately advisory — it posts a check-run and a label,
 and both are cosmetic. Nothing here gates a merge: the authoritative 0-behind
-check stays in `initial` and in genvm_merge_into_dev. The point is that the PR
+check stays in `initial`. The point is that the PR
 page turns red the moment the branch goes stale rather than at merge time.
 
 Two surfaces, because they are visible in different places:
@@ -51,8 +50,8 @@ CHECK_NAME = 'not rebased'
 # without trusting the name (which any app may also use).
 CHECK_EXTERNAL_ID = 'genvm-ci/rebase-watch'
 
-# Bases this sweeps. The Merge action only ever fast-forwards onto a dev branch,
-# so a PR targeting anything else has no 0-behind requirement to report on.
+# Bases this sweeps. The repository's 0-behind policy applies to dev branches;
+# a PR targeting anything else has no such requirement to report on.
 DEV_BASE_RE = re.compile(r'v.*-dev')
 
 
@@ -241,11 +240,11 @@ def post_check(head_sha: str, base: str, behind: int, *, stale: bool = False) ->
 		title = f'⛔ {behind} commit(s) behind {base} — rebase'
 		summary = (
 			f'This branch is **{behind} commit(s) behind `{base}`**.\n\n'
-			f'The Merge action only fast-forwards, so it will refuse this branch until '
+			f'Repository policy refuses this branch until '
 			f'it contains the base tip:\n\n'
 			f'```sh\ngit fetch origin\ngit rebase origin/{base}\ngit push --force-with-lease\n```\n\n'
 			f'(Advisory: this check does not block anything. `initial / behind-check` '
-			f'and the Merge action are what actually enforce it.)'
+			f'is what actually enforces it.)'
 		)
 	else:
 		conclusion = 'success'

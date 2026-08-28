@@ -1,31 +1,34 @@
-# Why Merging Is a Panel, Not a Queue
+# Why Manager Owns Executor Branches
 
 A change spans repositories: the executor lines carry the edit, the manager
-carries the gitlinks pinning them. GitHub's merge queue orders pull requests in
-one repository and has no opinion about a second, so the landing step is ours —
-a maintainer ticks *Merge into dev* and the automation re-checks every gate
-before writing anything ([pr.md](../howto/pr.md))
+carries the gitlinks pinning them. The E2E App therefore treats the manager PR
+as the sole merge member. Once it lands, the manager branch tip is the source of
+truth for every executor ref ([pr.md](../howto/pr.md))
 
-## Why the Gates Re-Run at Merge Time
+## Why Executor Updates Follow Manager
 
-A green check describes the commit that was tested, not the branch it sits on,
-and between review and merge the head, the base and the pinned executor branch
-can all move
+The App squash-merges the exact manager tree E2E tested, preserving its gitlink
+values. A push to a manager dev branch projects those gitlinks onto executor dev
+branches; a manager release push projects them onto the declared executor
+release branches
 
-The heavy matrix is opt-in for a related reason: a check that runs on every push
-to every draft gets ignored
+The projection creates missing refs and otherwise uses plain non-force pushes.
+It never rewrites an executor commit or moves a branch backward
 
-## Why Only One Merge Runs at a Time
+## Why Failures Aggregate
 
-Checking the gates and advancing the branches is not atomic, and the executor
-lines advance before the manager, so a lost race leaves a half-landed change.
-Hence one merge repository-wide, and never a cancelled one
+Cross-repository updates are not atomic. One executor line can diverge or lose
+authorization while the others remain valid, so stopping on its first failure
+would strand unrelated lines unnecessarily. Every line is attempted, then the
+workflow returns one combined failure for repair and idempotent rerun
 
-That costs a maintainer something: GitHub keeps 1 pending run per concurrency
-group, so a third tick cancels the waiting one
+The executor commits already exist remotely before manager becomes eligible;
+therefore a temporary branch-sync failure does not make manager gitlinks
+unresolvable
 
 ## Why `ci-safe` Is a Human Decision
 
-These jobs run the pull request's own `support/ci/` scripts with deploy keys in
-scope. Approving a run approves code execution with credentials, which is not
-inferable from the diff
+The PR panel's full-test and provisioning jobs run pull-request scripts with
+credentials in scope. Approving those jobs approves code execution with
+credentials, which is not inferable from the diff. The post-merge projection
+runs only code already landed on a protected manager branch

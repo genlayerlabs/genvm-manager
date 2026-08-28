@@ -9,7 +9,7 @@ on:
           the panel's `workflow_dispatch`), so the PR-scoped jobs below run for
           BOTH — they used to key off `github.event_name == 'pull_request'` and
           therefore skipped on every panel-dispatched run, while that run could
-          still conclude `success` and satisfy the Merge gate. Empty for a
+          still conclude `success` and satisfy the App's native CI gate. Empty for a
           non-PR run, which skips them.
         type: string
         required: false
@@ -56,8 +56,8 @@ jobs:
   # above never fires it. Check every commit the PR adds, in the manager and in
   # each executor submodule that moved.
   #
-  # This is the one initial check the Merge action does NOT re-run, so it must
-  # not be skippable on a run the Merge gate will accept.
+  # The App consumes this through the aggregate native CI result, so it must not
+  # be skippable on a run eligible for the merge train.
   commit-messages:
     if: inputs.pr != ''
     runs-on: ubuntu-latest
@@ -81,14 +81,12 @@ jobs:
           CHANGES: ${{ steps.src.outputs.changes }}
         run: ./support/ci/run.sh pipeline commit-messages
 
-  # The Merge action only fast-forwards, so the PR head must already
-  # contain the base tip (0 commits behind). We assert it here too (as part
-  # of the always-on `initial` checks) so the gate goes red the moment the
-  # branch falls behind, instead of surfacing only at merge time.
+  # Repository policy requires the PR head to contain the base tip (0 commits
+  # behind). Assert it in the always-on checks so stale work is refreshed before
+  # its exact manager snapshot enters the App-owned merge train.
   #
   # The measurement itself lives in support/ci/behind.py, shared with
-  # rebase-watch and the Merge action, so the three cannot disagree about the
-  # same PR.
+  # rebase-watch, so both surfaces agree about the same PR.
   behind-check:
     if: inputs.pr != ''
     runs-on: ubuntu-latest
@@ -105,10 +103,8 @@ jobs:
           PR_NUMBER: ${{ inputs.pr }}
         run: ./support/ci/run.sh pipeline behind-check
 
-  # The Merge action squashes a PR into `<title> (#N)`, so the PR title becomes
-  # a commit subject verbatim and must satisfy the same rules as one. Nothing
-  # re-validates a generated squash message, so an invalid title would only
-  # surface as a commit the hook rejects — after it landed.
+  # The E2E App squash-merges a PR as `<title> (#N)`, so the PR title becomes a
+  # commit subject verbatim and must satisfy the same rules as one.
   pr-title:
     if: inputs.pr != ''
     runs-on: ubuntu-latest

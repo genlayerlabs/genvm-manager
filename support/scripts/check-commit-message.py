@@ -54,9 +54,9 @@ GIT_TRAILER_RE = re.compile(r'^[A-Za-z][A-Za-z0-9-]*:\s*.+$')
 
 # A trailing PR reference, either bare (`(#42)`) or repo-qualified
 # (`(genlayerlabs/genvm-manager#42)`). The qualified form is what a squash
-# landing in the EXECUTOR repo carries, because a bare `#42` would not resolve
-# there — see genvm_merge_into_dev.pr_reference. Both must be recognised, or a
-# perfectly good subject is read as having its emoji in the middle.
+# historical executor squash landings carry, because a bare `#42` would not
+# resolve there. Both must be recognised, or a perfectly good subject is read
+# as having its emoji in the middle.
 PR_REF_RE = re.compile(r'\s*\((?:[\w.-]+/[\w.-]+)?#\d+\)\s*$')
 SQUASH_BULLET_RE = re.compile(r'^\*\s*')
 

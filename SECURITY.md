@@ -47,6 +47,12 @@ machine, and non-default deployments that expose the loopback-only manager to un
 The following relationships are trusted. Hardening them is welcome, but a report that assumes
 one side is hostile is not treated as a vulnerability:
 
-- host and GenVM
-- executor and manager
-- the local disk and loopback in general
+- Host and GenVM
+- Executor and manager
+- The local disk and loopback in general
+
+The following inputs are untrusted, even when delivered through a trusted component:
+
+- Intelligent Contract code and contract-controlled data, including calldata, messages, and persisted values
+- Data originating from other validators, including leader results
+- External content processed by modules, including HTTP responses, redirects, rendered pages, JavaScript, subresources, and model-provider responses

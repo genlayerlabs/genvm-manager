@@ -2,7 +2,7 @@
 
 - [setup.md](setup.md) — first-time clone: submodules, vendored trees, nix/direnv dev shell
 - [genvm-tool.md](genvm-tool.md) — the umbrella tool: man page, test and git subcommands, codegen
-- [pr.md](pr.md) — branch model, PR action panel, `ci-safe` / `run-full-tests`, merge gates
+- [pr.md](pr.md) — branch model, PR action panel, App-owned landing and executor projection
 - [review-ready.md](review-ready.md) — the checks a change must pass before it is put up for review
 
 ## building/
