@@ -553,7 +553,7 @@ fn clean_reported() -> genvm_modules_interfaces::ReportedResult {
         storage_deltas: Vec::new(),
         emissions: Vec::new(),
         nondet_disagreement: None,
-        nondet_results: Vec::new(),
+        leader_public_data: bytes::Bytes::new(),
         data_fees_remaining: Vec::new(),
         data_fees_consumed: Default::default(),
         llm_consumed_gen_wei: primitive_types::U256::zero(),
@@ -665,8 +665,8 @@ fn nested_reply_refuses_every_reported_effect() {
         }),
         ("emissions", |r| r.emissions.push(some_emission())),
         ("nondet_disagreement", |r| r.nondet_disagreement = Some(0)),
-        ("nondet_results", |r| {
-            r.nondet_results.push(bytes::Bytes::from_static(&[1]))
+        ("leader_public_data", |r| {
+            r.leader_public_data = bytes::Bytes::from_static(&[1])
         }),
         ("llm_consumed_gen_wei", |r| {
             r.llm_consumed_gen_wei = primitive_types::U256::one()
@@ -802,7 +802,7 @@ fn request_field_names() -> Vec<&'static str> {
             permissions,
             no_modules,
             unsafe_overrides,
-            leader_nondet_results,
+            leader_public_data,
             gas_data,
             message_fee_allocation,
             initial_time_units_allocation,
@@ -830,7 +830,7 @@ fn request_field_names() -> Vec<&'static str> {
         "permissions",
         "no_modules",
         "unsafe_overrides",
-        "leader_nondet_results",
+        "leader_public_data",
         "gas_data",
         "message_fee_allocation",
         "initial_time_units_allocation",

@@ -780,7 +780,7 @@ components:
         - host
         - calldata
         - code
-        - leader_nondet_results
+        - leader_public_data
         - initial_time_units_allocation
       properties:
         selector:
@@ -843,15 +843,13 @@ components:
           description: |
             Contract bytecode for a deployment, or null for a call. Required to be
             present; only its value is nullable.
-        leader_nondet_results:
-          type: array
+        leader_public_data:
+          type: string
+          format: binary
           nullable: true
-          items:
-            type: string
-            format: binary
           description: |
-            The leader's non-deterministic results for a validator run, or null for
-            a leader run. Required to be present; only its value is nullable.
+            Opaque executor-owned leader public data for a validator run, or null
+            for a leader run. Required to be present; only its value is nullable.
         initial_time_units_allocation:
           type: integer
           format: uint32

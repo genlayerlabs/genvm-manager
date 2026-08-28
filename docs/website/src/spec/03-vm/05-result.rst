@@ -114,7 +114,16 @@ Non-Deterministic Block Result Encoding
 These three are the only codes a leader-proposed non-deterministic block result
 may carry; validators treat every other byte as a malformed leader result. A
 fatal VM error computed by a leader's non-deterministic child propagates to its
-caller and MUST NOT be encoded into ``nondet_results``
+caller and MUST NOT be included in ``LeaderPublicData``
+
+.. _gvm-def-leader-output-format:
+
+Leader Output Format
+--------------------
+
+``LeaderPublicData`` is encoded as an RLP list containing every non-deterministic
+block result, in execution order, followed by the byte string ``padded``. Each
+result uses :ref:`gvm-def-subvm-result-encoding`
 
 Contract Result Encoding
 ------------------------

@@ -141,7 +141,7 @@ class ObservabilityStep(base.CrossMajorStep):
 						manager_client=manager_client,
 						ctx=ctx,
 						is_sync=kwargs.get('is_sync', True),
-						leader_nondet_results=kwargs.get('leader_nondet_results'),
+						leader_public_data=kwargs.get('leader_public_data'),
 						message=base._message(
 							address, is_init=typing.cast(bool, kwargs['is_init'])
 						),
@@ -196,7 +196,7 @@ class ObservabilityStep(base.CrossMajorStep):
 		validator = await one(
 			'validator',
 			is_sync=False,
-			leader_nondet_results=leader.result_nondet_results,
+			leader_public_data=leader.result_leader_public_data,
 		)
 		sync = await one('sync', is_sync=True)
 		assert leader.execution_hash == validator.execution_hash, (
@@ -252,7 +252,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			resolve_hook=self._route_chain,
 			apply_changes=False,
 			is_sync=False,
-			leader_nondet_results=[base.gvm_calldata.encode({})],
+			leader_public_data=base._leader_public_data(base.gvm_calldata.encode({})),
 		)
 		assert bogus.result_kind == host_fns.ResultCode.VM_ERROR, bogus
 

@@ -1003,7 +1003,7 @@ pub struct Request {
     #[serde(default)]
     #[calldata(default = default_unsafe_overrides)]
     pub unsafe_overrides: UnsafeOverrides,
-    pub leader_nondet_results: Option<Vec<bytes::Bytes>>,
+    pub leader_public_data: Option<bytes::Bytes>,
     /// Host-provided `node` fee constants (moved off `host_data`).
     #[serde(default)]
     #[calldata(default = default_gas_data)]
@@ -1512,7 +1512,7 @@ fn nested_effect(reported: &genvm_modules_interfaces::ReportedResult) -> Option<
         storage_deltas,
         emissions,
         nondet_disagreement,
-        nondet_results,
+        leader_public_data,
         data_fees_consumed:
             genvm_modules_interfaces::BucketsConsumed {
                 storage,
@@ -1533,8 +1533,8 @@ fn nested_effect(reported: &genvm_modules_interfaces::ReportedResult) -> Option<
     if nondet_disagreement.is_some() {
         return Some("nondet_disagreement");
     }
-    if !nondet_results.is_empty() {
-        return Some("nondet_results");
+    if !leader_public_data.is_empty() {
+        return Some("leader_public_data");
     }
     if !llm_consumed_gen_wei.is_zero() {
         return Some("llm_consumed_gen_wei");
@@ -1944,7 +1944,7 @@ fn execution_data_from_request(req: &Request) -> genvm_modules_interfaces::Execu
         message: req.message.clone(),
         host_data: req.host_data.clone(),
         code: req.code.clone(),
-        leader_nondet_results: req.leader_nondet_results.clone(),
+        leader_public_data: req.leader_public_data.clone(),
         host_hello_data: req.host_hello_data.clone(),
         method_hosts,
         bucket_totals: req.bucket_totals.clone(),
@@ -2165,7 +2165,7 @@ impl Ctx {
             permissions,
             no_modules: true,
             unsafe_overrides: Default::default(),
-            leader_nondet_results: None,
+            leader_public_data: None,
             gas_data: parent_req.gas_data.clone(),
             message_fee_allocation: Vec::new(),
             initial_time_units_allocation: 0,
@@ -2179,7 +2179,7 @@ impl Ctx {
         };
         let mut execution_data = execution_data_from_request(&req);
         execution_data.code = None;
-        execution_data.leader_nondet_results = None;
+        execution_data.leader_public_data = None;
         execution_data.record_actions.clear();
         execution_data.message_fee_allocation.clear();
         execution_data.remaining_recursion =
@@ -2366,7 +2366,7 @@ async fn run_genvm_process(
 
     let execution_context = if req.needs_modules() {
         let host_data: genvm_modules_interfaces::HostData = serde_json::from_str(&req.host_data)?;
-        let role = if req.leader_nondet_results.is_none() {
+        let role = if req.leader_public_data.is_none() {
             genvm_modules_interfaces::Role::Leader
         } else {
             genvm_modules_interfaces::Role::Validator
