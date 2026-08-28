@@ -74,7 +74,6 @@ RUN \
     which chromium ; \
     cd /src/prj && npm ci ; \
     npm run build ; \
-    npm test ; \
     true
 
 WORKDIR /wd

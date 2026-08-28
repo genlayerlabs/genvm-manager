@@ -69,6 +69,7 @@ def tests(ctx):
 		cargo,
 		genvm,
 		integration,
+		npm,
 		pytest,
 	)
 
@@ -97,6 +98,20 @@ def tests(ctx):
 					rust_root_dir=rust_root_dir,
 					name=fuzz_file.stem,
 				)
+
+	def collect_npm(ctx: genvm_tool.tests.stage.collection.Context):
+		test_files = sorted(f for f in ctx.shared.git_files if f.name.endswith('.test.ts'))
+		for t in filter(lambda x: x.name == 'package.json', ctx.shared.git_files):
+			if 'test' not in npm.scripts(t):
+				continue
+			project_root_dir = t.parent
+			owned = [f for f in test_files if f.is_relative_to(project_root_dir)]
+			ctx.shared.logger.debug('discovered npm project', path=t, test_files=len(owned))
+			npm.npm_project(
+				ctx,
+				project_root_dir=project_root_dir,
+				test_files=owned,
+			)
 
 	def collect_pytest(ctx: genvm_tool.tests.stage.collection.Context):
 		dirs = [
@@ -135,6 +150,7 @@ def tests(ctx):
 				)
 
 	ctx.add_collector(collect_rust)
+	ctx.add_collector(collect_npm)
 	ctx.add_collector(collect_pytest)
 
 	ctx.run_parser.add_argument(

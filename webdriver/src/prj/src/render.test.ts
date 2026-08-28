@@ -27,6 +27,8 @@
  * scope.
  */
 
+// genvm-tool-test-tags: feature-web-render
+
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type * as pup from 'puppeteer-core';
