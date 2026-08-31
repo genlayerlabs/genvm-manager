@@ -57,6 +57,27 @@ storage_page_inherited
 
 Value: ``128``
 
+.. _gvm-def-consts-value-memory-limiter-consts-execution-emission-base-size:
+
+execution_emission_base_size
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``256``
+
+.. _gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size:
+
+message_fee_rotation_element_size
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``32``
+
+.. _gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size:
+
+nondet_output_base_size
+~~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``32``
+
 .. _gvm-def-consts-top-limits:
 
 top_limits

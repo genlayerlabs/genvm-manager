@@ -45,8 +45,8 @@ a task has a how-to, a design question has an explanation
 - [fuzzing.md](docs/contributing/howto/testing/fuzzing.md) — AFL fuzz targets, seeding a corpus from a run, host sysctl prep
 - [integration.md](docs/contributing/howto/testing/integration.md) — jsonnet cases, tags, golden `.stdout`/`.hash` files, services
 - [python.md](docs/contributing/howto/testing/python.md) — Python tests, direct pytest for genlayer-py-std
-- [typescript.md](docs/contributing/howto/testing/typescript.md) — TypeScript tests: one case per `.test.ts`, tag comments, running one file
 - [rust.md](docs/contributing/howto/testing/rust.md) — Rust tests: where they go, how to run them, coverage
+- [typescript.md](docs/contributing/howto/testing/typescript.md) — information on how to run and write webdriver typescript tests
 
 ## Explanation
 - [docs-layout.md](docs/contributing/explanation/docs-layout.md) — the 4 kinds of page and where each belongs

@@ -19,6 +19,7 @@
 - [python.md](testing/python.md) — Python tests, direct pytest for genlayer-py-std
 - [integration.md](testing/integration.md) — jsonnet cases, tags, golden `.stdout`/`.hash` files, services
 - [fuzzing.md](testing/fuzzing.md) — AFL fuzz targets, seeding a corpus from a run, host sysctl prep
+- [typescript.md](testing/typescript.md) — information on how to run and write webdriver typescript tests
 
 ## committing/
 - [submodules.md](committing/submodules.md) — repo topology, gitlink bumps, pre-commit hooks, push order

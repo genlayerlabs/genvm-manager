@@ -51,6 +51,23 @@ The following operations consume RAM:
   :ref:`gvm-def-consts-value-memory-limiter-consts-new-storage-page` octets the
   first time that region is written. Regions the :term:`sub-VM` inherited
   already written from its caller, and repeated writes to a region, cost nothing
+- **Emissions**: each emitted message or event costs
+  :ref:`gvm-def-consts-value-memory-limiter-consts-execution-emission-base-size`
+  octets,
+  plus its retained calldata, code, allocation subtree, topics, event data, and
+  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-arg-element-size`
+  octets per
+  retained positional argument,
+  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-kwarg-entry-size`
+  octets per
+  retained keyword argument, and
+  :ref:`gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size`
+  octets
+  per retained message-fee rotation
+- **Nondeterministic outputs**: each leader output retained for validator replay
+  costs :ref:`gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size`
+  octets
+  plus its encoded length
 - **Sub-VM creation**: each new :term:`sub-VM` costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets, plus
   :ref:`gvm-def-consts-value-memory-limiter-consts-storage-page-inherited`
@@ -68,13 +85,12 @@ File content memory is released when the corresponding file descriptor is closed
 When a :term:`sub-VM` finishes execution, all remaining RAM consumed by it is released back to the shared budget.
 This applies to runner charges as well: memory consumed by loading or
 registering a runner is released when the registering :term:`sub-VM` finishes,
-like any other charge. There are no permanent charges.
+like any other charge.
 
-Storage write charges are the exception: they follow the storage they paid for.
-When a :ref:`gvm-def-gl-call-sandbox` child returns and its caller takes over the
-child's storage, the charge for the regions the child wrote first is transferred
-to the caller rather than released, so a caller cannot use repeated
-:ref:`gvm-def-gl-call-sandbox` calls to accumulate storage it never pays for.
+Charges for retained storage, emissions, and nondeterministic outputs are
+permanent. When a :ref:`gvm-def-gl-call-sandbox` child returns and its caller
+takes over the child's retained data, those charges are transferred to the
+caller rather than released.
 
 Other Limits
 ------------

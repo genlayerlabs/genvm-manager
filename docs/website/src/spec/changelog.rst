@@ -64,6 +64,10 @@ Changed
    caller's remaining RAM instead of a fresh 4 GiB one, so it can no longer use
    more RAM than the deterministic caller had left. See
    :doc:`03-vm/03-ram-limiting`
+#. Emitted messages, events, and leader nondeterministic outputs consume RAM for
+   their retained representations. Their charges, like storage write charges,
+   remain until execution ends and transfer to a caller that adopts a sandbox
+   child's retained data. See :doc:`03-vm/03-ram-limiting`
 #. A resource error raised while a module is being instantiated keeps its own
    code — e.g. exhausting the memory budget there reports
    :ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-memory` — instead of
