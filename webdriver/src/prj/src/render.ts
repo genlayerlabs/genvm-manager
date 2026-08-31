@@ -355,11 +355,21 @@ export async function renderPageWithBrowser(
 
 	try {
 		await ssrf.installSsrfGuard(page);
-		context.on('targetcreated', async (target) => {
-			const p = await target.page();
-			if (p && p !== page) {
-				await ssrf.installSsrfGuard(p);
-			}
+		// A render needs exactly one page, and a popup cannot be guarded after
+		// the fact: nothing holds its first navigation while an async handler
+		// installs an interceptor, so it could already have reached an internal
+		// address. Chrome is launched with `--block-new-web-contents`, and any
+		// target that still appears is closed rather than trusted.
+		context.on('targetcreated', (target) => {
+			void (async () => {
+				const p = await target.page();
+				if (p && p !== page) {
+					logger.log('warn', 'closing unexpected popup target', {
+						url: target.url(),
+					});
+					await p.close().catch(() => {});
+				}
+			})();
 		});
 		page.setViewport({ width: 1920 / 2, height: 1080 / 2 });
 

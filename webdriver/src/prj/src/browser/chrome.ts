@@ -96,6 +96,9 @@ async function newBrowser(): Promise<BrowserHolder> {
 		'--no-first-run',
 		'--no-zygote',
 		'--disable-gpu',
+		// No popup can be SSRF-guarded before its first navigation, so none is
+		// allowed to exist -- see the `targetcreated` handler in `render.ts`.
+		'--block-new-web-contents',
 		'--enable-precise-memory-info',
 		`--js-flags=--max-old-space-size=${RENDERER_MAX_OLD_SPACE_MB}`,
 		`--renderer-process-limit=${RENDERER_PROCESS_LIMIT}`,
