@@ -64,10 +64,9 @@ The following operations consume RAM:
   :ref:`gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size`
   octets
   per retained message-fee rotation
-- **Nondeterministic outputs**: each leader output retained for validator replay
-  costs :ref:`gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size`
-  octets
-  plus its encoded length
+- **Nondeterministic outputs**: each output costs
+  :ref:`gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size`
+  octets plus its encoded length on every role
 - **Sub-VM creation**: each new :term:`sub-VM` costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets, plus
   :ref:`gvm-def-consts-value-memory-limiter-consts-storage-page-inherited`
@@ -77,6 +76,29 @@ The following operations consume RAM:
 
 The runner load cost (:ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost`) is a fixed per-load
 overhead
+
+.. _gvm-def-nondeterministic-output-caps:
+
+Nondeterministic Output Caps
+----------------------------
+
+Before entering a non-deterministic :term:`sub-VM`, the caller must have enough
+RAM to retain the canonical memory-limit and non-deterministic-output fee-limit
+results and return either as a file descriptor. It also checks whether both
+results can be charged against the non-deterministic-output fee; when either
+cannot, the sub-VM is not entered
+
+An output that cannot fit its non-deterministic-output fee charge is first
+replaced with a
+:ref:`gvm-def-str-trie-value-vm-error-out-of-receipt-nondet-output` result. If
+that result, or an output within the fee limit, cannot fit its RAM charge, it is
+replaced with a :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` result. The
+leader publishes the replacement and an honest replay charges the same encoded
+result
+
+A validator rejects a leader proposal that differs from its post-cap result as
+a fatal :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`
+result without entering the validator sub-VM
 
 RAM Release
 -----------

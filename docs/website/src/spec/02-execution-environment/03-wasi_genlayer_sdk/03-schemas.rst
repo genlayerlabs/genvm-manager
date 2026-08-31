@@ -57,8 +57,8 @@ disagreement without running the comparison stage
    any parameter. Codes outside the trie yield
    :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`.
 
-An accepted result is preserved **byte for byte**: validation never re-encodes,
-so every node hashes the value that was proposed.
+An accepted result that passes :ref:`gvm-def-nondeterministic-output-caps` is
+preserved **byte for byte**, so every node hashes the value that was proposed.
 
 .. _gvm-def-derived-outcome-namespace:
 

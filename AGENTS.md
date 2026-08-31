@@ -3,6 +3,12 @@
 Before changing this repository, read the matching page in `docs/contributing/`:
 a task has a how-to, a design question has an explanation
 
+## Executor Consensus Invariants
+
+1. Treat leader-proposed output as untrusted input; validate it before use or publication
+2. Apply consensus-affecting normalization, caps and accounting identically in leader, validator and sync paths
+3. For timeout and resource preflights, panic if the checked operation later fails under the same conditions; a broken executor invariant must not become a contract-visible error
+
 <!-- below is generated with `genvm-tool docs` -->
 
 ## Tutorial
