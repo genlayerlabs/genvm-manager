@@ -1,4 +1,21 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
 reviews:
+  request_changes_workflow: true
+  auto_review:
+    # `base_branches` MUST live here, under `auto_review` — not directly under
+    # `reviews`. The schema defines no `reviews.base_branches`, and `reviews`
+    # does not forbid extra keys, so a misplaced copy is silently ignored:
+    # CodeRabbit reads the file, falls back to default-branch-only, and skips
+    # every PR targeting a dev branch with "Auto reviews are disabled on
+    # base/target branches other than the default branch".
+    #
+    # Auto-review PRs targeting any long-lived branch: main, a release branch
+    # or its dev branch. Feature/topic branches are reviewed through the base
+    # they target. Patterns are regexes.
+    base_branches:
+      - "main"
+      - "v\\d+\\.\\d+"
+      - "v\\d+\\.\\d+-dev"
   path_filters:
     - "!**/*.onnx"
     - "!**/*.txt"
@@ -6,7 +23,10 @@ reviews:
     - "!**/*.hash"
     - "!**/*.lock"
     - "!docs/website/src/_static/**"
-    - "!executors/v0.3.x/runners/py-libs/pure-py/**"
-    - "!executors/v0.3.x/runners/models/**"
-    - "!executors/v0.3.x/runners/softfloat/berkeley-softfloat-3/**"
-    - "!**/fuzz/inputs*/**"
+    - "!**/fuzz/**"
+    - "!**/*_test.rs"
+    - "!**/*.json"
+    - "!**/tests/**"
+    - "!**/test/**"
+    # genvm-tool is internal dev tooling; not worth reviewing.
+    - "!support/tools/genvm-tool/**"

@@ -17,58 +17,73 @@
 # along with this program. If not, see <http://www.gnu.org/licenses/>.
 #
 
-EXE_NAME = 'git third-party'
-
-import subprocess
-import os
-import sys
 import abc
-import typing
-import json
-import textwrap
 import io
+import json
 import logging
+import os
+import re
+import subprocess
+import sys
+import textwrap
+import typing
 from pathlib import Path
+
+EXE_NAME = 'git third-party'
 
 logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
-GIT = os.getenv('GIT', 'git')
-
-try:
-	top_dir_str = subprocess.check_output(
-		[GIT, 'rev-parse', '--show-toplevel'], text=True
-	)
-except Exception as e:
-	print(
-		f'could not execute `{GIT} rev-parse --show-toplevel`. You may wish to set `GIT` env variable',
-		file=sys.stderr,
-	)
-	exit(1)
-
-top_dir = Path(top_dir_str.strip())
-cur_dir = Path(os.getcwd())
-
-SAVED_FILES_PATH = top_dir.joinpath('.git-third-party')
-
-PATCHES_PATH = SAVED_FILES_PATH.joinpath('patches')
-CONFIG_PATH = SAVED_FILES_PATH.joinpath('config.json')
-
-if not PATCHES_PATH.exists():
-	logging.info(f'patches directory does not exist, creating path=`{PATCHES_PATH}`')
-	PATCHES_PATH.mkdir(parents=True, exist_ok=True)
-
-if not CONFIG_PATH.exists():
-	config = {'repos': {}}
-else:
-	config = json.loads(CONFIG_PATH.read_text())
+# Runtime context, populated by `_init_context()` at the start of each `main()`
+# call rather than at import time. Keeping import side-effect free lets this file
+# be imported directly (e.g. by the test-suite) and driven in-process.
+GIT = 'git'
+top_dir: Path
+cur_dir: Path
+SAVED_FILES_PATH: Path
+PATCHES_PATH: Path
+CONFIG_PATH: Path
+config: dict
 
 
-class Command:
+def _init_context() -> None:
+	global GIT, top_dir, cur_dir, SAVED_FILES_PATH, PATCHES_PATH, CONFIG_PATH, config
+
+	GIT = os.getenv('GIT', 'git')
+
+	try:
+		top_dir_str = subprocess.check_output(
+			[GIT, 'rev-parse', '--show-toplevel'], text=True
+		)
+	except Exception:
+		print(
+			f'could not execute `{GIT} rev-parse --show-toplevel`. You may wish to set `GIT` env variable',
+			file=sys.stderr,
+		)
+		sys.exit(1)
+
+	top_dir = Path(top_dir_str.strip())
+	cur_dir = Path(os.getcwd())
+
+	SAVED_FILES_PATH = top_dir.joinpath('.git-third-party')
+	PATCHES_PATH = SAVED_FILES_PATH.joinpath('patches')
+	CONFIG_PATH = SAVED_FILES_PATH.joinpath('config.json')
+
+	if not PATCHES_PATH.exists():
+		logging.info(f'patches directory does not exist, creating path=`{PATCHES_PATH}`')
+		PATCHES_PATH.mkdir(parents=True, exist_ok=True)
+
+	if not CONFIG_PATH.exists():
+		config = {'repos': {}}
+	else:
+		config = json.loads(CONFIG_PATH.read_text())
+
+
+class Command(metaclass=abc.ABCMeta):
 	name: typing.ClassVar[str]
 	help: str
 
 	@abc.abstractmethod
-	def handle(args: list[str]) -> None: ...
+	def handle(self, args: list[str]) -> None: ...
 
 	def show_help(self, file: io.StringIO):
 		file.write(f'subcommand `{self.name}`:\n')
@@ -82,12 +97,127 @@ def _get_patches_dir(name: str) -> Path:
 
 def _dirty_check(name: str) -> None:
 	target_dir = top_dir.joinpath(*name.split('/'))
-	for opts in ([], ['--cached']):
-		rs = subprocess.run(
-			[GIT, 'diff', '--exit-code', '--quiet', *opts], check=False, cwd=target_dir
+	# `--untracked-files=all` so a brand-new local file counts as dirt, and
+	# `--ignore-submodules=none` so a hostile `diff.ignoreSubmodules` config can
+	# not hide a modified submodule. A non-empty porcelain listing is dirt; it
+	# also names the offending paths, which we surface to the user.
+	rs = subprocess.run(
+		[GIT, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none'],
+		check=True,
+		cwd=target_dir,
+		text=True,
+		capture_output=True,
+	)
+	if rs.stdout.strip():
+		raise GitThirdPartyException(
+			f'repo {name} is dirty ( {target_dir} ):\n{rs.stdout.rstrip()}'
 		)
-		if rs.returncode != 0:
-			raise GitThirdPartyException(f'repo {name} is dirty ( {target_dir} )')
+
+
+def _patch_id(diff: str, cwd: Path) -> str | None:
+	"""Stable patch-id of a diff/patch, or None when there is nothing to hash.
+
+	`--stable` hashes only the diff hunks, ignoring the commit hash, author,
+	date and message — so a patch re-applied by `git am` compares equal to the
+	saved patch file it came from, which is exactly the metadata-independence the
+	rest of the tool relies on.
+	"""
+	rs = subprocess.run(
+		[GIT, 'patch-id', '--stable'],
+		input=diff,
+		text=True,
+		capture_output=True,
+		check=True,
+		cwd=cwd,
+	)
+	out = rs.stdout.strip()
+	# Empty for a patch with no textual diff (e.g. an empty or merge commit).
+	return out.split()[0] if out else None
+
+
+def _unsaved_commits_check(name: str) -> None:
+	"""Refuse to overwrite local commits that were never `save`d.
+
+	`update` detaches to the base commit and replays the *saved* patch series, so
+	any commit on top that no patch file records would be silently orphaned. We
+	compare the current history above the base against the saved patches by
+	patch-id, keep the longest matching prefix (K), and error when the checkout
+	is *ahead* — carrying `commits(base..HEAD) - K` unrecorded commits.
+	"""
+	conf = config['repos'][name]
+	target_dir = top_dir.joinpath(*name.split('/'))
+	base = conf['commit']
+
+	# Nothing checked out yet (fresh `add` / freshly `init`-ed dir): nothing to
+	# protect.
+	if (
+		subprocess.run(
+			[GIT, 'rev-parse', '--verify', '--quiet', 'HEAD'],
+			check=False,
+			cwd=target_dir,
+			capture_output=True,
+		).returncode
+		!= 0
+	):
+		return
+
+	# Base not in this checkout: we cannot relate HEAD to the saved series (most
+	# likely the pin was bumped). Let update fetch + reapply; the worktree dirty
+	# check still protects uncommitted work.
+	if (
+		subprocess.run(
+			[GIT, 'cat-file', '-e', f'{base}^{{commit}}'],
+			check=False,
+			cwd=target_dir,
+			capture_output=True,
+		).returncode
+		!= 0
+	):
+		logging.warning(
+			f'base commit {base} not present in {name}, skipping unsaved-commits check'
+		)
+		return
+
+	revs = subprocess.run(
+		[GIT, 'rev-list', '--reverse', f'{base}..HEAD'],
+		check=True,
+		cwd=target_dir,
+		text=True,
+		capture_output=True,
+	).stdout.split()
+	current_ids = [
+		_patch_id(
+			subprocess.run(
+				[GIT, 'diff-tree', '--patch', '--no-commit-id', rev],
+				check=True,
+				cwd=target_dir,
+				text=True,
+				capture_output=True,
+			).stdout,
+			target_dir,
+		)
+		for rev in revs
+	]
+
+	patches_dir = _get_patches_dir(name)
+	saved_ids = [
+		_patch_id(patches_dir.joinpath(str(i)).read_text(), target_dir)
+		for i in range(1, conf['patches'] + 1)
+	]
+
+	# Longest common prefix of patch-ids; a None (unhashable commit) stops it.
+	matched = 0
+	for cur, saved in zip(current_ids, saved_ids):
+		if cur is None or cur != saved:
+			break
+		matched += 1
+
+	ahead = len(current_ids) - matched
+	if ahead > 0:
+		raise GitThirdPartyException(
+			f'repo {name} is {ahead} commit(s) ahead of its saved patches '
+			f'( {target_dir} ); run `save` first or reset those commits'
+		)
 
 
 def _update_at(name: str) -> None:
@@ -102,6 +232,7 @@ def _update_at(name: str) -> None:
 		)
 
 	_dirty_check(name)
+	_unsaved_commits_check(name)
 	rs = subprocess.run(
 		[GIT, '-c', 'advice.detachedHead=false', 'checkout', conf['commit']],
 		check=False,
@@ -145,7 +276,7 @@ def _update_at(name: str) -> None:
 	if len(patch_files) != 0:
 		subprocess.run([GIT, 'am', *patch_files], cwd=target_dir, check=True)
 	else:
-		logging.warning(f'no patches detected')
+		logging.warning('no patches detected')
 
 
 class GitThirdPartyException(Exception):
@@ -174,17 +305,16 @@ class AddCommand(Command):
 		if len(args) != 3:
 			print(f'Unexpected arguments {args}', file=sys.stderr)
 			self.show_help(sys.stderr)
-			exit(1)
+			sys.exit(1)
 		path, repo, commit = args
-		import re
 
 		if re.search(r'[\\:;]', path):
 			print(f'bad path `{path}`', file=sys.stderr)
-			exit(1)
+			sys.exit(1)
 		name = _get_path_rel_to_dir(path)
 		if name in config['repos']:
 			print(f'repo ({name}) is already in config', file=sys.stderr)
-			exit(1)
+			sys.exit(1)
 		target_dir = top_dir.joinpath(*name.split('/'))
 		res = subprocess.run([GIT, 'check-ignore', target_dir], check=False)
 		if res.returncode != 0:
@@ -278,31 +408,40 @@ def _save_at(name: str) -> None:
 	conf['patches'] = patches_cnt
 
 
-mode = sys.argv[1] if len(sys.argv) > 1 else 'help'
+def main(argv: list[str] | None = None) -> int:
+	argv = sys.argv[1:] if argv is None else list(argv)
 
-handlers: dict[str, Command] = {}
+	_init_context()
 
-for c in [UpdateCommand, SaveCommand, AddCommand]:
-	handlers[c.name] = c()
+	mode = argv[0] if len(argv) > 0 else 'help'
 
-mode_handler = handlers.get(mode, None)
-if mode_handler is None:
-	print(
-		f'{EXE_NAME} expected one of following subcommands: ' + '|'.join(handlers.keys()),
-		file=sys.stderr,
-	)
-	for k in handlers.values():
-		k.show_help(sys.stderr)
-	exit(1)
+	handlers: dict[str, Command] = {}
 
-try:
-	mode_handler.handle(sys.argv[2:])
-except GitThirdPartyException as e:
-	print(*e.args, file=sys.stderr)
-	exit(1)
+	for c in [UpdateCommand, SaveCommand, AddCommand]:
+		handlers[c.name] = c()
 
-import json
+	mode_handler = handlers.get(mode, None)
+	if mode_handler is None:
+		print(
+			f'{EXE_NAME} expected one of following subcommands: ' + '|'.join(handlers.keys()),
+			file=sys.stderr,
+		)
+		for k in handlers.values():
+			k.show_help(sys.stderr)
+		return 1
 
-with open(CONFIG_PATH, 'wt') as f:
-	json.dump(config, f, indent='\t')
-	f.write('\n')
+	try:
+		mode_handler.handle(argv[1:])
+	except GitThirdPartyException as e:
+		print(*e.args, file=sys.stderr)
+		return 1
+
+	with open(CONFIG_PATH, 'wt') as f:
+		json.dump(config, f, indent='\t')
+		f.write('\n')
+
+	return 0
+
+
+if __name__ == '__main__':  # pragma: no cover
+	sys.exit(main())

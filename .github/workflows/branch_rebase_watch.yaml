@@ -1,0 +1,71 @@
+name: branch / not-rebased watch
+
+# Advisory "your branch is stale" indicator. `initial / behind-check` only runs
+# when the PR is pushed, so a PR that goes behind because the BASE moved stays
+# green until someone ticks Merge and the fast-forward is refused. This watches
+# the other edge.
+#
+# It gates nothing: it posts a red `not rebased` check-run (visible on the PR
+# page) and a red `not rebased` label (the surface visible in the PR list), and
+# clears both once the branch is 0 behind again. The enforcing checks are
+# unchanged — `initial / behind-check` remains the enforcing check.
+#
+# Triggers:
+#   - push to a dev branch -> re-evaluate every open PR targeting it (this is
+#     the case nothing else covers);
+#   - pull_request_target on the PR itself -> clear the flag promptly after a
+#     rebase, and set it on a retarget (`edited` fires on a base change).
+#
+# pull_request_target, not pull_request: posting a check-run and editing labels
+# needs a write-scoped token, which fork PRs do not get. Nothing here checks out
+# or runs PR code — the checkout is the base repo's tree, and the only inputs
+# are a PR number and a branch name.
+
+on:
+  push:
+    branches: ['v*-dev']
+  # Deliberately NOT filtered on `branches`: a `branches` filter would skip the
+  # `edited` event that retargets a flagged PR AWAY from a dev branch, and no
+  # push sweep would ever see that PR again — its stale red flag would stick
+  # forever. The tool decides what a non-dev base means (clear, never set).
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+  issues: write
+
+# Serialise per base branch (push sweeps) or per PR: two overlapping sweeps would
+# race on the same label. Never cancel — a cancelled sweep can leave a PR flagged
+# after it was rebased.
+concurrency:
+  group: rebase-watch-${{ github.event.pull_request.number || github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Flag PRs that are behind their base
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # On a push these are empty, so the tool sweeps every open PR on the
+          # branch that moved; on a PR event it evaluates just that PR.
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event_name == 'push' && github.ref_name || '' }}
+        run: |
+          # `if`, not `[ ... ] && ...`: under `set -e` a false AND-list is the
+          # script's exit status, so the un-taken branch would abort the step.
+          args=()
+          if [ -n "$BASE" ]; then
+            args+=(--base "$BASE")
+          fi
+          ./support/ci/run.sh tool rebase-watch "${args[@]}"

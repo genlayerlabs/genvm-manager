@@ -17,6 +17,9 @@ class Description(typing.NamedTuple):
 	tags: frozenset[str] = frozenset()
 	console_pool: bool = False
 	depends_on: frozenset[str] = frozenset()
+	# How much of the case pool this case occupies. Above one for a case that is
+	# itself a fleet of processes, so the pool bounds threads and not cases
+	permits: int = 1
 
 	def with_tags(self, new_tags: typing.Iterable[str]) -> 'Description':
 		return self._replace(tags=self.tags.union(new_tags))

@@ -1,11 +1,9 @@
-"""`genvm-tool test` — the language-agnostic test runner.
+"""
+`genvm-tool test` — run the test suite.
 
-Everything after `test` is forwarded to the runner under `genvm_tool/tests/`:
-its `run` / `show plan|test|services|tags` subcommands plus the suite-provided
-filter flags. The runner reuses genvm-tool's `Context` (logger/printer) and the
-top-level `-C` / `--log-format` / `--log-level`; the runner package is imported
-lazily so the stdlib-only paths (`configure`, `git ls`, `hook run`,
-`hook install`) never pull in its `aiohttp` / `jsonnet` dependency closure.
+Everything after `test` is forwarded to the test runner, which has its own
+`run` and `show plan|test|services|tags` subcommands plus filter flags. Run
+`genvm-tool test run -h` or `genvm-tool test show -h` for those.
 """
 
 import argparse

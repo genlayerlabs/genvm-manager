@@ -3,4 +3,9 @@
 # is derived from the active executor submodules; everything here is
 # build-independent and lives under version control.
 runners_download_urls:
-  - "https://storage.googleapis.com/gh-af/genvm_runners/{name}/{hash}.tar"
+  - "https://storage.googleapis.com/gh-af/genvm_runners/{name}/{hash}.{ext}"
+# Each executor line is released on its own, in its own repo, tagged with its
+# executor-version — the manager bundle does not carry them. `{version}` is that
+# tag and `{platform}` is the nix-style token (amd64-linux, arm64-macos, ...).
+executor_download_urls:
+  - "https://github.com/genlayerlabs/genvm-executor/releases/download/{version}/genvm-{platform}-executor.tar.xz"

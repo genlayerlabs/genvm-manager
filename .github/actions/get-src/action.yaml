@@ -5,10 +5,6 @@ inputs:
     description: if should setup nix
     required: false
     default: "false"
-  load_submodules:
-    description: if should update submodules
-    required: false
-    default: "true"
   third_party:
     description: third-party modules to install
     required: false
@@ -16,6 +12,29 @@ inputs:
   github_token:
     description: GitHub token for nix setup
     required: false
+  nix_cache_pull_token:
+    description: >-
+      pull token for the GenLayer nix cache, which is private. A composite
+      action cannot read `secrets`, so the caller has to thread it through.
+      Empty leaves whatever credentials the runner already has, and none on a
+      clean runner — every nix build then starts from source.
+    required: false
+    default: ""
+  pr:
+    description: >-
+      PR number to diff against, overriding `github.event.pull_request.number`.
+      A caller invoked by `workflow_dispatch` has no pull_request payload but
+      does know the number, and without this its `changes` output would come
+      back empty — silently checking nothing.
+    required: false
+    default: ""
+outputs:
+  changes:
+    description: >-
+      JSON object mapping each repo (`.` for the manager, submodule path for
+      each executor) to {base_commit, branch_commit, has_changes}. Outside a
+      pull request base_commit == branch_commit and has_changes is false.
+    value: ${{ steps.changes.outputs.changes }}
 runs:
   using: composite
   steps:
@@ -24,23 +43,22 @@ runs:
         cd "$GITHUB_WORKSPACE"
         git config --global user.email "ci@genlayerlabs.com"
         git config --global user.name "CI worker"
-        if [ "${{ inputs.load_submodules }}" == "true" ]
-        then
-          git submodule update --init --recursive --depth 1
-          if [ "${{ inputs.third_party }}" != "none" ]
-          then
-            source env.sh
-            git third-party update ${{ inputs.third_party }}
-          fi
-        fi
-      shell: bash -ex {0}
+        python3 support/scripts/get-all-git.py "--third-party=${{ inputs.third_party }}"
+      shell: bash -exo pipefail {0}
+    - name: compute per-repo changes
+      id: changes
+      shell: bash -exo pipefail {0}
+      env:
+        GITHUB_PR_NUMBER: ${{ inputs.pr || github.event.pull_request.number }}
+        GH_TOKEN: ${{ inputs.github_token }}
+      run: |
+        cd "$GITHUB_WORKSPACE"
+        python3 support/scripts/ci-changes.py --github-output
     - name: setup nix
       if: ${{ inputs.with_nix == 'true' }}
-      uses: cachix/install-nix-action@v31.6.2
+      # Pinned at every call site of these actions, `# <branch>` naming where the
+      # sha came from: a job re-run later has to run the action it first ran.
+      uses: genlayerlabs/github-actions/nix-setup@39b0a0d5e9bb27a1612d2e98b0f8509d31745157 # main
       with:
-        extra_nix_config: |
-          experimental-features = nix-command flakes recursive-nix
-          substituters = https://cache.nixos.org/ https://nix-community.cachix.org https://cache.nix.kp2pml30.moe
-          trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= nix-community.cachix.org-1:mB9FSh9qf2dCimDSUo8Zy7bkq5CX+/rkCWyvRCYg3Fs= cache.nix.kp2pml30.moe:9izVvysdKza7+bjw2gI/etkDVfEQy+kne2aU/TZpA5o=
-        github_access_token: ${{ inputs.github_token }}
-        install_url: https://releases.nixos.org/nix/nix-2.24.14/install
+        github_token: ${{ inputs.github_token }}
+        cache_pull_token: ${{ inputs.nix_cache_pull_token }}

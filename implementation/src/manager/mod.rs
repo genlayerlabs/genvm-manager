@@ -2,20 +2,26 @@ use genvm_common::*;
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
-use warp::Filter;
+use axum::{
+    body::Bytes,
+    extract::rejection::QueryRejection,
+    extract::ws::WebSocketUpgrade,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing::{delete, get, post},
+    Json, Router,
+};
 
 use crate::common;
 
+mod check_install;
 pub mod execution_context;
 mod handlers;
 pub mod modules;
 mod run;
+mod socket;
 mod versioning;
-
-#[derive(Debug)]
-struct AnyhowRejection(anyhow::Error);
-
-impl warp::reject::Reject for AnyhowRejection {}
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct Config {
@@ -23,7 +29,130 @@ pub struct Config {
     pub base: genvm_common::BaseConfig,
     pub manifest_path: String,
 
-    pub permits: Option<usize>,
+    /// Absent or null keeps every default.
+    pub permits: Option<PermitsConfig>,
+    #[serde(default = "default_execution_retention")]
+    pub execution_retention: run::ManagerDuration,
+    #[serde(default = "default_max_message_bytes")]
+    pub max_message_bytes: usize,
+}
+
+/// Concurrency budget, denominated in gigabytes of RAM.
+#[derive(serde::Serialize, serde::Deserialize, Clone, Debug)]
+pub struct PermitsConfig {
+    /// Total pool; null derives it from free memory.
+    #[serde(default)]
+    pub total: Option<usize>,
+    #[serde(default = "default_permits_per_gib")]
+    pub per_gib: PermitsPerGig,
+    #[serde(default = "default_permits_sync")]
+    pub sync: usize,
+    #[serde(default = "default_permits_nondet")]
+    pub nondet: usize,
+}
+
+impl Default for PermitsConfig {
+    fn default() -> Self {
+        Self {
+            total: None,
+            per_gib: default_permits_per_gib(),
+            sync: default_permits_sync(),
+            nondet: default_permits_nondet(),
+        }
+    }
+}
+
+/// Permits handed out per gibibyte of free memory.
+///
+/// A ratio rather than a float: `1/4` is exactly one permit per four gibibytes,
+/// and a config saying so must not depend on how a decimal rounds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PermitsPerGig(num_rational::Ratio<u64>);
+
+impl PermitsPerGig {
+    /// Floors, so a pool is never wider than the memory backing it.
+    pub fn apply(self, gigabytes: usize) -> usize {
+        let scaled = gigabytes as u128 * *self.0.numer() as u128 / *self.0.denom() as u128;
+        scaled.min(usize::MAX as u128) as usize
+    }
+}
+
+impl std::str::FromStr for PermitsPerGig {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self> {
+        let (numer, denom) = match s.split_once('/') {
+            Some((numer, denom)) => (numer.trim(), denom.trim()),
+            None => (s.trim(), "1"),
+        };
+        let numer: u64 = numer
+            .parse()
+            .with_context(|| format!("invalid permits per_gib numerator in {s:?}"))?;
+        let denom: u64 = denom
+            .parse()
+            .with_context(|| format!("invalid permits per_gib denominator in {s:?}"))?;
+        anyhow::ensure!(numer > 0, "permits per_gib must be positive, got {s:?}");
+        anyhow::ensure!(denom > 0, "permits per_gib must not divide by zero");
+
+        Ok(Self(num_rational::Ratio::new(numer, denom)))
+    }
+}
+
+impl std::fmt::Display for PermitsPerGig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.0.numer(), self.0.denom())
+    }
+}
+
+impl serde::Serialize for PermitsPerGig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PermitsPerGig {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        /// `1` and `"1/4"` are both natural spellings in yaml
+        #[derive(serde::Deserialize)]
+        #[serde(untagged)]
+        enum Repr {
+            Integer(u64),
+            Str(String),
+        }
+
+        use std::str::FromStr as _;
+
+        match Repr::deserialize(deserializer)? {
+            Repr::Integer(n) => Self::from_str(&n.to_string()),
+            Repr::Str(s) => Self::from_str(&s),
+        }
+        .map_err(serde::de::Error::custom)
+    }
+}
+
+fn default_permits_per_gib() -> PermitsPerGig {
+    PermitsPerGig(num_rational::Ratio::from_integer(1))
+}
+
+fn default_permits_sync() -> usize {
+    4
+}
+
+fn default_permits_nondet() -> usize {
+    8
+}
+
+fn default_execution_retention() -> run::ManagerDuration {
+    run::ManagerDuration::try_from("5m").expect("default execution_retention is valid")
+}
+
+fn default_max_message_bytes() -> usize {
+    64 * 1024 * 1024
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
@@ -72,8 +201,17 @@ pub struct AppContext {
     pub ver_ctx: versioning::Ctx,
 }
 
+#[derive(clap::Subcommand, Debug)]
+pub enum SubCommand {
+    /// Verify installed executors' runners (and optionally precompile them).
+    CheckInstall(check_install::Args),
+}
+
 #[derive(clap::Args, Debug)]
 pub struct CliArgs {
+    #[command(subcommand)]
+    pub command: Option<SubCommand>,
+
     #[arg(long, default_value_t = 3999)]
     pub port: u16,
     #[arg(long, default_value = "127.0.0.1")]
@@ -93,29 +231,260 @@ pub struct CliArgs {
     pub manifest_path: Option<String>,
 }
 
-fn unwrap_all_anyhow<R: warp::Reply + 'static>(
-    route: impl warp::Filter<Extract = (anyhow::Result<R>,), Error = warp::Rejection>
-        + Clone
-        + Send
-        + Sync
-        + 'static,
-) -> impl warp::Filter<Error = warp::Rejection, Extract: warp::Reply> + Clone + Send + Sync + 'static
-{
-    route
-        .boxed()
-        .and_then(|x: anyhow::Result<R>| async move {
-            x.map_err(|e| warp::reject::custom(AnyhowRejection(e)))
-        })
-        .recover(|err: warp::reject::Rejection| async move {
-            let Some(AnyhowRejection(inner)) = err.find::<AnyhowRejection>() else {
-                return Err(err);
-            };
-            log_error!(err:ah = inner; "internal server error");
-            Ok(warp::reply::with_status(
-                warp::reply::json(&serde_json::json!({"error": format!("{:#}", inner)})),
-                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            ))
-        })
+fn error_response(status: StatusCode, error: impl Into<String>) -> Response {
+    (status, Json(serde_json::json!({"error": error.into()}))).into_response()
+}
+
+fn internal_error(error: anyhow::Error) -> Response {
+    log_error!(err:ah = &error; "internal server error");
+    error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{:#}", error))
+}
+
+/// A malformed body, query or header is the caller's fault: it answers 400 and
+/// stays out of the error log, which is for this process' own failures.
+fn bad_request(error: anyhow::Error) -> Response {
+    log_debug!(err:ah = &error; "bad request");
+    error_response(StatusCode::BAD_REQUEST, format!("{:#}", error))
+}
+
+fn unwrap_all_anyhow<R: IntoResponse>(result: anyhow::Result<R>) -> Response {
+    match result {
+        Ok(response) => response.into_response(),
+        Err(error) => internal_error(error),
+    }
+}
+
+async fn not_found() -> Response {
+    error_response(StatusCode::NOT_FOUND, "Not Found")
+}
+
+/// Parses a json body without requiring a `Content-Type`. warp accepted a body
+/// with the header absent, and clients rely on that.
+fn parse_json_body(body: Bytes) -> anyhow::Result<serde_json::Value> {
+    Ok(serde_json::from_slice(&body)?)
+}
+
+fn parse_query<T>(query: std::result::Result<Query<T>, QueryRejection>) -> anyhow::Result<T> {
+    Ok(query?.0)
+}
+
+fn parse_genvm_id(raw: &str) -> Option<run::GenVMId> {
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    raw.parse::<u64>().ok().map(run::GenVMId)
+}
+
+fn deployment_timestamp(headers: &HeaderMap) -> anyhow::Result<String> {
+    let value = headers
+        .get("Deployment-Timestamp")
+        .ok_or_else(|| anyhow::anyhow!("missing Deployment-Timestamp header"))?;
+    Ok(value.to_str()?.to_owned())
+}
+
+fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
+    // NOTE: when changing routes, also update docs/website/src/impl-spec/appendix/manager-api.yaml
+    Router::new()
+        .route(
+            "/ws",
+            get(
+                |ws: WebSocketUpgrade, State(ctx): State<sync::DArc<AppContext>>| async move {
+                    ws.max_message_size(ctx.config.max_message_bytes)
+                        .on_upgrade(move |socket| socket::handle_connection(socket, ctx))
+                },
+            ),
+        )
+        .route(
+            "/status",
+            get(|State(ctx): State<sync::DArc<AppContext>>| async move {
+                unwrap_all_anyhow(handlers::handle_status(ctx).await)
+            }),
+        )
+        .route(
+            "/module/start",
+            post(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 body: Bytes| async move {
+                    let body = match parse_json_body(body) {
+                        Ok(body) => body,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_module_start(ctx, body).await)
+                },
+            ),
+        )
+        .route(
+            "/module/stop",
+            post(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 body: Bytes| async move {
+                    let body = match parse_json_body(body) {
+                        Ok(body) => body,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_module_stop(ctx, body).await)
+                },
+            ),
+        )
+        .route(
+            "/module/restart",
+            post(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 body: Bytes| async move {
+                    let body = match parse_json_body(body) {
+                        Ok(body) => body,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_module_restart(ctx, body).await)
+                },
+            ),
+        )
+        .route(
+            "/genvm/run",
+            post(
+                |State(ctx): State<sync::DArc<AppContext>>, body: Bytes| async move {
+                    unwrap_all_anyhow(handlers::handle_genvm_run(ctx, &body).await)
+                },
+            ),
+        )
+        .route(
+            "/contract/detect-version",
+            post(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 headers: HeaderMap,
+                 contract_code: Bytes| async move {
+                    let deployment_timestamp = match deployment_timestamp(&headers) {
+                        Ok(deployment_timestamp) => deployment_timestamp,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(
+                        handlers::handle_contract_detect_version(
+                            ctx,
+                            contract_code,
+                            deployment_timestamp,
+                        )
+                        .await,
+                    )
+                },
+            ),
+        )
+        .route(
+            "/log/level",
+            post(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 body: Bytes| async move {
+                    let body = match parse_json_body(body) {
+                        Ok(body) => body,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_set_log_level(ctx, body).await)
+                },
+            ),
+        )
+        .route(
+            "/manifest/reload",
+            post(|State(ctx): State<sync::DArc<AppContext>>| async move {
+                unwrap_all_anyhow(handlers::handle_manifest_reload(ctx).await)
+            }),
+        )
+        .route(
+            "/permits",
+            get(|State(ctx): State<sync::DArc<AppContext>>| async move {
+                unwrap_all_anyhow(handlers::handle_get_permits(ctx).await)
+            })
+            .post(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 body: Bytes| async move {
+                    let body = match parse_json_body(body) {
+                        Ok(body) => body,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_set_permits(ctx, body).await)
+                },
+            ),
+        )
+        .route(
+            "/genvm/{genvm_id}",
+            delete(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 Path(raw_id): Path<String>,
+                 query: std::result::Result<Query<handlers::ShutdownRequest>, QueryRejection>| async move {
+                    let Some(genvm_id) = parse_genvm_id(&raw_id) else {
+                        return not_found().await;
+                    };
+                    let query = match parse_query(query) {
+                        Ok(query) => query,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_genvm_shutdown(ctx, genvm_id, query).await)
+                },
+            )
+            .get(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 Path(raw_id): Path<String>,
+                 query: std::result::Result<Query<handlers::StatusRequest>, QueryRejection>| async move {
+                    let Some(genvm_id) = parse_genvm_id(&raw_id) else {
+                        return not_found().await;
+                    };
+                    let query = match parse_query(query) {
+                        Ok(query) => query,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(
+                        handlers::handle_genvm_status(ctx, genvm_id, query).await,
+                    )
+                },
+            ),
+        )
+        .route(
+            "/genvm/{genvm_id}/artifact",
+            get(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 Path(raw_id): Path<String>,
+                 query: std::result::Result<Query<handlers::ArtifactRequest>, QueryRejection>| async move {
+                    let Some(genvm_id) = parse_genvm_id(&raw_id) else {
+                        return not_found().await;
+                    };
+                    let query = match parse_query(query) {
+                        Ok(query) => query,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_genvm_artifact(ctx, genvm_id, query).await)
+                },
+            ),
+        )
+        .route(
+            "/llm/check",
+            post(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 body: Bytes| async move {
+                    let body = match parse_json_body(body) {
+                        Ok(body) => body,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_llm_check(ctx, body).await)
+                },
+            ),
+        )
+        .route(
+            "/vm-error/describe",
+            get(
+                |State(ctx): State<sync::DArc<AppContext>>,
+                 query: std::result::Result<Query<handlers::DescribeVmErrorRequest>, QueryRejection>| async move {
+                    let query = match parse_query(query) {
+                        Ok(query) => query,
+                        Err(error) => return bad_request(error),
+                    };
+                    unwrap_all_anyhow(handlers::handle_describe_vm_error(ctx, query).await)
+                },
+            ),
+        )
+        .fallback(not_found)
+        .method_not_allowed_fallback(not_found)
+        // Contract code and calldata routinely exceed the default cap, and an
+        // exceeded cap answers with a plain-text 413 rather than our error shape.
+        .layer(axum::extract::DefaultBodyLimit::disable())
+        .with_state(app_ctx)
 }
 
 async fn run_http_server(
@@ -133,217 +502,18 @@ async fn run_http_server(
 
     run::start_service(app_ctx.gep(|x| &x.run_ctx), cancel.clone()).await?;
 
-    let ctx = app_ctx.clone();
-    let status_route = unwrap_all_anyhow(warp::path("status").and(warp::get()).then(move || {
-        let ctx = ctx.clone();
-        async move { handlers::handle_status(ctx).await }
-    }));
-
-    let ctx = app_ctx.clone();
-    let start_route = unwrap_all_anyhow(
-        warp::path!("module" / "start")
-            .and(warp::post())
-            .and(warp::body::json())
-            .then(move |calldata| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_module_start(ctx, calldata).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let stop_route = unwrap_all_anyhow(
-        warp::path!("module" / "stop")
-            .and(warp::post())
-            .and(warp::body::json())
-            .then(move |calldata| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_module_stop(ctx, calldata).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let restart_route = unwrap_all_anyhow(
-        warp::path!("module" / "restart")
-            .and(warp::post())
-            .and(warp::body::json())
-            .then(move |calldata| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_module_restart(ctx, calldata).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let genvm_run_route = unwrap_all_anyhow(
-        warp::path!("genvm" / "run")
-            .and(warp::post())
-            .and(warp::body::bytes())
-            .then(move |data: bytes::Bytes| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_genvm_run(ctx, &data).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let contract_detect_version_route = unwrap_all_anyhow(
-        warp::path!("contract" / "detect-version")
-            .and(warp::post())
-            .and(warp::body::bytes())
-            .and(warp::header::<String>("Deployment-Timestamp"))
-            .then(move |contract_code, deployment_timestamp| {
-                let ctx = ctx.clone();
-                async move {
-                    handlers::handle_contract_detect_version(
-                        ctx,
-                        contract_code,
-                        deployment_timestamp,
-                    )
-                    .await
-                }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let set_log_level_route = unwrap_all_anyhow(
-        warp::path!("log" / "level")
-            .and(warp::post())
-            .and(warp::body::json())
-            .then(move |data| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_set_log_level(ctx, data).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let manifest_reload_route = unwrap_all_anyhow(
-        warp::path!("manifest" / "reload")
-            .and(warp::post())
-            .then(move || {
-                let ctx = ctx.clone();
-                async move { handlers::handle_manifest_reload(ctx).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let set_env_route = unwrap_all_anyhow(
-        warp::path("env")
-            .and(warp::post())
-            .and(warp::body::json())
-            .then(move |data| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_set_env(ctx, data).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let get_permits_route =
-        unwrap_all_anyhow(warp::path("permits").and(warp::get()).then(move || {
-            let ctx = ctx.clone();
-            async move { handlers::handle_get_permits(ctx).await }
-        }));
-
-    let ctx = app_ctx.clone();
-    let set_permits_route = unwrap_all_anyhow(
-        warp::path("permits")
-            .and(warp::post())
-            .and(warp::body::json())
-            .then(move |data| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_set_permits(ctx, data).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let genvm_shutdown_route = unwrap_all_anyhow(
-        warp::path!("genvm" / u64)
-            .and(warp::delete())
-            .and(warp::query::<handlers::ShutdownRequest>())
-            .then(move |genvm_id, shutdown_req| {
-                let ctx = ctx.clone();
-                async move {
-                    handlers::handle_genvm_shutdown(ctx, run::GenVMId(genvm_id), shutdown_req).await
-                }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let genvm_status_route = unwrap_all_anyhow(warp::path!("genvm" / u64).and(warp::get()).then(
-        move |genvm_id| {
-            let ctx = ctx.clone();
-            async move { handlers::handle_genvm_status(ctx, run::GenVMId(genvm_id)).await }
-        },
-    ));
-
-    let ctx = app_ctx.clone();
-    let llm_check_route = unwrap_all_anyhow(
-        warp::path!("llm" / "check")
-            .and(warp::post())
-            .and(warp::body::json())
-            .then(move |data| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_llm_check(ctx, data).await }
-            }),
-    );
-
-    let ctx = app_ctx.clone();
-    let describe_vm_error_route = unwrap_all_anyhow(
-        warp::path!("vm-error" / "describe")
-            .and(warp::get())
-            .and(warp::query::<handlers::DescribeVmErrorRequest>())
-            .then(move |query| {
-                let ctx = ctx.clone();
-                async move { handlers::handle_describe_vm_error(ctx, query).await }
-            }),
-    );
-
-    // NOTE: when changing routes, also update doc/website/src/impl-spec/appendix/manager-api.yaml
-    let routes = status_route
-        .or(start_route)
-        .or(stop_route)
-        .or(restart_route)
-        .or(genvm_run_route)
-        .or(contract_detect_version_route)
-        .or(set_log_level_route)
-        .or(manifest_reload_route)
-        .or(set_env_route)
-        .or(get_permits_route)
-        .or(set_permits_route)
-        .or(genvm_shutdown_route)
-        .or(genvm_status_route)
-        .or(llm_check_route)
-        .or(describe_vm_error_route);
-
-    let routes = routes.recover(|err: warp::reject::Rejection| async move {
-        if err.is_not_found() {
-            Ok::<_, std::convert::Infallible>(warp::reply::with_status(
-                warp::reply::json(&serde_json::json!({"error": "Not Found"})),
-                warp::http::StatusCode::NOT_FOUND,
-            ))
-        } else {
-            let err_format = format!("{:?}", err);
-            Ok(warp::reply::with_status(
-                warp::reply::json(&serde_json::json!({"error": err_format})),
-                warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-            ))
-        }
-    });
+    let routes = create_router(app_ctx);
 
     let cancellation = cancel.clone();
 
     if let Some(socket_path) = &args.socket {
-        // Unix socket mode
-        use hyper::server::accept::Accept;
-        use std::pin::Pin;
-        use std::task::{Context, Poll};
-
         let path = std::path::Path::new(socket_path);
 
-        // Clean up stale socket file
         if path.exists() {
             std::fs::remove_file(path)
                 .with_context(|| format!("removing stale socket {}", path.display()))?;
         }
 
-        // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() && !parent.exists() {
                 std::fs::create_dir_all(parent)?;
@@ -355,36 +525,9 @@ async fn run_http_server(
 
         log_info!(socket_path:? = path; "HTTP server started on Unix socket");
 
-        // Custom Accept implementation for UnixListener
-        struct UnixAcceptor(tokio::net::UnixListener);
-
-        impl Accept for UnixAcceptor {
-            type Conn = tokio::net::UnixStream;
-            type Error = std::io::Error;
-
-            fn poll_accept(
-                self: Pin<&mut Self>,
-                cx: &mut Context<'_>,
-            ) -> Poll<Option<Result<Self::Conn, Self::Error>>> {
-                match self.get_mut().0.poll_accept(cx) {
-                    Poll::Ready(Ok((stream, _addr))) => Poll::Ready(Some(Ok(stream))),
-                    Poll::Ready(Err(e)) => Poll::Ready(Some(Err(e))),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-
-        let warp_svc = warp::service(routes);
-        let make_svc = hyper::service::make_service_fn(move |_| {
-            let svc = warp_svc.clone();
-            async move { Ok::<_, std::convert::Infallible>(svc) }
-        });
-
-        let server = hyper::Server::builder(UnixAcceptor(listener))
-            .serve(make_svc)
+        let server = axum::serve(listener, routes)
             .with_graceful_shutdown(async move { cancellation.chan.closed().await });
 
-        // Cleanup socket on shutdown
         let cleanup_path = path.to_owned();
         let result = server.await;
         let _ = std::fs::remove_file(&cleanup_path);
@@ -392,15 +535,16 @@ async fn run_http_server(
         log_info!(socket_path:? = cleanup_path; "HTTP server stopped");
         result?;
     } else {
-        // TCP mode (existing behavior)
-        let serv = warp::serve(routes);
-        let (addr, fut) = serv.bind_with_graceful_shutdown(
-            (args.host.parse::<std::net::IpAddr>()?, args.port),
-            async move { cancellation.chan.closed().await },
-        );
+        let addr = std::net::SocketAddr::new(args.host.parse()?, args.port);
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .with_context(|| format!("binding to tcp address {}", addr))?;
+        let addr = listener.local_addr()?;
 
         log_info!(address:? = addr; "HTTP server started");
-        fut.await;
+        axum::serve(listener, routes)
+            .with_graceful_shutdown(async move { cancellation.chan.closed().await })
+            .await?;
         log_info!(address:? = addr; "HTTP server stopped");
     }
 
@@ -416,6 +560,10 @@ async fn main_loop(
 }
 
 pub fn entrypoint(args: CliArgs) -> Result<()> {
+    if let Some(SubCommand::CheckInstall(ci)) = &args.command {
+        return check_install::run(&args, ci);
+    }
+
     let config = genvm_common::load_config(HashMap::new(), &args.config)
         .with_context(|| "loading config")?;
     let mut config: Config = serde_yaml::from_value(config)?;

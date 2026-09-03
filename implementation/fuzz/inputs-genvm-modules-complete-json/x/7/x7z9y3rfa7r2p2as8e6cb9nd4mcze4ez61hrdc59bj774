@@ -1,0 +1,17 @@
+{
+    "bbbbbbbbaz\tfoo": [
+        "bar",
+        "baz\n\\z",
+        123,
+        -123,
+        -1e10,
+  null,
+        true,
+        false,
+        [1, 2, 3]
+    ],
+    "bar": [
+        "русск116111111111111111e-111111\uabbbbb",
+        "mbbrbbbbbbbbbbbaz\t\\uabbbbb"
+    ]
+}

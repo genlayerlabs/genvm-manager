@@ -1,22 +1,27 @@
 indent-width = 2
 
-exclude = [
-    "executors/**"
-]
+exclude = ["executors/**", "libs/unhardcoded-engine"]
 
 [format]
 indent-style = "tab"
-quote-style = "single"
 line-ending = "lf"
+quote-style = "single"
 
-skip-magic-trailing-comma = false
 docstring-code-format = true
+skip-magic-trailing-comma = false
 
 [lint]
-ignore = [
-    "E741"
-]
+ignore = ["E741"]
+
+[lint.per-file-ignores]
+# contract assets: the v0.2 sdk is used through a star import
+"tests/system/**/assets/**" = ["F403", "F405"]
 
 extend-select = [
-    "I"
+    "E9",
+    "F",
+    "ASYNC",
+    "RUF006",
+    "D213", # docstring summary on next line
+    "I", # sort imports
 ]

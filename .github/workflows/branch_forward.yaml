@@ -29,11 +29,12 @@ concurrency:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   forward:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -46,14 +47,17 @@ jobs:
       - name: Fast-forward main to latest dev branch
         run: |
           BRANCH="${GITHUB_REF_NAME}"
-          # Decide "latest" from main's active-versions (the authoritative
-          # alias), NOT the pushed branch's own copy — an older dev
-          # branch carries a stale active-versions and would otherwise try
-          # to drag main backwards once a newer train exists.
-          git show origin/main:.genvm-monorepo-root > /tmp/main-monorepo-root.json
-          LATEST="$(MONOREPO_ROOT=/tmp/main-monorepo-root.json python3 support/ci/branch-versions.py latest)"
-          if [ "$BRANCH" != "v${LATEST}-dev" ]; then
-            echo "Pushed branch ${BRANCH} is not the latest dev branch (v${LATEST}-dev); nothing to do"
+          # Decide the current manager train from main's `version` field (the
+          # authoritative alias), NOT the pushed branch's own copy — an older
+          # dev branch carries a stale version and would otherwise try to drag
+          # main backwards once a newer train exists.
+          # $RUNNER_TEMP, not /tmp: the runner wipes it between jobs, so nothing
+          # is left behind on a self-hosted box.
+          root_json="${RUNNER_TEMP}/main-monorepo-root.json"
+          git show origin/main:.genvm-monorepo-root > "$root_json"
+          MANAGER="$(MONOREPO_ROOT="$root_json" ./support/ci/run.sh tool branch-versions manager)"
+          if [ "$BRANCH" != "v${MANAGER}-dev" ]; then
+            echo "Pushed branch ${BRANCH} is not the latest dev branch (v${MANAGER}-dev); nothing to do"
             exit 0
           fi
           echo "Fast-forwarding main to ${GITHUB_SHA} (from ${BRANCH})"

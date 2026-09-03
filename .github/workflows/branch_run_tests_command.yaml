@@ -1,0 +1,74 @@
+name: branch / run full tests command
+
+# `/genvm-run-tests` is the one-shot counterpart to the sticky
+# `run-full-tests` label. The command starts full CI for the PR's exact head,
+# links the run in a bot comment, and reflects completion on the command with a
+# native GitHub reaction. This is manager-owned CI; it does not call the E2E App.
+
+on:
+  issue_comment:
+    types: [created]
+  workflow_run:
+    workflows: [GenVM full]
+    types: [completed]
+
+permissions: {}
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  start:
+    if: >-
+      github.event_name == 'issue_comment' &&
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/genvm-run-tests' &&
+      contains(github.event.issue.labels.*.name, 'ci-safe')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      # issue_comment workflows run from the default branch. Keep that trusted
+      # checkout: this handler dispatches PR code with credentials in scope
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Dispatch full tests
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SENDER: ${{ github.event.sender.login }}
+          REQUEST_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: ./support/ci/run.sh tool full-tests-command start
+
+  complete:
+    if: >-
+      github.event_name == 'workflow_run' &&
+      contains(github.event.workflow_run.display_title, '[request=')
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # workflow_run also resolves this workflow from the default branch. Never
+      # check out or execute the completed run's potentially PR-authored tree
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Report full-test result
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NAME: ${{ github.event.workflow_run.display_title }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        run: ./support/ci/run.sh tool full-tests-command complete

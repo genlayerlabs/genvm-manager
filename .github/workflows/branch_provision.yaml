@@ -1,11 +1,10 @@
 name: branch / provision dev branches and standing PRs
 
-# Materialize the branch model for every active version train listed in
-# .genvm-monorepo-root. For each version X it ensures the version branch
-# v<X>.x, the dev branch v<X>-dev, and a standing release-gate PR
-# v<X>-dev -> v<X>.x all exist (see support/ci/provision-branches.sh).
+# Materialize the manager train declared by .genvm-monorepo-root: the release
+# branch v<X>, the dev branch v<X>-dev, and the standing release-gate PR
+# v<X>-dev -> v<X> (see support/ci/run.sh tool provision-branches).
 #
-# Idempotent — safe to re-run. Fires automatically when active-versions
+# Idempotent — safe to re-run. Fires automatically when the train declaration
 # changes, and on demand via the Actions tab.
 
 on:
@@ -20,11 +19,12 @@ permissions:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   provision:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,4 +37,4 @@ jobs:
       - name: Provision branches and standing PRs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: support/ci/provision-branches.sh
+        run: ./support/ci/run.sh tool provision-branches

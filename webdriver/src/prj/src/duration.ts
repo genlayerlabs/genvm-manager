@@ -54,6 +54,56 @@ export function formatDurationMs(ms: number): string {
 	return `${(ms / 3600000).toFixed(1)}h`;
 }
 
+const SIZE_UNITS: Record<string, number> = {
+	b: 1,
+	kb: 1000,
+	mb: 1000 ** 2,
+	gb: 1000 ** 3,
+	kib: 1024,
+	mib: 1024 ** 2,
+	gib: 1024 ** 3,
+};
+
+/**
+ * Parse a size string with optional suffix: "512", "32KB", "5MiB", "1GB".
+ * Decimal suffixes are powers of 1000, `i` ones powers of 1024, matching what
+ * the units mean everywhere else. Plain numbers are treated as octets.
+ * Returns the value in octets, or `dflt` if the input is empty/undefined.
+ */
+export function parseSize<D = number>(
+	input: string | undefined,
+	dflt: D,
+): number | D {
+	if (input === undefined || input === '') {
+		return dflt;
+	}
+	const match = input.trim().match(/^(\d+(?:\.\d+)?)\s*([a-zA-Z]+)?$/);
+	if (!match || !match[1]) {
+		throw new Error(`invalid size: "${input}"`);
+	}
+	const multiplier = SIZE_UNITS[(match[2] ?? 'b').toLowerCase()];
+	if (multiplier === undefined) {
+		throw new Error(`invalid size suffix: "${match[2]}"`);
+	}
+	return Math.floor(parseFloat(match[1]) * multiplier);
+}
+
+/**
+ * A size limit below one octet rejects everything it is supposed to bound, so
+ * it fails at startup rather than silently disabling what it guards.
+ */
+export function envSize(envName: string, dflt: number | string): number {
+	const raw = process.env[envName];
+	const parsed = parseSize(raw, dflt);
+	const value =
+		typeof parsed === 'string' ? parseSize(parsed, undefined) : parsed;
+	if (value === undefined || value < 1) {
+		throw new Error(`env ${envName} must be a positive size, got "${raw}"`);
+	}
+	logger.log('info', 'env', { name: envName, raw: raw ?? null, value, dflt });
+	return value;
+}
+
 export function envInt(envName: string, defaultValue: number): number {
 	const raw = process.env[envName];
 	const value = raw !== undefined && raw !== '' ? parseInt(raw, 10) : NaN;
@@ -65,6 +115,21 @@ export function envInt(envName: string, defaultValue: number): number {
 		default: defaultValue,
 	});
 	return result;
+}
+
+/**
+ * Like `envInt`, but for limits where a non-positive value is nonsense rather
+ * than merely unusual — a zero response cap, for instance, would reject every
+ * page. Fails at startup instead of silently disabling the feature.
+ */
+export function envPositiveInt(envName: string, defaultValue: number): number {
+	const value = envInt(envName, defaultValue);
+	if (!Number.isInteger(value) || value < 1) {
+		throw new Error(
+			`env ${envName} must be a positive integer, got "${process.env[envName]}"`,
+		);
+	}
+	return value;
 }
 
 export function envStr(envName: string, defaultValue: string): string {

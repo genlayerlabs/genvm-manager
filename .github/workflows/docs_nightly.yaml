@@ -1,0 +1,98 @@
+name: docs / nightly deploy
+
+# Builds the docs site and publishes it to the sdk.genlayer.com Pages repo,
+# which serves one directory per version out of `_site/` and lists them in
+# `_site/versions.json` (the switcher every page links to). Nightly runs
+# refresh `main`; `workflow_dispatch` can publish any other directory, which is
+# how a release train (`v0.6.x`) gets its own copy.
+#
+# GitHub only schedules workflows from the DEFAULT branch, so this file has to
+# reach it before the cron fires — merging it into a dev branch is not enough.
+#
+# Needs the `DOCS_DEPLOY_KEY` secret: a deploy key with write access to
+# genlayerlabs/sdk.genlayer.com. Pushing there triggers that repo's own
+# deploy-pages workflow, which is what actually publishes and purges the CDN.
+
+on:
+  schedule:
+    # 03:17 UTC — off the hour, where scheduling backlogs are smaller.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "directory to publish under (e.g. main, v0.6.x)"
+        required: false
+        default: main
+      preferred:
+        description: "make it the version the switcher highlights"
+        type: boolean
+        required: false
+        default: false
+
+# Two runs pushing to the site repo would race on the same branch; the loser
+# would just fail, so serialize rather than cancel (a half-finished deploy is
+# worse than a slow one).
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  SITE_REPO: genlayerlabs/sdk.genlayer.com
+  DOCS_VERSION: ${{ inputs.version || 'main' }}
+
+# GitHub's stock `bash -e {0}` has no `pipefail`.
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      # The docs build spans the manager and every active executor line, each
+      # in its own `gen-docs` nix shell, so it needs submodules and nix.
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
+
+      - name: Build docs
+        run: ./support/ci/run.sh pipeline docs
+
+      - name: Checkout the site repo
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SITE_REPO }}
+          path: build/site
+          ssh-key: ${{ secrets.DOCS_DEPLOY_KEY }}
+
+      - name: Stage the built docs
+        run: |
+          ./support/ci/run.sh tool deploy-docs \
+            --site build/site \
+            --version "$DOCS_VERSION" \
+            ${{ inputs.preferred && '--preferred' || '' }}
+
+      # An unchanged nightly must not push an empty commit: the site repo's
+      # deploy workflow runs on every push, so that would redeploy and purge the
+      # CDN for nothing.
+      - name: Commit and push
+        working-directory: build/site
+        run: |
+          git config user.email "ci@genlayerlabs.com"
+          git config user.name "CI worker"
+          git add -A _site
+          if git diff --cached --quiet; then
+            echo "docs are unchanged; nothing to deploy"
+            exit 0
+          fi
+          git commit -m "Deploy documentation version $DOCS_VERSION"
+          git push origin HEAD

@@ -6,30 +6,44 @@ It uses the same MockHost/base_host infrastructure as the old runner.
 """
 
 import base64
+import contextlib
 import difflib
 import gzip
-import io
+import hashlib
 import itertools
 import json
 import os
 import pickle
 import re
 import shutil
+import sqlite3
 import sys
+import threading
+import time
 import typing
 from dataclasses import dataclass
 from pathlib import Path
 
+import genvm_tool.gvm32
+import genvm_tool.io as gvm_io
 import genvm_tool.tests
+import genvm_tool_plugins.runners as runners
+import gvm_extra.case_inputs as case_inputs
 import origin.base_host as base_host
 import origin.calldata as gvm_calldata
 import origin.fees as fees
+import origin.host_fns as host_fns
+import origin.log_asserts as log_asserts
 import origin.logger as origin_logger
 import origin.public_abi as public_abi
 from genvm_tool.tests.exec.command import Command, RunMode
 from gvm_extra.mock_host import MockHost as MockHost
 from gvm_extra.mock_host import MockStorage as MockStorage
 from origin.calldata import Address
+from origin.leader_public_data import LeaderPublicData
+
+if typing.TYPE_CHECKING:
+	import _jsonnet
 
 # Get the local context
 local_ctx = genvm_tool.tests.stage.configuration.current_context()
@@ -40,13 +54,12 @@ build_info = json.loads(
 )
 
 BUILD_DIR = Path(build_info['build_dir'])
-TARGET_DIR = Path(build_info['rust_target_dir'])
 
 local_ctx.run_parser.add_argument(
 	'--ignore-hash',
 	action='store_true',
 	default=False,
-	help='Ignore .hash files entirely (skip hash comparison and do not write missing ones)',
+	help='Skip the committed .hash golden sidecars (no comparison, no creation). Leader-vs-validator/sync comparison still runs.',
 )
 
 
@@ -54,14 +67,14 @@ def _is_ignore_hash_enabled() -> bool:
 	return '--ignore-hash' in sys.argv
 
 
-# Integration cases live in the executor checkout (per-version, per-branch).
-# The active executor version line is mounted as a submodule at executors/v0.3.x.
-# TODO(multi-version): iterate over executors/* once several minors coexist.
-# The test harness (templates, runner) is version-independent and lives in the
-# manager root.
-EXEC_SUBDIR = 'executors/v0.3.x'
-CASES_DIR = local_ctx.shared.root_dir.joinpath(EXEC_SUBDIR, 'tests', 'integration')
+# Integration cases live per-version in each executor checkout
+# (executors/<line>.x/tests/integration). `integration_test` iterates the active
+# version lines from .genvm-monorepo-root and runs each line's suite against that
+# line's own executor (see `integration_test_single_executor`, which resolves the
+# line's cases dir and reroute target). The harness itself (templates, runner) is
+# version-independent and lives in the manager root.
 TEMPLATES_DIR = local_ctx.shared.root_dir.joinpath('tests', 'templates')
+
 
 # Default environment for tests
 default_env = {
@@ -96,6 +109,82 @@ class _SavedLog(typing.TypedDict):
 	kwargs: dict
 
 
+_SHORT_TEXT_LIMIT = 2000
+_SHORT_LIST_LIMIT = 12
+_NOISY_CONTEXT_KEYS = frozenset(
+	{
+		'exp',
+		'got',
+		'genvm_log',
+		'log',
+		'logs',
+		'semantics',
+		'stderr',
+		'stdout',
+	}
+)
+
+
+def _shorten_text(value: str, limit: int = _SHORT_TEXT_LIMIT) -> str:
+	if len(value) <= limit:
+		return value
+	omitted = len(value) - limit
+	return f'<truncated {omitted} chars>\n{value[-limit:]}'
+
+
+def _shorten_value(value: typing.Any) -> typing.Any:
+	if isinstance(value, str):
+		return _shorten_text(value)
+	if isinstance(value, bytes):
+		if len(value) <= _SHORT_TEXT_LIMIT:
+			return value
+		return value[:_SHORT_TEXT_LIMIT] + b'<truncated>'
+	if isinstance(value, BaseException):
+		return {
+			'type': value.__class__.__name__,
+			'message': str(value),
+		}
+	if isinstance(value, list):
+		if len(value) <= _SHORT_LIST_LIMIT:
+			return value
+		return [
+			*value[:_SHORT_LIST_LIMIT],
+			f'<truncated {len(value) - _SHORT_LIST_LIMIT} items>',
+		]
+	return value
+
+
+def _short_failure_context(
+	context: dict[str, typing.Any], artifacts_dir: Path | None = None, *, ci: bool
+) -> dict[str, typing.Any]:
+	if ci:
+		return context
+
+	short = {
+		k: _shorten_value(v) for k, v in context.items() if k not in _NOISY_CONTEXT_KEYS
+	}
+	for key in ('stderr', 'stdout'):
+		if key in context and context[key]:
+			short[f'{key}_tail'] = _shorten_value(context[key])
+	if 'logs' in context:
+		short['log_count'] = len(context['logs'])
+	if 'genvm_log' in context:
+		short['genvm_log_count'] = len(context['genvm_log'])
+	if artifacts_dir is not None:
+		short['artifacts_dir'] = str(artifacts_dir)
+	short['hint'] = 'run with --ci for full inline failure context'
+	return short
+
+
+def _emit_ci_error_annotation(jsonnet_path: Path, reason: str) -> None:
+	"""Write a GitHub Actions error annotation directly to stdout."""
+	# GitHub Actions command parsing uses percent-encoded newlines and carriage
+	# returns inside the annotation body.
+	reason = reason.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+	sys.stdout.write(f'::error file={jsonnet_path}::Test failed {reason}\n')
+	sys.stdout.flush()
+
+
 def _make_log_adapter(formatter: genvm_tool.tests.Formatter) -> 'origin_logger.Logger':
 	class _FormatterLoggerAdapter(origin_logger.Logger):
 		"""Adapts genvm_tool.formatter.Formatter to base_host.Logger interface."""
@@ -127,12 +216,25 @@ def _make_log_adapter(formatter: genvm_tool.tests.Formatter) -> 'origin_logger.L
 def _unfold_conf(x: typing.Any, vars: dict[str, str]) -> typing.Any:
 	"""Recursively substitute variables in configuration."""
 	if isinstance(x, str):
-		return re.sub(r'\$\{[a-zA-Z\-_]+\}', lambda m: vars[m.group()[2:-1]], x)
+		return re.sub(r'\$\{[a-zA-Z0-9\-_]+\}', lambda m: vars[m.group()[2:-1]], x)
 	if isinstance(x, list):
 		return [_unfold_conf(item, vars) for item in x]
 	if isinstance(x, dict):
 		return {k: _unfold_conf(v, vars) for k, v in x.items()}
 	return x
+
+
+def _routing_payload(route: int | str) -> bytes:
+	"""
+	Where a host places a callee: a major, or a version naming a line.
+
+	A major is resolved by the manifest's rules, which cannot separate the live
+	lines while every one of them is semver major 0 — a version string is what
+	names one of those.
+	"""
+	if isinstance(route, str):
+		return gvm_calldata.encode({'kind': 'version', 'version': route})
+	return gvm_calldata.encode({'kind': 'major', 'major': route})
 
 
 def _flatten_tree(
@@ -156,7 +258,18 @@ def _flatten_tree(
 	return result
 
 
-_TOP_LEVEL_METADATA_KEYS = frozenset({'entry', 'tags'})
+_TOP_LEVEL_METADATA_KEYS = frozenset({'entry', 'tags', 'debug_mode'})
+
+# Ordered as in `genvm_common::DebugMode`; each level adds to the previous one.
+# `unsafe` is what every case has always run with: contracts name their runner
+# as `py-genlayer:test`, and that alias only resolves from `unsafe` up.
+_DEBUG_MODES = ('disabled', 'safe', 'safe-unbounded', 'unsafe', 'unsafe-tracing')
+_DEBUG_MODE_DEFAULT = 'unsafe'
+_PHASE_TAG_BY_MODE = {
+	'l': 'phase-leader',
+	'v': 'phase-validator',
+	's': 'phase-sync',
+}
 
 
 @dataclass
@@ -167,6 +280,7 @@ class IntegrationPrepareCase(genvm_tool.tests.test.Case):
 	jsonnet_path: Path
 	top_level_conf: dict
 	tmp_dir: Path
+	ci: bool
 
 	hidden: bool = True
 
@@ -180,6 +294,8 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 
 	description: genvm_tool.tests.test.Description
 	jsonnet_path: Path
+	cases_dir: Path
+	reroute_to: str
 	manager_service: genvm_tool.tests.stage.collection.Service
 	tree_path: str
 	parent_tree_path: str | None
@@ -187,7 +303,10 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 	total_steps: int
 	tmp_dir: Path
 	max_attempts: int
+	debug_mode: str = _DEBUG_MODE_DEFAULT
+	save_hashes: bool = True
 	is_benchmark: bool = False
+	ci: bool = False
 
 	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
 		step = IntegrationSingleStep(self)
@@ -282,16 +401,26 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 			)
 			result = await cmd.run(local_ctx.shared, mode=RunMode.SILENT)
 			if result.exit_code != 0:
+				context = _short_failure_context(
+					{
+						'reason': 'prepare script failed',
+						'exit_code': result.exit_code,
+						'stdout': result.stdout,
+						'stderr': result.stderr,
+						'log': result.stderr,
+					},
+					tmp_dir,
+					ci=self._case.ci,
+				)
+				if self._case.ci:
+					_emit_ci_error_annotation(
+						self._case.jsonnet_path,
+						str(context.get('reason', 'prepare script failed')),
+					)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
-						context={
-							'reason': 'prepare script failed',
-							'exit_code': result.exit_code,
-							'stdout': result.stdout,
-							'stderr': result.stderr,
-							'log': result.stderr,
-						},
+						context=context,
 						elapsed_seconds=0,
 					)
 				)
@@ -299,7 +428,7 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 		# Set up base storage
 		base_mock_storage = MockStorage()
 		if storage_json := top_level_conf.get('storage_json'):
-			storage_b64 = json.loads(Path(storage_json).read_text())
+			storage_b64 = json.loads(await gvm_io.read_file_text(Path(storage_json)))
 			base_mock_storage._storages = {
 				Address(a): {
 					base64.b64decode(k): bytearray(base64.b64decode(v)) for k, v in kv.items()
@@ -308,8 +437,7 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 			}
 
 		empty_storage = tmp_dir.joinpath('empty-storage.pickle')
-		with open(empty_storage, 'wb') as f:
-			pickle.dump(base_mock_storage, f)
+		await gvm_io.write_file_bytes(empty_storage, pickle.dumps(base_mock_storage))
 
 		return genvm_tool.tests.test.Result(
 			passed=True,
@@ -344,15 +472,6 @@ def _get_diffs[T](exp: T, got: T, dump: typing.Callable[[T], str]) -> dict | Non
 	}
 
 
-def _calldata_to_fancy_str(calldata: bytes) -> str:
-	cd = gvm_calldata.decode(calldata)
-	buf = io.StringIO()
-	genvm_tool.formatter.TextFormatter(genvm_tool.formatter.NoLockTextIO(buf)).dump(
-		genvm_tool.formatter.Formatter.Level.ERROR, 'calldata', calldata=cd
-	)
-	return buf.getvalue()
-
-
 class Context(base_host.Context):
 	logger: base_host.Logger
 
@@ -365,12 +484,8 @@ class Context(base_host.Context):
 	def add_stat(self, key: str, value: typing.Any):
 		self.logger.debug('stat', key=key, val=value)
 
-	def get_timeout(
-		self, action: base_host.TimeoutAction, type: base_host.TimeoutType
-	) -> float | None:
-		if type == base_host.TimeoutType.CONNECT_S:
-			return 5.0
-		return None
+	def get_manager_connect_timeout(self) -> float | None:
+		return 5.0
 
 
 class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
@@ -384,6 +499,9 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		self._total_steps = case.total_steps
 		self._tmp_dir = case.tmp_dir
 		self._max_attempts = case.max_attempts
+		self._debug_mode = case.debug_mode
+		self._save_hashes = case.save_hashes
+		self._ci = case.ci
 
 	def to_str(self) -> str:
 		return f'<step {self._tree_path}: {self._test_case.jsonnet_path.name}>'
@@ -392,6 +510,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		self, previous_results: list[typing.Any]
 	) -> genvm_tool.tests.test.Result:
 		empty_storage = self._tmp_dir.joinpath('empty-storage.pickle')
+		jsonnet_path = self._test_case.jsonnet_path
 
 		for attempt in range(self._max_attempts):
 			sub_logger = _make_log_adapter(local_ctx.shared.logger)
@@ -407,6 +526,16 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				# Raise FinishedEarlyException to stop subsequent steps
 				context = result.get('context', {})
 				context['logs'] = sub_logger.saved_logs
+				context = _short_failure_context(
+					context,
+					self._tmp_dir.joinpath(self._tree_path),
+					ci=self._ci,
+				)
+				if self._ci:
+					_emit_ci_error_annotation(
+						jsonnet_path,
+						str(context.get('reason', 'unknown error')),
+					)
 				raise genvm_tool.tests.test.FinishedEarlyException(
 					result=genvm_tool.tests.test.Result(
 						passed=False,
@@ -421,7 +550,11 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				max_attempts=self._max_attempts,
 				test_name=str(self._test_case.description.name),
 				tree_path=self._tree_path,
-				context=result.get('context', {}),
+				context=_short_failure_context(
+					result.get('context', {}),
+					self._tmp_dir.joinpath(self._tree_path),
+					ci=self._ci,
+				),
 			)
 
 		# Should not reach here
@@ -453,18 +586,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		my_tmp_dir.joinpath('config.json').write_text(config_str)
 
 		# Prepare calldata
-		calldata_eval_vars = {}
-		calldata_eval_vars['Address'] = gvm_calldata.Address
-		calldata_eval_vars['true'] = True
-		calldata_eval_vars['false'] = False
-
-		calldata_bytes = gvm_calldata.encode(
-			eval(
-				single_conf['calldata'],
-				calldata_eval_vars,
-				single_conf.get('vars', {}).copy(),
-			)
-		)
+		calldata_bytes = case_inputs.encode_calldata(single_conf)
 
 		# Process code file
 		code_path = single_conf.get('code')
@@ -497,7 +619,9 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						},
 					}
 				code_path = str(out_path)
-			code = Path(code_path).read_bytes()
+			code = runners.substitute(
+				await gvm_io.read_file_bytes(Path(code_path)), local_ctx.shared.root_dir
+			)
 
 		# Process message addresses
 		single_conf['message']['contract_address'] = Address(
@@ -509,29 +633,33 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		single_conf['message']['origin_address'] = Address(
 			single_conf['message']['origin_address']
 		)
+		single_conf['message']['signer_address'] = Address(
+			single_conf['message']['signer_address']
+		)
 
 		path_to_which_leader_puts_result = my_tmp_dir.parent.joinpath(
-			my_tmp_dir.name[:-1] + '_leader_nondet.pickle'
+			my_tmp_dir.name[:-1] + '_leader_public_data.bin'
 		)
 
 		# Set up paths
-		rel_path = jsonnet_path.relative_to(CASES_DIR)
+		rel_path = jsonnet_path.relative_to(self._test_case.cases_dir)
 		mock_sock_path = Path('/tmp', 'genvm-test', rel_path.with_suffix(f'.sock{suff}'))
 		mock_sock_path.parent.mkdir(exist_ok=True, parents=True)
 
 		is_leader = single_conf.get('mode') == 'l'
 
-		# Load leader nondet results if available (for v/s modes)
+		# Load leader public data if available (for v/s modes)
 		if is_leader:
-			leader_nondet = None
+			leader_public_data = None
 		else:
-			leader_nondet = single_conf.get('leader_nondet', None)
-			if leader_nondet is None:
-				with open(path_to_which_leader_puts_result, 'rb') as f:
-					leader_nondet = pickle.load(f)
-			if leader_nondet is not None:
+			leader_nondet_fixture = single_conf.get('leader_nondet', None)
+			if leader_nondet_fixture is None:
+				leader_public_data = await gvm_io.read_file_bytes(
+					path_to_which_leader_puts_result
+				)
+			else:
 				encoded_nondet = []
-				for res in leader_nondet:
+				for res in leader_nondet_fixture:
 					if isinstance(res, (bytes, bytearray, memoryview)):
 						encoded_nondet.append(bytes(res))
 					elif res['kind'] == 'return':
@@ -547,20 +675,54 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						encoded_nondet.append(
 							bytes([public_abi.ResultCode.VM_ERROR]) + res['value'].encode('utf-8')
 						)
+					elif res['kind'] == 'rollback':
+						# v0.2.x: a rollback is a user error carrying a plain UTF-8
+						# string (v0.2 user errors are string-only).
+						encoded_nondet.append(
+							bytes([public_abi.ResultCode.USER_ERROR]) + res['value'].encode('utf-8')
+						)
+					elif res['kind'] == 'contract_error':
+						# v0.2.x: a vm error carrying a plain UTF-8 string.
+						encoded_nondet.append(
+							bytes([public_abi.ResultCode.VM_ERROR]) + res['value'].encode('utf-8')
+						)
 					elif res['kind'] == 'raw':
 						encoded_nondet.append(bytes(res['value']))
 					else:
 						raise ValueError(f'unknown leader_nondet kind: {res["kind"]}')
-				leader_nondet = encoded_nondet
+				leader_public_data = LeaderPublicData(encoded_nondet).encode()
 
 		# Create mock host
 		running_address = single_conf['message']['contract_address']
+		ctx = Context(logger)
+		# A case may declare `executor_routes` to send a callee across a major
+		# boundary; without one the hook answers null and every call stays
+		# in-process. `hook_cross_contract_calls` asks for the hook on its own,
+		# so a case can cover a host that is consulted and declines to route.
+		# A route is a major (int) or a version string (`re:` prefixed to match
+		# manifest keys rather than name a directory).
+		routes = {Address(k): v for k, v in single_conf.get('executor_routes', {}).items()}
+		hook_calls = routes != {} or single_conf.get('hook_cross_contract_calls', False)
+		route_requests: list[dict[str, typing.Any]] = []
+
+		def resolve_executor(address, state, advisory_major):
+			route_requests.append(
+				{
+					'contract_address': address.as_hex,
+					'state_mode': int(state),
+					'advisory_major': advisory_major,
+				}
+			)
+			return _routing_payload(routes[address]) if address in routes else None
+
 		host = MockHost(
 			path=str(mock_sock_path),
 			storage_path_post=post_storage,
 			storage_path_pre=pre_storage,
 			balances={Address(k): v for k, v in single_conf.get('balances', {}).items()},
 			running_address=running_address,
+			ctx=ctx,
+			resolve_call_contract_executor_hook=resolve_executor,
 		)
 
 		host.balances.setdefault(running_address, 0)
@@ -569,7 +731,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		# Get manager URI from the service
 		manager_svc = self._test_case.manager_service
 		port = manager_svc.meta['port']
-		reroute_to = manager_svc.meta.get('reroute_to', '')
+		reroute_to = self._test_case.reroute_to
 		manager_uri = f'http://localhost:{port}'
 
 		# Run the test
@@ -588,15 +750,15 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				case_permissions = single_conf.get('permissions')
 				if case_permissions is not None:
 					request_extra['permissions'] = case_permissions
+				if hook_calls:
+					request_extra['hook_cross_contract_calls'] = True
 				dflt_bucket = 2**200
-				bucket_totals: list[int] = single_conf.get(
-					'bucket_totals', [dflt_bucket, dflt_bucket]
-				)
+				bucket_totals: list[int] = single_conf.get('bucket_totals', [dflt_bucket] * 10)
 
 				default_message_fee_allocation = [
 					fees.DEFAULT_EXTERNAL_MESSAGE_ALLOC,
 					fees.DEFAULT_INTERNAL_FIN_MESSAGE_ALLOC,
-					fees.DEFAULT_INTERNAL_ACC_MESSAGE_ALLOC,
+					fees.DEFAULT_INTERNAL_DEC_MESSAGE_ALLOC,
 				]
 
 				message_fee_allocation: list[fees.MessageAllocationNode] = single_conf.get(
@@ -606,34 +768,54 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				if not single_conf['message'].get('is_init', False):
 					code = None
 				mode = single_conf.get('mode', 'l')
-				ctx = Context(logger)
-				res = await base_host.run_genvm(
-					mock_host,
-					manager_uri=manager_uri,
-					message=single_conf['message'],
-					timeout=single_conf.get('deadline', 10 * 60),
-					is_sync=(mode == 's'),
-					host_data=host_data,
-					ctx=ctx,
-					host='unix://' + mock_host.path,
-					debug_mode='unsafe',
-					code=code,
-					calldata=calldata_bytes,
-					bucket_totals=bucket_totals,
-					gas_data=single_conf.get('gas_data'),
-					leader_nondet_results=leader_nondet,
-					message_fee_allocation=message_fee_allocation,
-					reroute_to=reroute_to,
-					request_extra=request_extra,
+				async with base_host.ManagerClient(
+					manager_uri,
+					connect_timeout=ctx.get_manager_connect_timeout(),
+				) as manager_client:
+					res = await base_host.run_genvm(
+						mock_host,
+						manager_uri=manager_uri,
+						manager_client=manager_client,
+						message=single_conf['message'],
+						timeout=single_conf.get('deadline', 10 * 60),
+						is_sync=(mode == 's'),
+						host_data=host_data,
+						ctx=ctx,
+						host='unix://' + mock_host.path,
+						debug_mode=self._debug_mode,
+						code=code,
+						calldata=calldata_bytes,
+						bucket_totals=bucket_totals,
+						gas_data=single_conf.get('gas_data'),
+						leader_public_data=leader_public_data,
+						message_fee_allocation=message_fee_allocation,
+						unsafe_overrides=base_host.UnsafeOverrides(
+							reroute_to=single_conf.get('reroute_to', reroute_to)
+						),
+						request_extra=request_extra,
+						# A case may state the major the host claims, for the
+						# cases whose subject is what the executor does with a
+						# major the manager would otherwise refuse to route.
+						major=single_conf.get('major'),
+					)
+				# Nested executors dial the same listener; wind their loops down
+				# so a failure on that side surfaces here.
+				await mock_host.stop_connections()
+				expected_route_requests = single_conf.get('expected_executor_route_requests')
+				assert (
+					expected_route_requests is None or route_requests == expected_route_requests
+				), (
+					route_requests,
+					expected_route_requests,
 				)
 				return_part = ''
-				if res.result_kind == public_abi.ResultCode.RETURN:
+				if res.result_kind == host_fns.ResultCode.RETURN:
 					return_part += (
 						f'executed with `Return({gvm_calldata.to_str(res.result_data)})`\n'
 					)
-				elif res.result_kind == public_abi.ResultCode.VM_ERROR:
+				elif res.result_kind == host_fns.ResultCode.VM_ERROR:
 					return_part += f'executed with `VMError("{res.result_data}")`\n'
-				elif res.result_kind == public_abi.ResultCode.USER_ERROR:
+				elif res.result_kind == host_fns.ResultCode.USER_ERROR:
 					if isinstance(res.result_data, str):
 						return_part += f'executed with `UserError("{res.result_data}")`\n'
 					else:
@@ -646,7 +828,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						f'nondet disagreement: {mock_host.nondet_disagreement_call_no}\n'
 					)
 
-				for k, v in res.result_storage_changes:
+				for k, v in res.result_storage_deltas:
 					assert len(k) == 36
 					index = int.from_bytes(k[32:], byteorder='big')
 					index *= 32
@@ -665,16 +847,18 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					'passed': False,
 					'context': {
 						'exception': e,
+						'reason': f'{e.__class__.__name__}: {e}',
 						'tree_path': tree_path,
 					},
 				}
 
 		# Save leader nondet results for v/s modes
 		if is_leader:
-			nondet_list = res.result_nondet_results
+			leader_public_data = res.result_leader_public_data
 
-			with open(path_to_which_leader_puts_result, 'wb') as f:
-				pickle.dump(nondet_list, f)
+			await gvm_io.write_file_bytes(
+				path_to_which_leader_puts_result, leader_public_data
+			)
 
 		# Save outputs
 		my_tmp_dir.joinpath('stdout.txt').write_text(res.stdout)
@@ -688,11 +872,10 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 
 		# Save RunHostAndProgramRes pickle
 		result_path = Path(single_conf['result_path'])
-		result_path.parent.mkdir(exist_ok=True, parents=True)
-		with open(result_path, 'wb') as f:
-			pickle.dump(res, f)
+		await gvm_io.make_dir(result_path.parent)
+		await gvm_io.write_file_bytes(result_path, pickle.dumps(res))
 
-		if res.result_kind == public_abi.ResultCode.INTERNAL_ERROR:
+		if res.result_kind == host_fns.ResultCode.INTERNAL_ERROR:
 			return {
 				'passed': False,
 				'context': {
@@ -704,27 +887,17 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				},
 			}
 
-		result_events: list[list[bytes]] = []
-
 		messages_content = []
 		for em in res.result_emissions:
-			if em['type'] == 'EmitEvent':
-				tem = typing.cast(base_host.EmitEventInner, em)
-				blob = gvm_calldata.encode(tem['blob'])
-				result_events.append([*tem['topics'], blob])
 			messages_content.append(gvm_calldata.to_str(em))
 			messages_content.append('\n')
 
-		# Write hash file (calldata-encoded deterministic result fields)
-		hash_data = gvm_calldata.encode(
-			[
-				int(res.result_kind),
-				res.result_data,
-				res.result_fingerprint,
-				res.result_storage_changes,
-				result_events,
-			]
-		)
+		# The executor's own execution hash, i.e. the value consensus actually
+		# compares. It folds kind, data, backtrace, storage changes, sub-VM
+		# hashes, wasm store hashes and both fee buckets. Emissions are not in
+		# it; those are covered by the `messages` semantics component, which
+		# only runs in the main mode.
+		hash_data = res.execution_hash
 
 		semantics_parts = {
 			'stdout': res.stdout,
@@ -741,8 +914,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			semantics_path.write_text(semantics)
 
 			exp_semantics_path = Path(single_conf['expected_semantics_path'])
-			if exp_semantics_path.exists():
-				exp_text = exp_semantics_path.read_text()
+			if await gvm_io.path_exists(exp_semantics_path):
+				exp_text = await gvm_io.read_file_text(exp_semantics_path)
 				diff = _get_diffs(exp_text, semantics, lambda x: x)
 				if diff is not None:
 					return {
@@ -759,19 +932,53 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					}
 			else:
 				# Create expected output file
-				exp_semantics_path.write_text(semantics)
+				await gvm_io.write_file_text(exp_semantics_path, semantics)
+
+		# ADR-012 load-action log-grep assertions. A case may declare
+		# `runner_load_asserts` on a step to assert on the executor's stable
+		# `runner load` log records (charge counts, per-runner sizes, cached vs
+		# charged); see origin.log_asserts for the schema. Gated on the main mode
+		# (semantics_components is non-empty only there) so a nondet leader's
+		# extra loads do not make validator/sandbox re-runs flaky.
+		runner_load_asserts = single_conf.get('runner_load_asserts')
+		if runner_load_asserts and semantics_components:
+			load_errors = log_asserts.check(
+				res.genvm_log,
+				runner_load_asserts,
+				code_len=(len(code) if code is not None else None),
+			)
+			if load_errors:
+				return {
+					'passed': False,
+					'context': {
+						'reason': 'runner load assertion failed',
+						'tree_path': tree_path,
+						'errors': load_errors,
+						'runner_loads': log_asserts.summarize(res.genvm_log),
+						'stderr': res.stderr,
+						'genvm_log': res.genvm_log,
+					},
+				}
 
 		my_tmp_dir.joinpath('hash').write_bytes(base64.b64encode(hash_data))
 
 		expected_hash_path = single_conf['expected_hash_path']
 
+		# A golden sidecar pins the hash across commits, and a line whose hashes
+		# are still moving may legitimately stop tracking those. It may not stop
+		# comparing this run's own modes against each other -- that is the
+		# determinism property itself, and dropping it would leave a validator
+		# step asserting only that it did not crash, since `expandModes` also
+		# empties the semantics of every non-main mode. So when goldens are off,
+		# fall back to the main mode's artifact rather than checking nothing.
+		compares_golden = single_conf.get('expected_hash_is_golden', True)
+		if compares_golden and (_is_ignore_hash_enabled() or not self._save_hashes):
+			expected_hash_path = single_conf.get('runtime_hash_path')
+			compares_golden = False
+
 		check_expected_hash = expected_hash_path is not None
-		if (
-			res.result_kind == public_abi.ResultCode.VM_ERROR and res.result_data == 'timeout'
-		):
+		if res.result_kind == host_fns.ResultCode.VM_ERROR and res.result_data == 'timeout':
 			check_expected_hash = False  # Don't check hash for timeouts, as they can be flaky
-		if _is_ignore_hash_enabled():
-			check_expected_hash = False
 
 		if check_expected_hash:
 			expected_hash_path = Path(expected_hash_path)
@@ -779,18 +986,35 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			if expected_hash_path.exists():
 				original_hash = base64.b64decode(expected_hash_path.read_text().strip())
 
-				diff = _get_diffs(original_hash, hash_data, _calldata_to_fancy_str)
-
-				if diff is not None:
+				# An opaque digest: there is nothing to diff, only the two
+				# values and the semantics/stdout goldens to reason from.
+				if original_hash != hash_data:
 					return {
 						'passed': False,
 						'context': {
-							'reason': 'hash mismatch',
+							'reason': 'hash mismatch'
+							if compares_golden
+							else 'modes of one run disagree',
+							'compared_against': 'committed golden'
+							if compares_golden
+							else 'this run of the main mode',
 							'hash_path': str(expected_hash_path),
 							'tree_path': tree_path,
-							**diff,
+							'exp': original_hash.hex(),
+							'got': hash_data.hex(),
 						},
 					}
+			elif not compares_golden:
+				# The main mode runs first and always writes its artifact, so a
+				# missing one is a harness bug, not a golden waiting to be born.
+				return {
+					'passed': False,
+					'context': {
+						'reason': 'main mode produced no hash artifact',
+						'hash_path': str(expected_hash_path),
+						'tree_path': tree_path,
+					},
+				}
 			else:
 				expected_hash_path.parent.mkdir(exist_ok=True, parents=True)
 				expected_hash_path.write_text(
@@ -813,6 +1037,241 @@ def integration_test(
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
+) -> None:
+	active_versions: list[str] = json.loads(
+		local_ctx.shared.root_dir.joinpath('.genvm-monorepo-root').read_text()
+	)['active-versions']
+	for ver in active_versions:
+		integration_test_single_executor(
+			ctx,
+			executor_version=ver,
+			manager_service=manager_service,
+			modules_service=modules_service,
+			webdriver_service=webdriver_service,
+			ci=ci,
+		)
+
+
+class RWLock:
+	"""
+	Many concurrent readers or a single writer, writers taking priority.
+
+	A reader that arrives while a writer waits queues behind it, so a steady
+	stream of lookups cannot starve a store.
+	"""
+
+	def __init__(self) -> None:
+		self._cond = threading.Condition()
+		self._readers = 0
+		self._writer = False
+		self._writers_waiting = 0
+
+	@contextlib.contextmanager
+	def read(self) -> typing.Iterator[None]:
+		with self._cond:
+			self._cond.wait_for(lambda: not self._writer and not self._writers_waiting)
+			self._readers += 1
+		try:
+			yield
+		finally:
+			with self._cond:
+				self._readers -= 1
+				if self._readers == 0:
+					self._cond.notify_all()
+
+	@contextlib.contextmanager
+	def write(self) -> typing.Iterator[None]:
+		with self._cond:
+			self._writers_waiting += 1
+			try:
+				self._cond.wait_for(lambda: not self._writer and not self._readers)
+			finally:
+				self._writers_waiting -= 1
+			self._writer = True
+		try:
+			yield
+		finally:
+			with self._cond:
+				self._writer = False
+				self._cond.notify_all()
+
+
+def _jsonnet_lib_dirs() -> list[str]:
+	"""The search path a jsonnet vm starts with, in the order it is seeded."""
+	return [
+		f'/usr/share/jsonnet-{_jsonnet.version}/',
+		f'/usr/local/share/jsonnet-{_jsonnet.version}/',
+	]
+
+
+def _digest_file(path: Path) -> str:
+	"""Digest of ``path``'s contents, or '' when it is gone."""
+	try:
+		return hashlib.sha3_256(path.read_bytes()).hexdigest()
+	except OSError:
+		return ''
+
+
+def _resolve_import(base: str, rel: str, jpathdir: list[str]) -> Path:
+	"""
+	Where jsonnet would find ``rel``, imported from a file in ``base``.
+
+	Unresolved: a nested import resolves against this path.
+	"""
+	if os.path.isabs(rel):
+		candidates = [Path(rel)]
+	else:
+		candidates = [Path(base) / rel]
+		candidates.extend(Path(d) / rel for d in reversed(jpathdir))
+		candidates.extend(Path(d) / rel for d in reversed(_jsonnet_lib_dirs()))
+	for candidate in candidates:
+		if candidate.is_file():
+			return candidate
+	raise RuntimeError(f'no such file to import: {rel} (from {base})')
+
+
+class JsonnetCache:
+	"""
+	Memoizes jsonnet evaluation in a sqlite file among the test artifacts.
+
+	Keyed by the case file's path and contents, carrying every import it read so
+	that editing one of those misses too. Entries older than a day are dropped.
+	"""
+
+	MAX_AGE = 24 * 60 * 60
+	COLUMNS = {'digest', 'stored_at', 'deps', 'result'}
+
+	def __init__(self) -> None:
+		# A native callback rewritten here, or a jsonnet upgrade, changes results
+		# with no input file changing.
+		self._evaluator_digest = hashlib.sha3_256(
+			_jsonnet.version.encode('utf-8') + Path(__file__).read_bytes()
+		).digest()
+
+		artifacts_dir = local_ctx.shared.artifacts_dir
+		artifacts_dir.mkdir(exist_ok=True, parents=True)
+		self._path = artifacts_dir / 'jsonnet-cache.sqlite'
+		self._lock = RWLock()
+		# One connection per thread: a shared one would serialize the readers
+		# that the lock lets run together.
+		self._local = threading.local()
+
+		with self._lock.write():
+			db = self._connection()
+			db.execute('PRAGMA journal_mode=WAL')
+			columns = {
+				row[1] for row in db.execute('PRAGMA table_info(evaluated)').fetchall()
+			}
+			if columns and columns != self.COLUMNS:
+				db.execute('DROP TABLE evaluated')
+			db.execute(
+				'CREATE TABLE IF NOT EXISTS evaluated ('
+				'digest BLOB PRIMARY KEY, stored_at REAL NOT NULL, '
+				'deps TEXT NOT NULL, result TEXT NOT NULL'
+				') WITHOUT ROWID'
+			)
+			db.execute(
+				'DELETE FROM evaluated WHERE stored_at < ?', (time.time() - self.MAX_AGE,)
+			)
+			db.commit()
+
+	def _connection(self) -> sqlite3.Connection:
+		db = getattr(self._local, 'db', None)
+		if db is None:
+			db = sqlite3.connect(self._path)
+			# Per connection, unlike the journal mode. Losing the tail of a cache
+			# to a power cut costs a re-evaluation.
+			db.execute('PRAGMA synchronous=NORMAL')
+			self._local.db = db
+		return db
+
+	@staticmethod
+	def _deps_hold(deps: list[list[str]], jpathdir: list[str]) -> bool:
+		"""
+		Whether every import still resolves where it did, to the same bytes.
+
+		Re-resolved, not just re-digested: a new file of that name beside the
+		case steals an import that fell through to the search path.
+		"""
+		for base, rel, found, digest in deps:
+			try:
+				if str(_resolve_import(base, rel, jpathdir)) != found:
+					return False
+			except RuntimeError:
+				return False
+			if _digest_file(Path(found)) != digest:
+				return False
+		return True
+
+	def eval(self, path: Path, *args, jpathdir: list[str], **kwargs) -> str:
+		# Keyed on the path too: two identical cases in different directories
+		# import different files under the same relative names.
+		full_digest = hashlib.sha3_256(
+			self._evaluator_digest
+			+ str(path.resolve()).encode('utf-8')
+			+ b'\0'
+			+ path.read_bytes()
+		).digest()
+
+		eval_start = time.monotonic()
+
+		with self._lock.read():
+			row = (
+				self._connection()
+				.execute('SELECT deps, result FROM evaluated WHERE digest = ?', (full_digest,))
+				.fetchone()
+			)
+		cache_check_end = time.monotonic()
+		local_ctx.shared.bump_metric(
+			'jsonnet_cache_check_time', 0.0, cache_check_end - eval_start
+		)
+
+		if row is not None and self._deps_hold(json.loads(row[0]), jpathdir):
+			return row[1]
+
+		deps: list[list[str]] = []
+
+		def import_callback(base: str, rel: str) -> tuple[str, bytes]:
+			found = _resolve_import(base, rel, jpathdir)
+			content = found.read_bytes()
+			deps.append([base, rel, str(found), hashlib.sha3_256(content).hexdigest()])
+			return str(found), content
+
+		# Replaces the importer wholesale, `jpathdir` included.
+		result = _jsonnet.evaluate_file(
+			str(path),
+			*args,
+			import_callback=import_callback,
+			**kwargs,
+		)
+
+		eval_end = time.monotonic()
+		local_ctx.shared.bump_metric('jsonnet_eval_time', 0.0, eval_end - cache_check_end)
+
+		with self._lock.write():
+			db = self._connection()
+			db.execute(
+				'INSERT OR REPLACE INTO evaluated (digest, stored_at, deps, result) '
+				'VALUES (?, ?, ?, ?)',
+				(full_digest, time.time(), json.dumps(deps), result),
+			)
+			db.commit()
+
+		write_end = time.monotonic()
+		local_ctx.shared.bump_metric('jsonnet_cache_write_time', 0.0, write_end - eval_end)
+
+		return result
+
+
+def integration_test_single_executor(
+	ctx: genvm_tool.tests.stage.collection.Context,
+	*,
+	executor_version: str,
+	manager_service: genvm_tool.tests.stage.collection.Service,
+	modules_service: genvm_tool.tests.stage.collection.Service,
+	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
 ) -> None:
 	"""
 	Collect integration tests from tests/integration/ directory.
@@ -824,12 +1283,72 @@ def integration_test(
 	Steps depend on /prepare, and child steps depend on their parent step.
 	"""
 
-	jsonnet_files = list(CASES_DIR.glob('**/*.jsonnet'))
+	import _jsonnet
+
+	globals()['_jsonnet'] = _jsonnet  # type: ignore
+
+	import genvm_tool.common
+
+	EXEC_SUBDIR = os.environ.get(
+		'GENVM_TEST_EXEC_SUBDIR', f'executors/{executor_version}.x'
+	)
+	executor_root = local_ctx.shared.root_dir / EXEC_SUBDIR
+	CASES_DIR = executor_root / 'tests' / 'integration'
+
+	# Run this line's cases against this line's own executor. The version key
+	# (e.g. "v0.2") maps to the concrete built version (e.g. "v0.2.16").
+	reroute_to = build_info['executor_versions'].get(executor_version, executor_version)
+
+	executor_project = genvm_tool.common.load_project(executor_root)
+	executor_integration_fn = getattr(executor_project, 'integration', None)
+	executor_integration_conf: dict = (
+		executor_integration_fn() if executor_integration_fn else {}
+	)
+	# `save-hashes` replaces the inverted `ignore-hash`; a line that has not been
+	# renamed yet still gets what it asked for.
+	save_hashes = executor_integration_conf.get(
+		'save-hashes', not executor_integration_conf.get('ignore-hash', False)
+	)
+	integration_test_directory(
+		ctx,
+		cases_dir=CASES_DIR,
+		reroute_to=reroute_to,
+		save_hashes=save_hashes,
+		manager_service=manager_service,
+		modules_service=modules_service,
+		webdriver_service=webdriver_service,
+		ci=ci,
+	)
+
+
+def integration_test_directory(
+	ctx: genvm_tool.tests.stage.collection.Context,
+	*,
+	cases_dir: Path,
+	reroute_to: str,
+	save_hashes: bool,
+	manager_service: genvm_tool.tests.stage.collection.Service,
+	modules_service: genvm_tool.tests.stage.collection.Service,
+	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
+) -> None:
+	"""Collect one Jsonnet suite with the standard integration machinery."""
+	import _jsonnet
+
+	globals()['_jsonnet'] = _jsonnet  # type: ignore
+
+	glob_start = time.monotonic()
+	jsonnet_files = list(
+		x for x in cases_dir.glob('**/*.jsonnet') if not x.name.startswith('_')
+	)
+	glob_end = time.monotonic()
+	# Bumped, not assigned: this runs once per executor line.
+	local_ctx.shared.bump_metric('jsonnet_glob_time', 0.0, glob_end - glob_start)
 	jsonnet_files.sort()
 
-	# pre-import
-
 	from concurrent.futures import ThreadPoolExecutor, as_completed
+
+	jsonnet_cache = JsonnetCache()
 
 	with ThreadPoolExecutor(thread_name_prefix='integration-test-collector') as executor:
 		futures = {
@@ -837,9 +1356,14 @@ def integration_test(
 				_single_integration_test,
 				ctx,
 				jsonnet_file,
+				jsonnet_cache,
+				cases_dir=cases_dir,
+				reroute_to=reroute_to,
+				save_hashes=save_hashes,
 				manager_service=manager_service,
 				modules_service=modules_service,
 				webdriver_service=webdriver_service,
+				ci=ci,
 			): jsonnet_file
 			for jsonnet_file in jsonnet_files
 		}
@@ -847,17 +1371,25 @@ def integration_test(
 			future.result()
 
 
+def _gvm32_of_str(text: str) -> str:
+	"""Hash `text` the way the executor names content: gvm32(sha3_256(utf-8))."""
+	return genvm_tool.gvm32.encode(hashlib.sha3_256(text.encode('utf-8')).digest())
+
+
 def _single_integration_test(
 	ctx: genvm_tool.tests.stage.collection.Context,
 	jsonnet_file: Path,
+	jsonnet_cache: JsonnetCache,
 	*,
+	cases_dir: Path,
+	reroute_to: str,
+	save_hashes: bool,
 	manager_service: genvm_tool.tests.stage.collection.Service,
 	modules_service: genvm_tool.tests.stage.collection.Service,
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
+	ci: bool,
 ) -> None:
-	import _jsonnet
-
-	rel_path = jsonnet_file.relative_to(CASES_DIR)
+	rel_path = jsonnet_file.relative_to(cases_dir)
 
 	# Determine stability tag from path
 	tags: set[str] = {'integration'}
@@ -891,14 +1423,37 @@ def _single_integration_test(
 		)
 		return
 
-	# Parse jsonnet at collection time
-	jsonnet_result = _jsonnet.evaluate_file(
-		str(jsonnet_file), jpathdir=[str(TEMPLATES_DIR.parent)]
+	# Parse jsonnet at collection time.
+	#
+	# `native_callbacks` exposes helpers to jsonnet as `std.native('<name>')`.
+	# Note the binding only marshals *primitives* — passing an array or object
+	# to a native function is a jsonnet runtime error, so anything structured
+	# has to cross as a JSON string.
+	jsonnet_result = jsonnet_cache.eval(
+		jsonnet_file,
+		jpathdir=[str(TEMPLATES_DIR.parent)],
+		native_callbacks={
+			# std.native('gvm32')('...') -> gvm32(sha3_256(utf8(s))), the id form
+			# used by content-addressed names such as `custom:<hash>`.
+			'gvm32': (('text',), _gvm32_of_str),
+		},
 	)
+
 	jsonnet_parsed = json.loads(jsonnet_result)
 	extra_tags = jsonnet_parsed.get('tags', [])
 	if extra_tags:
 		tags.update(extra_tags)
+
+	debug_mode = jsonnet_parsed.get('debug_mode', _DEBUG_MODE_DEFAULT)
+	if debug_mode not in _DEBUG_MODES:
+		raise ValueError(
+			f'{jsonnet_file}: unknown debug_mode {debug_mode!r}, expected one of {_DEBUG_MODES}'
+		)
+	if debug_mode == 'disabled':
+		# `unsafe_overrides.reroute_to` is honored only from `safe` up, and that
+		# is what points a case at its own line's executor. Below it the case
+		# would silently run whatever the manifest resolves to.
+		raise ValueError(f'{jsonnet_file}: debug_mode "disabled" cannot reroute')
 
 	# Recompute needed_services after tags update
 	needed_services = {manager_service}
@@ -917,6 +1472,10 @@ def _single_integration_test(
 			'jsonnetDir': str(jsonnet_file.parent),
 			'fileBaseName': jsonnet_file.stem,
 			'tmpDir': str(tmp_dir),
+			**{
+				'executor' + key.replace('.', '').upper(): value
+				for key, value in build_info['executor_versions'].items()
+			},
 		},
 	)
 
@@ -937,7 +1496,7 @@ def _single_integration_test(
 	prepare_desc = genvm_tool.tests.test.Description(
 		name=prepare_name,
 		needed_services=frozen_services,
-		tags=frozen_tags,
+		tags=frozen_tags | {'phase-prepare'},
 	)
 	ctx.add_case(
 		IntegrationPrepareCase(
@@ -945,6 +1504,7 @@ def _single_integration_test(
 			jsonnet_path=jsonnet_file,
 			top_level_conf=top_level_conf,
 			tmp_dir=tmp_dir,
+			ci=ci,
 		)
 	)
 
@@ -958,6 +1518,13 @@ def _single_integration_test(
 	for tree_path, depends_on_tree_path, single_conf in flat_steps:
 		step_name = step_names[tree_path]
 		is_benchmark = single_conf.get('benchmark', False)
+		mode = single_conf.get('mode')
+		try:
+			phase_tag = _PHASE_TAG_BY_MODE[mode]
+		except (KeyError, TypeError):
+			raise ValueError(
+				f'{jsonnet_file}: step {tree_path}: unexpected mode {mode!r}'
+			) from None
 
 		if depends_on_tree_path is None:
 			deps = frozenset([prepare_name])
@@ -967,7 +1534,7 @@ def _single_integration_test(
 		step_desc = genvm_tool.tests.test.Description(
 			name=step_name,
 			needed_services=frozen_services,
-			tags=frozen_tags,
+			tags=frozen_tags | {phase_tag},
 			depends_on=deps,
 		)
 
@@ -977,6 +1544,8 @@ def _single_integration_test(
 			IntegrationSingleCase(
 				description=step_desc,
 				jsonnet_path=jsonnet_file,
+				cases_dir=cases_dir,
+				reroute_to=reroute_to,
 				manager_service=manager_service,
 				tree_path=tree_path,
 				parent_tree_path=single_conf.get('parent_tree_path'),
@@ -984,6 +1553,9 @@ def _single_integration_test(
 				total_steps=total_steps,
 				tmp_dir=tmp_dir,
 				max_attempts=max_attempts,
+				debug_mode=debug_mode,
+				save_hashes=save_hashes,
 				is_benchmark=is_benchmark,
+				ci=ci,
 			)
 		)

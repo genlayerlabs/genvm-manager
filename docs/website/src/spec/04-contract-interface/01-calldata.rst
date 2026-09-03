@@ -81,3 +81,17 @@ follows:
 
 **FastString** is encoded as ULEB128 length followed by UTF-8 encoded
 bytes (difference is that it does not have a type).
+
+.. _gvm-def-calldata-map-key-order:
+
+Map Key Ordering
+~~~~~~~~~~~~~~~~
+
+Map keys are sorted bytewise lexicographically over their UTF-8 content:
+
+.. code-block::
+
+   "" < "a" < "aa" < "z"
+
+The order is strict, so duplicate keys are invalid. A decoder MUST reject a
+map whose keys are not strictly increasing on this basis.

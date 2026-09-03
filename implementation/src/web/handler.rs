@@ -120,7 +120,7 @@ impl common::MessageHandlerProvider<genvm_modules_interfaces::web::Message, Rend
     ) -> anyhow::Result<
         impl common::MessageHandler<genvm_modules_interfaces::web::Message, RenderAnswer>,
     > {
-        let user_vm = self.vm_pool.get().await;
+        let user_vm = self.vm_pool.get().await?;
 
         let (handler_ctx, ctx_val) = user_vm.create_ctx(&ctx)?;
 

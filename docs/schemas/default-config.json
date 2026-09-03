@@ -175,10 +175,38 @@
             "description": "path to manifest file"
           },
           "permits": {
-            "type": ["integer", "null"],
+            "type": ["object", "null"],
             "default": null,
-            "minimum": 1,
-            "description": "concurrency permits; if null will be auto-discovered; full VM takes 2, sync VM takes 1"
+            "description": "concurrency budget, one permit is one gigabyte of RAM; a total below the most expensive run is raised to it",
+            "additionalProperties": false,
+            "properties": {
+              "total": {
+                "type": ["integer", "null"],
+                "default": null,
+                "minimum": 1,
+                "description": "total permits; if null, free memory in gibibytes times `per_gib`"
+              },
+              "per_gib": {
+                "oneOf": [
+                  { "type": "integer", "minimum": 1 },
+                  { "type": "string", "pattern": "^\\s*[0-9]+\\s*(/\\s*[0-9]+\\s*)?$" }
+                ],
+                "default": 1,
+                "description": "permits handed out per gigabyte of free memory, an integer or an exact ratio like `1/4`; raise it to overcommit, lower it to undercommit"
+              },
+              "sync": {
+                "type": "integer",
+                "default": 4,
+                "minimum": 1,
+                "description": "permits a sync run costs"
+              },
+              "nondet": {
+                "type": "integer",
+                "default": 8,
+                "minimum": 1,
+                "description": "permits a nondet run costs, it also bounds the minimum of `total`"
+              }
+            }
           }
         },
         "required": ["manifest_path"]
@@ -216,7 +244,7 @@
           },
           "max_wait_after_loaded": {
             "$ref": "#/definitions/timeout",
-            "description": "upper bound for `wait_after_loaded` requested by contracts; larger values are clamped (with a warning). Defaults to 60s"
+            "description": "upper bound for `post_load_wait` requested by contracts; larger values are clamped (with a warning). Defaults to 60s"
           },
           "meta": {
             "type": ["object", "null"],

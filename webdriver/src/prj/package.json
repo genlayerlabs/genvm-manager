@@ -7,7 +7,9 @@
   "scripts": {
     "start": "node --loader ts-node/esm src/index.ts",
     "dev": "ts-node src/index.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "node --import ./ts-node-register.mjs --test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "puppeteer-core": "24.16.0",
