@@ -19,6 +19,7 @@ from gvm_extra.mock_host import MockHost, MockStorage
 from origin import host_fns, public_abi
 from origin.calldata import Address
 from origin.leader_public_data import LeaderPublicData
+from origin.process_tree import descendants
 
 # One directory per line, because a contract is written against its own sdk.
 # Their `@RUNNER_LATEST_...@` tokens stand for the uids of the last build;
@@ -219,33 +220,12 @@ def _apply_storage_deltas(
 		)
 
 
-def _descendants(pid: int) -> set[int]:
-	children: dict[int, set[int]] = {}
-	for stat_path in Path('/proc').glob('[0-9]*/stat'):
-		try:
-			raw = stat_path.read_text()
-			parent = int(raw[raw.rfind(')') + 2 :].split()[1])
-			child = int(stat_path.parent.name)
-		except (FileNotFoundError, ProcessLookupError, ValueError):
-			continue
-		children.setdefault(parent, set()).add(child)
-	result: set[int] = set()
-	pending = [pid]
-	while pending:
-		parent = pending.pop()
-		for child in children.get(parent, ()):
-			if child not in result:
-				result.add(child)
-				pending.append(child)
-	return result
-
-
 async def _wait_for_descendants(
 	pid: int, expected: int, timeout: float = 10
 ) -> set[int]:
 	async with asyncio.timeout(timeout):
 		while True:
-			current = _descendants(pid)
+			current = descendants(pid)
 			if len(current) >= expected:
 				return current
 			await asyncio.sleep(0.05)
@@ -253,7 +233,7 @@ async def _wait_for_descendants(
 
 async def _wait_for_no_descendants(pid: int, timeout: float = 10) -> None:
 	async with asyncio.timeout(timeout):
-		while _descendants(pid):  # noqa: ASYNC110 — polls the OS process table, no event to await
+		while descendants(pid):  # noqa: ASYNC110 — polls the OS process table, no event to await
 			await asyncio.sleep(0.05)
 
 
