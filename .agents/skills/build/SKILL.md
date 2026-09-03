@@ -10,7 +10,7 @@ read it first). Related: `building/runners.md`, `releasing/release-build.md`,
 Claude-specific:
 
 - Build binaries with
-  `bash .claude/skills/build/scripts/run-ninja.sh -C build all/bin` instead of
+  `bash .agents/skills/build/scripts/run-ninja.sh -C build all/bin` instead of
   raw ninja — it is silent on success and prints output only on failure, which
   saves tokens.
 - See also: `/submodules` (multi-repo commits, `?submodules=1`), `/test`,

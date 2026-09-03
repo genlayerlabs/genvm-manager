@@ -51,6 +51,22 @@ The following operations consume RAM:
   :ref:`gvm-def-consts-value-memory-limiter-consts-new-storage-page` octets the
   first time that region is written. Regions the :term:`sub-VM` inherited
   already written from its caller, and repeated writes to a region, cost nothing
+- **Emissions**: each emitted message or event costs
+  :ref:`gvm-def-consts-value-memory-limiter-consts-execution-emission-base-size`
+  octets,
+  plus its retained calldata, code, allocation subtree, topics, event data, and
+  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-arg-element-size`
+  octets per
+  retained positional argument,
+  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-kwarg-entry-size`
+  octets per
+  retained keyword argument, and
+  :ref:`gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size`
+  octets
+  per retained message-fee rotation
+- **Nondeterministic outputs**: each output costs
+  :ref:`gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size`
+  octets plus its encoded length on every role
 - **Sub-VM creation**: each new :term:`sub-VM` costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost` octets, plus
   :ref:`gvm-def-consts-value-memory-limiter-consts-storage-page-inherited`
@@ -61,6 +77,29 @@ The following operations consume RAM:
 The runner load cost (:ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost`) is a fixed per-load
 overhead
 
+.. _gvm-def-nondeterministic-output-caps:
+
+Nondeterministic Output Caps
+----------------------------
+
+Before entering a non-deterministic :term:`sub-VM`, the caller must have enough
+RAM to retain the canonical memory-limit and non-deterministic-output fee-limit
+results and return either as a file descriptor. It also checks whether both
+results can be charged against the non-deterministic-output fee; when either
+cannot, the sub-VM is not entered
+
+An output that cannot fit its non-deterministic-output fee charge is first
+replaced with a
+:ref:`gvm-def-str-trie-value-vm-error-out-of-receipt-nondet-output` result. If
+that result, or an output within the fee limit, cannot fit its RAM charge, it is
+replaced with a :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` result. The
+leader publishes the replacement and an honest replay charges the same encoded
+result
+
+A validator rejects a leader proposal that differs from its post-cap result as
+a fatal :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`
+result without entering the validator sub-VM
+
 RAM Release
 -----------
 
@@ -68,13 +107,12 @@ File content memory is released when the corresponding file descriptor is closed
 When a :term:`sub-VM` finishes execution, all remaining RAM consumed by it is released back to the shared budget.
 This applies to runner charges as well: memory consumed by loading or
 registering a runner is released when the registering :term:`sub-VM` finishes,
-like any other charge. There are no permanent charges.
+like any other charge.
 
-Storage write charges are the exception: they follow the storage they paid for.
-When a :ref:`gvm-def-gl-call-sandbox` child returns and its caller takes over the
-child's storage, the charge for the regions the child wrote first is transferred
-to the caller rather than released, so a caller cannot use repeated
-:ref:`gvm-def-gl-call-sandbox` calls to accumulate storage it never pays for.
+Charges for retained storage, emissions, and nondeterministic outputs are
+permanent. When a :ref:`gvm-def-gl-call-sandbox` child returns and its caller
+takes over the child's retained data, those charges are transferred to the
+caller rather than released.
 
 Other Limits
 ------------

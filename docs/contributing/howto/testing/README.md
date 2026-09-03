@@ -2,8 +2,8 @@
 
 Everything runs through `genvm-tool test`, from the `#full` dev shell, after a
 build ([build.md](../building/build.md)). Per-kind: [rust.md](rust.md) ·
-[python.md](python.md) · [integration.md](integration.md) ·
-[fuzzing.md](fuzzing.md)
+[python.md](python.md) · [typescript.md](typescript.md) ·
+[integration.md](integration.md) · [fuzzing.md](fuzzing.md)
 
 | What | Command |
 |---|---|
@@ -37,7 +37,8 @@ genvm-tool test run --filter-continue <name-or-path>
 ## Where Tests Come From
 
 Rust from every tracked `Cargo.toml` and its `fuzz/*.rs`, python from
-`executors/v0.3.x/runners/genlayer-py-std`, integration from each line's
+`executors/v0.3.x/runners/genlayer-py-std`, TypeScript from every tracked
+`package.json` with a `test` script, integration from each line's
 `tests/integration/`, and system from `tests/system/`. System suites use the
 same Jsonnet collector when they execute contracts; protocol-level assertions
 use `test.py`, which must register 1 `genvm-tool` case per assertion. Collection

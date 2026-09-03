@@ -1,0 +1,59 @@
+name: branch / sync executor branches
+
+# Manager train branches are authoritative for the executor refs they pin.
+# A release branch (v<X>.<Y>) projects each active executor gitlink onto the
+# branch declared in .gitmodules; its dev branch projects onto <line>-dev.
+# Every push is non-force: missing refs are created, existing refs only move by
+# fast-forward. The tool attempts every line before reporting combined failures.
+
+on:
+  push:
+    branches:
+      - 'v[0-9]+.[0-9]+'
+      - 'v[0-9]+.[0-9]+-dev'
+
+run-name: branch / sync executors from ${{ github.ref_name }}
+
+permissions:
+  contents: read
+
+# Collapse a burst on one manager branch onto its live tip. Different manager
+# branches may run together; executor branch protection and non-force pushes
+# reject any incompatible ownership rather than hiding it
+concurrency:
+  group: sync-executors-${{ github.ref_name }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Reconcile the live branch tip. A rerun therefore repairs only refs
+          # that still need an update
+          ref: ${{ github.ref_name }}
+          persist-credentials: false
+
+      - name: Set up executor push access
+        env:
+          EXECUTOR_DEPLOY_KEY: ${{ secrets.GENVM_EXECUTOR_CI_PRIVATE_KEY }}
+        run: |
+          install -m700 -d ~/.ssh
+          key="${RUNNER_TEMP}/executor_sync_key"
+          set +x
+          printf '%s\n' "$EXECUTOR_DEPLOY_KEY" > "$key"
+          set -x
+          chmod 600 "$key"
+          git config --global url."git@github.com:".insteadOf "https://github.com/"
+          echo "GIT_SSH_COMMAND=ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+
+      - name: Create or fast-forward executor branches
+        env:
+          MANAGER_BRANCH: ${{ github.ref_name }}
+        run: ./support/ci/run.sh tool sync-executor-branches

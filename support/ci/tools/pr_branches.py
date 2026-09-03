@@ -168,17 +168,15 @@ class PrBranches(ci_lib.Tool):
 		"""
 		Gate for the manager PR's CI. Records every problem, then fails if any.
 
-		The manager PR and its executor PRs land almost-atomically via the panel
-		(Provision then Merge), so this checks that the land is POSSIBLE, not that the
-		executor side already landed:
+		The E2E App lands the manager first, then the manager push projects its
+		gitlinks onto executor branches. This checks that projection is possible, not
+		that the executor side already landed:
 
 		1. Every repo (manager + each executor line) must be rebased on its base — a
-		repo behind base needs a rebase.
-		2. Every executor line that existed at base (base_sha set) must be landable —
-		its pinned head commit is present in the executor repo, so the merge can
-		squash/push it. Being ahead of base is normal (that is the unlanded work that
-		lands with the PR); only a commit missing from the executor repo fails. A line
-		the PR adds (base_sha null) is not gated.
+			repo behind base needs a rebase.
+		2. Every executor line must be landable — its pinned head commit is present
+			in the executor repo, so the post-merge workflow can push it. Being ahead
+			of base is normal; only a missing or incomparable commit fails.
 
 		No PR number (a bare manual dispatch not tied to a PR) is a no-op pass —
 		there is nothing to gate.
@@ -208,13 +206,13 @@ class PrBranches(ci_lib.Tool):
 				f'{info.behind_by} commit(s) behind base; rebase it',
 			)
 
-		# 2. every executor line present at base must be landable: its pinned commit
-		# is in the executor repo. Ahead-of-base is fine — it lands with the PR.
+		# 2. every executor line must be landable: its pinned commit is in the
+		# executor repo. Ahead-of-base is fine — it lands with the PR.
 		for info in infos.values():
-			if info.line is None or info.base_sha is None:
+			if info.line is None:
 				continue
 			detail = (
-				'present at base but missing at the PR head'
+				'missing at the PR head'
 				if info.head_sha is None
 				else f'pinned commit {info.head_sha[:12]} is not on the executor repo; '
 				'push/provision it so it can land with the manager PR'

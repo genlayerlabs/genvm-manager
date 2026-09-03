@@ -19,6 +19,7 @@
     "lib": [
       "feature-manager-socket",
       "feature-version-routing",
+      "feature-web-render",
       "feature-web-request-signed"
     ]
   }

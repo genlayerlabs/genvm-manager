@@ -85,8 +85,8 @@ def open_pr(ctx: gh_common.Ctx, head: str, base: str) -> str:
 	).stdout.strip()
 	body = (
 		f'Auto-opened executor mirror of {ctx.manager_repo}#{ctx.pr_number}.\n\n'
-		f'Carries the executor-side work for that manager PR. Auto-closed as merged '
-		f'when the manager PR lands (its `{head}` branch is moved onto `{base}`).'
+		f'Carries the executor-side work for that manager PR. The manager branch '
+		f'update fast-forwards `{base}` to its pinned commit after landing.'
 	)
 	r = gh(
 		'pr',

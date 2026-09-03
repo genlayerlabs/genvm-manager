@@ -2,7 +2,8 @@
 
 - [setup.md](setup.md) — first-time clone: submodules, vendored trees, nix/direnv dev shell
 - [genvm-tool.md](genvm-tool.md) — the umbrella tool: man page, test and git subcommands, codegen
-- [pr.md](pr.md) — branch model, PR action panel, `ci-safe` / `run-full-tests`, merge gates
+- [pr.md](pr.md) — branch model, PR action panel, App-owned landing and executor projection
+- [review-ready.md](review-ready.md) — the checks a change must pass before it is put up for review
 
 ## building/
 - [build.md](building/build.md) — debug build: configure + ninja, targets, outputs, cargo quirks
@@ -18,6 +19,7 @@
 - [python.md](testing/python.md) — Python tests, direct pytest for genlayer-py-std
 - [integration.md](testing/integration.md) — jsonnet cases, tags, golden `.stdout`/`.hash` files, services
 - [fuzzing.md](testing/fuzzing.md) — AFL fuzz targets, seeding a corpus from a run, host sysctl prep
+- [typescript.md](testing/typescript.md) — information on how to run and write webdriver typescript tests
 
 ## committing/
 - [submodules.md](committing/submodules.md) — repo topology, gitlink bumps, pre-commit hooks, push order
@@ -35,3 +37,4 @@
 - [modify-runner.md](extending/modify-runner.md) — runner dev-mode and hash refresh
 - [modify-wasmtime.md](extending/modify-wasmtime.md) — patching vendored wasmtime, trap plumbing
 - [write-a-script.md](extending/write-a-script.md) — conventions for helper scripts and pre-commit hooks
+- [add-a-skill.md](extending/add-a-skill.md) — agent skills in `.agents/`, the frontmatter trigger, the symlink, skill vs how-to

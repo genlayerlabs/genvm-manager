@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
@@ -8,8 +7,8 @@ from pathlib import Path
 
 import genvm_tool.tests
 import genvm_tool_plugins.afl as afl
+import genvm_tool_plugins.source_tags as source_tags
 import tomllib
-from genvm_tool.tests import tags as test_tags
 
 local_ctx = genvm_tool.tests.stage.configuration.current_context()
 
@@ -256,7 +255,7 @@ def _load_cargo_config(
 				raise ValueError(
 					f'{extra_config}: tags for {case_name!r} must be a list of strings'
 				)
-			case_tags[case_name] = _validate_declared_tags(ctx, extra_config, raw_tags)
+			case_tags[case_name] = source_tags.validate_declared(ctx, extra_config, raw_tags)
 
 	return extra_conf, test_env, extra_flags, case_tags
 
@@ -285,50 +284,6 @@ def _add_cargo_case(
 		mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE,
 	)
 	ctx.add_case(case)
-
-
-_TAGS_MARKER = 'genvm-tool-test-tags:'
-_TAGS_LINE = re.compile(r'^\s*//[/!]?\s*genvm-tool-test-tags:\s*(?P<tags>.*?)\s*$')
-
-
-def _tag_source_name(ctx: genvm_tool.tests.stage.collection.Context, path: Path) -> str:
-	try:
-		return str(path.relative_to(ctx.shared.root_dir))
-	except ValueError:
-		return str(path)
-
-
-def _validate_declared_tags(
-	ctx: genvm_tool.tests.stage.collection.Context, path: Path, tags: list[str]
-) -> list[str]:
-	declared = frozenset(tags)
-	registry = ctx.shared.tags_registry
-	if registry is None:
-		return sorted(declared)
-	invalid = test_tags.unknown(registry, declared)
-	if invalid:
-		ctx.add_tag_offender(_tag_source_name(ctx, path), invalid)
-	return sorted(declared - invalid)
-
-
-def _tags_from_source(
-	ctx: genvm_tool.tests.stage.collection.Context, path: Path
-) -> list[str]:
-	"""Extra tags declared by a `// genvm-tool-test-tags: a,b,c` comment."""
-	tags: list[str] = []
-	for line_number, line in enumerate(path.read_text().splitlines(), 1):
-		if not line.lstrip().startswith('//') or _TAGS_MARKER not in line:
-			continue
-		match = _TAGS_LINE.fullmatch(line)
-		if match is None:
-			ctx.add_tag_declaration_error(
-				f'{_tag_source_name(ctx, path)}:{line_number}',
-				f'malformed {_TAGS_MARKER} marker',
-			)
-			continue
-		line_tags = [tag.strip() for tag in match.group('tags').split(',') if tag.strip()]
-		tags.extend(line_tags)
-	return _validate_declared_tags(ctx, path, tags)
 
 
 def _is_skipped(skip_conf, key: str, name: str | None = None) -> bool:
@@ -419,7 +374,8 @@ def cargo_test(
 				+ extra_flags,
 				rust_root_dir=rust_root_dir,
 				test_env=test_env,
-				tags=['rust', 'example'] + _tags_from_source(ctx, rust_root_dir / ex_path),
+				tags=['rust', 'example']
+				+ source_tags.from_source(ctx, rust_root_dir / ex_path),
 			)
 
 	# 2. Test files in tests/
@@ -435,7 +391,7 @@ def cargo_test(
 				command=base_cmd + ['--test', test_name],
 				rust_root_dir=rust_root_dir,
 				test_env=test_env,
-				tags=['rust', 'unit'] + _tags_from_source(ctx, test_file),
+				tags=['rust', 'unit'] + source_tags.from_source(ctx, test_file),
 			)
 
 	# 3. --lib test
@@ -474,7 +430,7 @@ def cargo_fuzz(
 ):
 	desc = desc.with_tags(
 		['rust', 'fuzz', 'needs-fuzz']
-		+ _tags_from_source(ctx, rust_root_dir / 'fuzz' / f'{name}.rs')
+		+ source_tags.from_source(ctx, rust_root_dir / 'fuzz' / f'{name}.rs')
 	)._replace(
 		**afl.pool_usage(ctx),
 	)

@@ -6,6 +6,10 @@ every page's one-line description from that quadrant's `README.md` index, and pr
 a grouped markdown listing. Exits non-zero if a page is missing from its index, or an
 index lists a page that no longer exists, so CI can gate on the indexes staying in
 sync.
+
+`--write` splices the same listing into `AGENTS.md` below its generated marker, and
+`--check` verifies that copy is current without touching it — the listing is what
+every agent session loads, so a stale copy is a wrong answer, not a cosmetic one.
 """
 
 import re
@@ -18,6 +22,10 @@ NAME = 'docs'
 HELP = 'render the contributor documentation as a skill-like index'
 
 CONTRIBUTING_DIR = Path('docs/contributing')
+# The agent-instructions file and the marker below which its listing is generated.
+# Everything above the marker is hand-maintained and never rewritten.
+AGENTS_FILE = Path('AGENTS.md')
+AGENTS_MARKER = '<!-- below is generated with `genvm-tool docs` -->'
 # Rendered in this order: learn it, do it, understand it.
 QUADRANTS = ['tutorial', 'howto', 'explanation']
 # Deepest directory nesting promoted to a `## header`; anything below stays in the
@@ -29,7 +37,15 @@ _INDEX_LINE = re.compile(r'-\s*\[[^\]]*\]\(([^)]+)\)\s*—\s*(.+)$')
 
 
 def configure(parser):
-	pass
+	mode = parser.add_mutually_exclusive_group()
+	mode.add_argument(
+		'--write', action='store_true', help=f'update the listing in {AGENTS_FILE}'
+	)
+	mode.add_argument(
+		'--check',
+		action='store_true',
+		help=f'fail if the listing in {AGENTS_FILE} is stale',
+	)
 
 
 def _parse_index(readme: Path) -> dict[str, str]:
@@ -88,9 +104,10 @@ def _section_title(quadrant: str, header: str) -> str:
 	return '/'.join(f'{p[:1].upper()}{p[1:]}' for p in '/'.join(parts).split('/'))
 
 
-def main(ctx: common.Context, args) -> int:
-	problems = []
-	started = False
+def _listing(ctx: common.Context) -> tuple[str, list[str]]:
+	"""The rendered markdown listing, plus every index-vs-disk complaint."""
+	problems: list[str] = []
+	lines: list[str] = []
 	for quadrant in QUADRANTS:
 		base = ctx.root / CONTRIBUTING_DIR / quadrant
 		if not base.is_dir():
@@ -104,11 +121,43 @@ def main(ctx: common.Context, args) -> int:
 		for header, link, repo_path, desc in sorted(rows):
 			if header != current:
 				current = header
-				if started:
-					print()  # blank line between sections, but not a leading one
-				print(f'## {_section_title(quadrant, header)}')
-			print(f'- [{link}]({repo_path}) — {desc}')
-			started = True
+				if lines:
+					lines.append('')  # blank line between sections, but not a leading one
+				lines.append(f'## {_section_title(quadrant, header)}')
+			lines.append(f'- [{link}]({repo_path}) — {desc}')
+
+	return '\n'.join(lines) + '\n', problems
+
+
+def _spliced(ctx: common.Context, listing: str) -> tuple[Path, str, str]:
+	"""`AGENTS.md` as it is on disk and as it should be, with the path."""
+	path = ctx.root / AGENTS_FILE
+	if not path.is_file():
+		raise common.ToolError(f'not found: {AGENTS_FILE}')
+	current = path.read_text()
+	head, marker, _ = current.partition(AGENTS_MARKER)
+	if not marker:
+		raise common.ToolError(f'{AGENTS_FILE} has no marker line: {AGENTS_MARKER}')
+	return path, current, f'{head}{marker}\n\n{listing}'
+
+
+def main(ctx: common.Context, args) -> int:
+	listing, problems = _listing(ctx)
+
+	# A stale listing is reported, never written: splicing a listing built from
+	# indexes that disagree with the tree would commit the disagreement.
+	if not problems and (args.write or args.check):
+		path, current, wanted = _spliced(ctx, listing)
+		rel = path.relative_to(ctx.root).as_posix()
+		if current == wanted:
+			print(f'{rel} is up to date')
+		elif args.write:
+			path.write_text(wanted)
+			print(f'{rel} updated')
+		else:
+			problems.append(f'{rel}: listing is stale, run `genvm-tool docs --write`')
+	elif not (args.write or args.check):
+		print(listing, end='')
 
 	for problem in problems:
 		print(problem, file=sys.stderr)

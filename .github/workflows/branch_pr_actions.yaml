@@ -2,9 +2,8 @@ name: branch / PR action panel handler
 
 # Reacts to a maintainer ticking a box on the GenVM PR action panel (posted
 # by branch_pr_checklist.yaml). The `dispatch` job authenticates the editor,
-# parses the ticked boxes, performs label-based actions (run / rerun full
-# tests), unticks the boxes, and reports whether Merge was requested. If so
-# the `merge` job calls the reusable merge workflow.
+# parses the ticked boxes, enables full tests or provisions executor PRs, then
+# unticks the momentary boxes.
 #
 # The handler runs the CI scripts checked out from the PR head branch, not
 # from the default branch, so a PR that changes support/ci/ exercises its own
@@ -49,8 +48,6 @@ jobs:
       contains(github.event.issue.labels.*.name, 'ci-safe')
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    outputs:
-      merge: ${{ steps.act.outputs.merge }}
     steps:
       # Check out the PR head so the handler runs the PR's own CI scripts.
       # This runs PR-authored code — the `ci-safe` gate on the job above is
@@ -70,11 +67,3 @@ jobs:
           COMMENT_ID: ${{ github.event.comment.id }}
           SENDER: ${{ github.event.sender.login }}
         run: ./support/ci/run.sh tool pr-action-panel
-
-  merge:
-    needs: dispatch
-    if: needs.dispatch.outputs.merge == 'true'
-    uses: ./.github/workflows/branch_merge_into_dev.yaml
-    with:
-      pr_number: ${{ github.event.issue.number }}
-    secrets: inherit

@@ -11,8 +11,8 @@
 ## Requirements
 
 A PR must pass the [pre-commit](https://pre-commit.com) hooks and the full test
-suite, and lands when a maintainer ticks *Merge into dev* on the PR action panel
-— see [pr.md](howto/pr.md)
+suite, then lands through the App-owned E2E merge train — see
+[pr.md](howto/pr.md)
 
 ## Security
 

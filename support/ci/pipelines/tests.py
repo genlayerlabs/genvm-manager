@@ -318,8 +318,8 @@ class PlanQueueMatrix(ci_lib.Pipeline):
 	Emit queue.yaml's test matrix as a GitHub `matrix` output.
 
 	The heavy cells run only when a marker is set (RUN_FULL_TESTS, from the
-	run-full-tests / rtm labels or a manual dispatch); otherwise the matrix is
-	empty and matrix-tests is skipped.
+	run-full-tests label or a manual dispatch); otherwise the matrix is empty and
+	matrix-tests is skipped.
 	"""
 
 	def name(self) -> str:

@@ -14,13 +14,9 @@ box" below);
 we set the `run-full-tests` label (so queue.yaml runs on every future push)
 AND dispatch one run now. We do not untick it — its checked state mirrors the
 label, and an already-set label means no re-dispatch on unrelated edits.
-- "Rerun full tests" is a momentary button: dispatch a fresh queue.yaml run on
-the current head, then untick.
 - "Provision executor PRs" is a momentary button: dispatch
 branch_provision_executor_prs.yaml for this PR (force-push each moved executor
 line's mirror branch and open its PR), then untick.
-- "Merge" is a momentary button: expose `merge=true` so the caller runs the
-reusable merge workflow, then untick.
 4. untick the momentary boxes (not the sticky Force one).
 
 Which action a ticked box maps to is decided by the stable `<!-- action:<id> -->`
@@ -33,7 +29,7 @@ Who may tick a box
 ------------------
 Three independent conditions, all required:
 
-1. the PR carries `ci-safe` — the same label the merge and provision workflows
+1. the PR carries `ci-safe` — the same label the provision workflow
 check before running PR code with credentials in scope, so a target branch
 cannot be moved unless the PR is vetted;
 2. the edited comment was authored by the bot, i.e. it is the panel we posted;
@@ -45,16 +41,16 @@ may edit a comment, so an edit is already authorized" — but the workflow selec
 the comment by a MARKER IN ITS BODY, not by who wrote it. Any user may post
 their own comment carrying that marker on a public PR and freely edit their own
 copy, which without (2) would let a non-collaborator force-push executor mirror
-branches and request merges. `SENDER` drives (3), and the bot check on it is
+branches. `SENDER` drives (3), and the bot check on it is
 only the loop-breaker for the panel's own reset edit.
 
 Runs are started with `gh workflow run queue.yaml --ref <PR head branch>` (a
 `workflow_dispatch`), NOT by toggling a label: a label applied by the bot's
 GITHUB_TOKEN does not emit a `labeled` event (GitHub blocks recursive runs),
 whereas a `workflow_dispatch` from the same token does run. Dispatching on the
-PR head branch makes the run's head_sha equal the PR head, so the Merge gate
-counts it. (Fork PRs have no head branch in this repo, so the panel can only
-dispatch for same-repo branches — the common GenVM flow.)
+PR head branch makes the run's head_sha equal the PR head. Fork PRs have no
+head branch in this repo, so the panel can only dispatch for same-repo branches
+— the common GenVM flow.
 
 Resetting the panel re-fires issue_comment:edited, but that event is sent by
 the bot, so it is ignored — no loop.
@@ -79,9 +75,9 @@ RUN_FULL_TESTS_LABEL = 'run-full-tests'
 # as `<!-- action:<id> -->`; nothing here depends on the prose beside it, so the
 # wording can change freely.
 ACTION_FORCE = 'force'
+# Compatibility until existing bot panels are refreshed on their next PR event.
 ACTION_RERUN = 'rerun'
 ACTION_PROVISION = 'provision'
-ACTION_MERGE = 'merge'
 
 ACTION_MARKER_RE = re.compile(r'<!--\s*action:([a-z-]+)\s*-->')
 
@@ -91,7 +87,6 @@ LEGACY_ACTION_KEYWORDS = (
 	(ACTION_FORCE, 'force'),
 	(ACTION_RERUN, 'rerun'),
 	(ACTION_PROVISION, 'provision'),
-	(ACTION_MERGE, 'merge'),
 )
 
 # The one box that is a toggle rather than a button: its ticked state mirrors the
@@ -117,11 +112,6 @@ def gh(*args: str, check: bool = True) -> str:
 	behaviour; separating the two is GVM-328.
 	"""
 	return gh_common.gh_manager(*args, check=check, retry=False)
-
-
-def set_output(name, value):
-	with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-		f.write(f'{name}={value}\n')
 
 
 def labels():
@@ -161,9 +151,9 @@ def head_branch():
 
 
 def dispatch_full_tests(*, release_pipeline_test: bool):
-	# Start queue.yaml on the PR head branch so the run's head_sha matches the
-	# PR head (the Merge gate keys off head_sha). Label edits intentionally do not
-	# trigger queue.yaml; workflow_dispatch is the only panel-driven entry point.
+	# Start queue.yaml on the PR head branch so the run's head_sha matches the PR
+	# head. Label edits intentionally do not trigger queue.yaml;
+	# workflow_dispatch is the only panel-driven entry point.
 	branch = head_branch()
 	if not branch:
 		print('could not resolve PR head branch; cannot dispatch full tests')
@@ -226,8 +216,8 @@ def is_legacy_panel(body: str) -> bool:
 
 	Decided per PANEL, not per line. Judging line by line would let the prose
 	fallback run on a modern panel — so a checkbox a reviewer adds by hand
-	(`- [x] merge conflicts resolved`) would fire `merge`, which is precisely
-	what the markers exist to prevent.
+	(`- [x] rerun-dependent checks`) could fire `rerun`, which is precisely what
+	the markers exist to prevent.
 	"""
 	return ACTION_MARKER_RE.search(body) is None
 
@@ -292,8 +282,6 @@ class PrActionPanel(ci_lib.Tool):
 
 
 def run_panel():
-	set_output('merge', 'false')
-
 	# Ignore the bot's own panel-reset edit (avoids a self-trigger loop).
 	if sender().endswith('[bot]'):
 		print(f'{sender()} is a bot (panel reset echo); ignoring')
@@ -324,9 +312,8 @@ def run_panel():
 		print('ignoring (only the bot-posted action panel drives these actions)')
 		return
 
-	# And the editor must be allowed to drive CI. Ticking a box force-pushes
-	# executor mirror branches and can request a merge, so it is a privileged
-	# action even though the merge itself re-checks its own gates.
+	# And the editor must be allowed to drive CI. Ticking a box can force-push
+	# executor mirror branches, so it is a privileged action.
 	if not gh_common.has_write_access(sender()):
 		print(f'`{sender()}` has no write access to {repo()}; ignoring panel actions')
 		return
@@ -346,14 +333,9 @@ def run_panel():
 	if ACTION_FORCE in actions and RUN_FULL_TESTS_LABEL not in current:
 		add_label(RUN_FULL_TESTS_LABEL)
 		dispatch = True
-
-	# Rerun: momentary -> always dispatch a fresh run on the current head.
 	if ACTION_RERUN in actions:
 		dispatch = True
 
-	# One dispatch at most: ticking Force and Rerun in the same edit would
-	# otherwise queue two runs for the same head, and the second cancels the
-	# first through the `queue.yaml` concurrency group.
 	if dispatch:
 		dispatch_full_tests(
 			release_pipeline_test='test-release-pipeline' in current,
@@ -362,9 +344,6 @@ def run_panel():
 	# Provision: momentary -> force-push executor mirror branches and open their PRs.
 	if ACTION_PROVISION in actions:
 		dispatch_provision()
-
-	if ACTION_MERGE in actions:
-		set_output('merge', 'true')
 
 	untick_momentary(body)
 

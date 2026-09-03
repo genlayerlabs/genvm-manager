@@ -164,7 +164,7 @@ def pr_field(pr: str, field: str) -> str:
 
 	The PR-scoped checks must not depend on `github.event.pull_request.*`: that
 	payload is absent on the panel's `workflow_dispatch`, which is how they came
-	to skip on exactly the runs the Merge gate accepts. A PR number is available
+	to skip on exactly the runs the App accepts. A PR number is available
 	on every triggering event, so everything else is resolved from it here.
 	"""
 	return gh_common.gh_manager(
@@ -224,7 +224,7 @@ class PrTitle(ci_lib.Pipeline):
 	"""
 	Fail unless the PR title is a valid conventional-commit subject.
 
-	The Merge action squashes a PR into `<title> (#N)`, so the title becomes a
+	The E2E App squashes a PR into `<title> (#N)`, so the title becomes a
 	commit subject verbatim — and nothing re-validates a generated squash
 	message against the commit-message hook. A title that would not pass as a
 	commit subject therefore lands as a commit the hook rejects. Checking it on
@@ -252,7 +252,7 @@ class PrTitle(ci_lib.Pipeline):
 			return 1
 
 		# Validate the subject that will actually LAND, not the bare title: the
-		# merge appends ` (#N)` (genvm_merge_into_dev.pr_reference), and the
+		# GitHub squash appends ` (#N)`, and the
 		# checker measures the raw subject length. Checking the title alone would
 		# pass a title just under the limit and still land an over-long subject.
 		subject = f'{title} (#{pr})'
@@ -266,8 +266,8 @@ class PrTitle(ci_lib.Pipeline):
 		)
 		if result.returncode != 0:
 			ci_lib.github_error(
-				f'PR title is not a valid commit subject: {subject!r}. The Merge action '
-				f'lands exactly this as the squashed commit subject, so it must satisfy '
+				f'PR title is not a valid commit subject: {subject!r}. The E2E App '
+				f'lands this as the squashed commit subject, so it must satisfy '
 				f'the same rules.'
 			)
 			return 1

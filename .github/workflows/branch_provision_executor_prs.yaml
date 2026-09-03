@@ -9,8 +9,8 @@ name: branch / provision executor mirror PRs
 # The provision scripts are checked out from the PR head, so a PR iterating on
 # them runs its own version — which means this job runs PR-authored code WITH the
 # executor write PAT (GENVM_EXECUTOR_PR_TOKEN) in scope. It is gated on the
-# `ci-safe` label: a guard step verifies it (via the plain GITHUB_TOKEN, before
-# any PR code runs) and fails otherwise, exactly like branch_merge_into_dev.yaml.
+# `ci-safe` label: a guard step verifies it via the plain GITHUB_TOKEN before
+# any PR code runs and fails otherwise.
 
 on:
   workflow_dispatch:

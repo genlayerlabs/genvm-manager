@@ -13,7 +13,12 @@ Executor crates are versioned **independently**: a line's `manifest.json` holds
 `executor-version` and no manager script rewrites it
 
 Manager branches are named after the *manager* train, not an executor line:
-`v<X>.x` is the release branch, `v<X>-dev` the integration branch
+`v<X>` is the release branch, `v<X>-dev` the integration branch. Here `<X>` is
+major.minor, for example `v0.6`
+
+On each manager branch push, `.gitmodules` declares the executor release
+branches to update. A manager dev push derives `<line>-dev` from each declared
+`<line>.x`; all updates are branch creation or fast-forward only
 
 ## Tools
 

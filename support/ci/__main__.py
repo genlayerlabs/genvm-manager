@@ -8,12 +8,13 @@ from pipelines import build, checks, docs, release, tests
 from tools import (
 	branches,
 	deploy_docs,
-	genvm_merge_into_dev,
+	full_tests_command,
 	make_release_notes,
 	open_executor_prs,
 	pr_action_panel,
 	pr_branches,
 	rebase_watch,
+	sync_executor_branches,
 	versions,
 )
 
@@ -28,12 +29,13 @@ TOOLS: list[ci_lib.Tool] = [
 	*versions.COMMANDS,
 	*branches.COMMANDS,
 	*deploy_docs.COMMANDS,
+	*full_tests_command.COMMANDS,
 	*pr_branches.COMMANDS,
 	*make_release_notes.COMMANDS,
 	*pr_action_panel.COMMANDS,
-	*genvm_merge_into_dev.COMMANDS,
 	*open_executor_prs.COMMANDS,
 	*rebase_watch.COMMANDS,
+	*sync_executor_branches.COMMANDS,
 ]
 
 

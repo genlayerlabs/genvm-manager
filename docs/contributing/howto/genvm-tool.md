@@ -12,7 +12,7 @@ has no wrapper
 | `test` | run the suite ([testing/README.md](testing/README.md)) |
 | `codegen` | render a data JSON into rust/python/rst/go |
 | `build-manifest` | write the manager's `data/manifest.yaml` |
-| `docs` | render the `docs/contributing/` indexes, the source of the list in `CLAUDE.md` |
+| `docs` | render the `docs/contributing/` indexes; `--write` splices them into `AGENTS.md` (`CLAUDE.md` is a symlink to it), `--check` fails when that copy is stale |
 | `fuzz-corpus` | seed the fuzz corpora from a finished run ([testing/fuzzing.md](testing/fuzzing.md)) |
 | `git` | `ls`, `list-repo`, `create-branches`, `check-for-push` across the manager and every executor submodule ([submodules.md](committing/submodules.md)) |
 
