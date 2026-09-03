@@ -165,7 +165,9 @@ class ObservabilityStep(base.CrossMajorStep):
 								'hook_cross_contract_calls', True
 							),
 						},
-						bucket_totals=[2**200] * 20,
+						bucket_totals=base.base_host.default_bucket_totals(
+							typing.cast(int, kwargs['line'])
+						),
 					)
 				if (
 					kwargs.get('apply_changes', True)

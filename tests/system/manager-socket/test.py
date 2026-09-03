@@ -180,7 +180,7 @@ def _run_request(
 			'code': (root / HELLO_WORLD).read_bytes(),
 			'calldata': gvm_calldata.encode({}),
 			'leader_public_data': None,
-			'bucket_totals': [2**200] * 20,
+			'bucket_totals': base_host.default_bucket_totals(3),
 			'gas_data': base_host.DEFAULT_GAS_DATA,
 			'message_fee_allocation': [],
 			'initial_time_units_allocation': 60,
@@ -884,7 +884,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					timeout=30,
 					debug_mode='unsafe',
 					request_extra={'no_modules': True},
-					bucket_totals=[2**200] * 20,
+					bucket_totals=base_host.default_bucket_totals(3),
 				)
 
 	async def _unix_parent_and_stale_socket(self):

@@ -83,6 +83,19 @@ default_env = {
 	if genvm_tool.tests.util.environ.DEFAULT_FILTER(k, v)
 }
 
+
+def _normalize_message_fee_allocation(
+	allocation: fees.MessageAllocationNode,
+) -> fees.MessageAllocationNode:
+	allocation = allocation.copy()
+	if isinstance(allocation['recipient'], str):
+		allocation['recipient'] = Address(allocation['recipient'])
+	allocation['children'] = [
+		_normalize_message_fee_allocation(child) for child in allocation['children']
+	]
+	return allocation
+
+
 # `prepare` scripts run `cargo build`; the host `rustc` used for build
 # scripts/proc-macros needs libz etc. on LD_LIBRARY_PATH. Fold in
 # CARGO_LD_LIBRARY_PATH the same way cargo.py does for its own commands.
@@ -295,6 +308,7 @@ class IntegrationSingleCase(genvm_tool.tests.test.Case):
 	description: genvm_tool.tests.test.Description
 	jsonnet_path: Path
 	cases_dir: Path
+	executor_major: int
 	reroute_to: str
 	manager_service: genvm_tool.tests.stage.collection.Service
 	tree_path: str
@@ -752,18 +766,32 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					request_extra['permissions'] = case_permissions
 				if hook_calls:
 					request_extra['hook_cross_contract_calls'] = True
-				dflt_bucket = 2**200
-				bucket_totals: list[int] = single_conf.get('bucket_totals', [dflt_bucket] * 10)
+				bucket_totals = base_host.default_bucket_totals(self._test_case.executor_major)
+				bucket_totals.update(single_conf.get('bucket_totals', {}))
 
 				default_message_fee_allocation = [
 					fees.DEFAULT_EXTERNAL_MESSAGE_ALLOC,
 					fees.DEFAULT_INTERNAL_FIN_MESSAGE_ALLOC,
 					fees.DEFAULT_INTERNAL_DEC_MESSAGE_ALLOC,
 				]
+				if self._test_case.executor_major >= 3:
+					for index, allocation in enumerate(default_message_fee_allocation[1:], 1):
+						allocation = allocation.copy()
+						allocation['fee_params'] = {
+							'Internal': {
+								**allocation['fee_params']['Internal'],
+								'max_price_gen_per_time_unit': 1,
+							}
+						}
+						default_message_fee_allocation[index] = allocation
 
 				message_fee_allocation: list[fees.MessageAllocationNode] = single_conf.get(
 					'message_fee_allocation', default_message_fee_allocation
 				)
+				message_fee_allocation = [
+					_normalize_message_fee_allocation(allocation)
+					for allocation in message_fee_allocation
+				]
 
 				if not single_conf['message'].get('is_init', False):
 					code = None
@@ -1312,6 +1340,7 @@ def integration_test_single_executor(
 	integration_test_directory(
 		ctx,
 		cases_dir=CASES_DIR,
+		executor_major=int(executor_version.removeprefix('v').split('.')[1]),
 		reroute_to=reroute_to,
 		save_hashes=save_hashes,
 		manager_service=manager_service,
@@ -1325,6 +1354,7 @@ def integration_test_directory(
 	ctx: genvm_tool.tests.stage.collection.Context,
 	*,
 	cases_dir: Path,
+	executor_major: int,
 	reroute_to: str,
 	save_hashes: bool,
 	manager_service: genvm_tool.tests.stage.collection.Service,
@@ -1358,6 +1388,7 @@ def integration_test_directory(
 				jsonnet_file,
 				jsonnet_cache,
 				cases_dir=cases_dir,
+				executor_major=executor_major,
 				reroute_to=reroute_to,
 				save_hashes=save_hashes,
 				manager_service=manager_service,
@@ -1382,6 +1413,7 @@ def _single_integration_test(
 	jsonnet_cache: JsonnetCache,
 	*,
 	cases_dir: Path,
+	executor_major: int,
 	reroute_to: str,
 	save_hashes: bool,
 	manager_service: genvm_tool.tests.stage.collection.Service,
@@ -1545,6 +1577,7 @@ def _single_integration_test(
 				description=step_desc,
 				jsonnet_path=jsonnet_file,
 				cases_dir=cases_dir,
+				executor_major=executor_major,
 				reroute_to=reroute_to,
 				manager_service=manager_service,
 				tree_path=tree_path,
