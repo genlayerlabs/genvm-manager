@@ -5,6 +5,24 @@ User-observable changes to the specification, grouped by executor line (see
 :doc:`01-core-architecture/03-versioning`). Internal refactors are omitted;
 see the repository history for those
 
+.. _gvm-changelog-v0-2:
+
+v0.2
+----
+
+Breaking
+~~~~~~~~
+
+#. ``LeaderPublicData`` uses calldata ``{"nd_outs": bytes[]}`` instead of an
+   RLP list with a trailing ``padded`` sentinel. Its gas accounting uses a
+   conservative 64-byte frame plus a 64-byte header and 32-byte-padded data for
+   each output
+#. Fee-bucket references are human-readable names. The execution request's
+   ``bucket_totals`` and result's ``data_fees_remaining`` fields are maps keyed
+   by bucket name, and executor fee rules use ``buckets`` with 1 name or an
+   array of names. Numeric bucket arrays and the former ``bucket_no`` config
+   field are rejected
+
 .. _gvm-changelog-v0-3:
 
 v0.3
@@ -13,6 +31,23 @@ v0.3
 Breaking
 ~~~~~~~~
 
+#. ``LeaderPublicData`` uses calldata ``{"nd_outs": bytes[]}`` instead of an
+   RLP list with a trailing ``padded`` sentinel. Its fee and output-cap
+   accounting uses a conservative 64-byte frame plus a 64-byte header and
+   32-byte-padded data for each output
+#. Each outbound message consumes 1 unit from the
+   ``submitted_messages_count`` bucket in addition to its byte and gas charges.
+   Submitted-message byte accounting includes the canonical ABI array frame,
+   struct head, fee parameters, payload, and allocation subtree. Receipt-gas
+   accounting includes the host-provided ``receiptWrapperBytes`` governance value
+#. Message-reveal gas and ABI-array overhead are charged on the first successfully
+   emitted message rather than at execution startup. Message-free executions do
+   not consume that reveal allowance
+#. Fee-bucket references are human-readable names. The execution request's
+   ``bucket_totals`` and result's ``data_fees_remaining`` fields are maps keyed
+   by bucket name, and executor fee rules use ``buckets`` with 1 name or an
+   array of names. Numeric bucket arrays and the former ``bucket_no`` config
+   field are rejected
 #. The pre-finalization state is spelled *decided* everywhere it is named.
    :ref:`gvm-def-enum-storage-view` reads ``latest_finalized`` (1) and
    ``latest_decided`` (2) instead of ``latest_final`` and ``latest_non_final``,
@@ -48,10 +83,21 @@ Breaking
       ``/``, no backslash, no empty, ``.`` or ``..`` path component, no
       trailing ``/`` on a file
    #. Entries sharing a name resolve to the last of them
+#. Hosts must provide separate ``minProposeTimeout``, ``maxProposeTimeout``,
+   ``minCommitTimeout`` and ``maxCommitTimeout`` gas-data values. The former
+   ``minTimeUnitsPerPhase`` value is no longer read
 
 Changed
 ~~~~~~~
 
+#. Every internal message declares its minimum primary fee plus its direct child
+   allocation budgets, independent of whether it is emitted on acceptance or
+   finalization. Balance-funded messages have no allocation subtree and declare
+   only the primary fee; external messages declare zero
+#. Unless both time-unit allocations are zero, internal message emission checks
+   leader units against propose bounds and validator units against commit bounds;
+   violations report
+   :ref:`gvm-def-str-trie-value-vm-error-fee-phase-timeout-out-of-bounds`
 #. A missing or malformed runner archive/comment header is now reported as
    :ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-absent` or
    :ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-malformed`

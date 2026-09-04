@@ -809,13 +809,14 @@ components:
           default: 20
           description: Maximum execution time in minutes
         bucket_totals:
-          type: array
-          items:
+          type: object
+          minProperties: 1
+          additionalProperties:
             type: string
           description: |
-            Per-bucket data-fee balances, as big integer strings, indexed by the
-            bucket numbers the executor's fee config references. No default: a
-            request that omits it is rejected.
+            Per-bucket data-fee balances, as big integer strings keyed by the
+            non-empty names the executor's fee config references. No default:
+            a request that omits it is rejected.
         host_data:
           type: string
           description: Host-specific data as JSON string

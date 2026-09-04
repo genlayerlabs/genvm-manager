@@ -982,7 +982,7 @@ pub struct Request {
     #[serde(default = "default_max_execution_minutes")]
     #[calldata(default = default_max_execution_minutes)]
     pub max_execution_minutes: u64,
-    pub bucket_totals: Vec<num_bigint::BigInt>,
+    pub bucket_totals: std::collections::BTreeMap<String, num_bigint::BigInt>,
     pub host_data: String,
     #[calldata(serialize_with = encode_datetime_rfc3339, deserialize_with = decode_datetime_rfc3339)]
     pub timestamp: chrono::DateTime<chrono::Utc>,
@@ -2155,7 +2155,7 @@ impl Ctx {
             is_sync: true,
             debug_mode: genvm_common::DebugMode::Disabled,
             max_execution_minutes: parent_req.max_execution_minutes,
-            bucket_totals: Vec::new(),
+            bucket_totals: std::collections::BTreeMap::new(),
             host_data: parent_req.host_data.clone(),
             timestamp: envelope.message.transaction_timestamp,
             host: parent_req.host.clone(),

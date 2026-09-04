@@ -554,7 +554,7 @@ fn clean_reported() -> genvm_modules_interfaces::ReportedResult {
         emissions: Vec::new(),
         nondet_disagreement: None,
         leader_public_data: bytes::Bytes::new(),
-        data_fees_remaining: Vec::new(),
+        data_fees_remaining: std::collections::BTreeMap::new(),
         data_fees_consumed: Default::default(),
         llm_consumed_gen_wei: primitive_types::U256::zero(),
     }

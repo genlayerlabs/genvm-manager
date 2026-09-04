@@ -50,46 +50,34 @@ fn push_address(buf: &mut Vec<u8>, addr: Option<&genlayer_calldata::Address>) {
     }
 }
 
-/// `callKey` is already a 32-byte word; `None` is the `CALL_KEY_WILDCARD` = `bytes32(0)`.
+/// `callKey` is already a 32-byte word; `None` is `CALL_KEY_WILDCARD`.
 fn push_call_key(buf: &mut Vec<u8>, call_key: Option<&crate::abi_stub::CallKey>) {
     match call_key {
         Some(ck) => buf.extend_from_slice(&ck.0),
-        None => buf.extend_from_slice(&[0u8; 32]),
+        None => buf.extend_from_slice(&super::CALL_KEY_WILDCARD.0),
     }
 }
 
-/// ABI-encodes the nested allocation tree as the chain's flat
-/// `MessageAllocationNode[]` representation (matching `abi.encode(nodes)`).
-pub(super) fn encode(roots: &[MessageAllocationNode]) -> Vec<u8> {
-    // Pre-order flatten: (node, parentIndex). Parents always precede children,
-    // so the parent's array index is already assigned when a child is visited.
+/// Encodes the transport payload consumed by `decodeAllocationSubtree`.
+pub(super) fn encode(root: &MessageAllocationNode) -> Vec<u8> {
     let mut flat: Vec<(&MessageAllocationNode, U256)> = Vec::new();
-    fn flatten<'a>(
-        nodes: &'a [MessageAllocationNode],
-        parent: U256,
-        out: &mut Vec<(&'a MessageAllocationNode, U256)>,
-    ) {
-        for node in nodes {
-            let my_index = U256::from(out.len() as u64);
-            out.push((node, parent));
-            flatten(&node.children, my_index, out);
+    let mut queue = std::collections::VecDeque::from([(root, NODE_ROOT_SENTINEL)]);
+    while let Some((node, parent_index)) = queue.pop_front() {
+        let node_index = U256::from(flat.len());
+        flat.push((node, parent_index));
+        for child in &node.children {
+            queue.push_back((child, node_index));
         }
     }
-    flatten(roots, NODE_ROOT_SENTINEL, &mut flat);
 
-    // Encode each element as its own self-contained dynamic tuple.
     let elements: Vec<Vec<u8>> = flat
         .iter()
         .map(|(node, parent_index)| encode_node(node, *parent_index))
         .collect();
 
-    // `abi.encode(MessageAllocationNode[])`: leading offset (0x20) to the array.
     let mut buf = Vec::new();
     push_word(&mut buf, 0x20);
 
-    // Dynamic array of dynamic elements: length, then per-element head offsets
-    // (relative to the start of the head region, i.e. right after the length),
-    // then the element tails.
     push_word(&mut buf, elements.len() as u64);
     let mut offset = elements.len() * 32;
     for element in &elements {
