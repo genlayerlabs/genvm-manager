@@ -547,6 +547,24 @@ def main(ctx: common.Context, args) -> int:
 	runners_build.var('pool', 'console')
 	runners_build.finish()
 
+	# Warms the docker layer cache the integration suite's webdriver service
+	# relies on: a cold build of that image outlives the per-service spawn budget.
+	webdriver_dir = source_dir / 'webdriver'
+	webdriver_inputs = [
+		f
+		for f in ninja.glob(webdriver_dir, '**/*')
+		# what .dockerignore drops is not part of the context
+		if f.is_file() and not ({'node_modules', 'dist'} & set(f.parts))
+	]
+
+	n.build('phony', 'webdriver/image').add_dependency('target/webdriver-image').finish()
+
+	webdriver_build = n.build('CUSTOM_COMMAND', 'target/webdriver-image')
+	webdriver_build.var('command', ['docker', 'build', '--progress=plain', webdriver_dir])
+	webdriver_build.add_implicit_dependency(webdriver_inputs)
+	webdriver_build.var('pool', 'console')
+	webdriver_build.finish()
+
 	n.build('phony', 'cargo/fmt').add_dependency(n.all_format).finish()
 	n.build('phony', 'cargo/clippy').add_dependency(n.all_clippy).finish()
 	n.build('phony', 'cargo/clippy/fix').add_dependency(n.all_clippy_fix).finish()

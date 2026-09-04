@@ -264,7 +264,7 @@ A minimal, illustrative ``fees`` block::
      "message_fee": {
        "buckets": "message_fee",
        "delta_expr":
-         "\\a = if a.isInternal\n        then node.gasInternal\n        else floor (a.matchedFeeParams.executionBudgetPerRound * arrayLen a.matchedFeeParams.rotations)"
+         "\\a = if a.isInternal\n        then node.gasInternal * arrayLen a.matchedFeeParams.rotations\n        else a.matchedFeeParams.gasLimit * a.matchedFeeParams.maxGasPrice"
      },
      "event": {
        "buckets": "execution_data_gas",
@@ -300,8 +300,9 @@ An outgoing internal message is funded one of two ways:
 - **Allocation-matched (default).** The fee is matched against the allocation
   tree as above. After the expression computes the primary reserve, the executor
   adds the budgets of the matched node's direct children; deeper budgets are
-  already contained by their direct parent. This declared budget is capped by
-  the matched node's ``budget`` and consumes ``message_fee`` atomically with the
+  already contained by their direct parent. A declared budget exceeding the
+  matched node's remaining ``budget`` is rejected with an allocation-budget
+  error; otherwise it consumes ``message_fee`` atomically with the
   ``message_receipt`` charge.
 - **Balance-funded (``use_balance``).** When an ``EmitInternalMessage`` /
   ``EmitInternalDeployMessage``
