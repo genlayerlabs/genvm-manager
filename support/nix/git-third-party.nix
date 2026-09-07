@@ -1,8 +1,10 @@
 # Library for genvm's `.git-third-party` convention.
 #
-# A `.git-third-party` directory holds a `config.json`:
-#   { "repos": { "<repo-path>": { "url": ..., "commit": ..., "patches": <count> } } }
-# and patch files at `patches/<repo-path>/<n>` (1-based).
+# A `.git-third-party` directory holds a `manifest.json`:
+#   { "repos": { "<repo-path>": { "url": ..., "commit": ..., "patches": [<name>...] } } }
+# and patch files at `patches/<repo-path>/<name>`, applied in the listed order.
+# Older trees name the manifest `config.json` and carry a patch *count* there,
+# the files being `1`..`<count>`; both are read.
 #
 # `load <dir>` fetches each repo at its pinned commit, applies its patches, and
 # returns an attrset { <repo-path> = <patched source derivation>; }. Callers
@@ -12,7 +14,12 @@ let
   load =
     dir:
     let
-      repos = (builtins.fromJSON (builtins.readFile "${dir}/config.json")).repos;
+      manifest =
+        let
+          current = "${dir}/manifest.json";
+        in
+        if builtins.pathExists current then current else "${dir}/config.json";
+      repos = (builtins.fromJSON (builtins.readFile manifest)).repos;
     in
     builtins.mapAttrs (
       path: cfg:
@@ -28,9 +35,12 @@ let
       pkgs.applyPatches {
         name = "gtt-" + builtins.hashString "sha256" path + "-patched";
         src = unpatched;
-        patches = builtins.genList (
-          patch-no: "${dir}/patches/${path}/${toString (patch-no + 1)}"
-        ) cfg.patches;
+        patches = builtins.map (name: "${dir}/patches/${path}/${name}") (
+          if builtins.isInt cfg.patches then
+            builtins.genList (patch-no: toString (patch-no + 1)) cfg.patches
+          else
+            cfg.patches
+        );
       }
     ) repos;
 in

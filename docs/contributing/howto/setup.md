@@ -21,8 +21,8 @@
    `?submodules=1` is mandatory on every manager flake ref; without it nix
    fails with `Path 'executors/v0.3.x' … is not tracked by Git`
 3. Only outside the dev shell, and only for manual `git third-party` calls:
-   `source env.sh` puts `support/tools/git-third-party` on `PATH` and sources
-   `.env` if present
+   `source env.sh` realizes the pinned `git-third-party` flake package onto
+   `PATH` and sources `.env` if present
 
 Next: [build.md](building/build.md). Vendoring mechanics:
 [git-third-party.md](committing/git-third-party.md)

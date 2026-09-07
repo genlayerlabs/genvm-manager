@@ -53,6 +53,33 @@ def git_output_bytes(cmd: list[str], cwd: Path) -> bytes:
 	return subprocess.run(cmd, check=True, cwd=cwd, stdout=subprocess.PIPE).stdout
 
 
+def git_third_party_bin(root: Path) -> Path:
+	"""
+	Realizes the pinned `git-third-party` and returns the directory holding it.
+
+	This script runs before the dev shell, where the tool is not on PATH yet;
+	the flake input is what pins its version.
+	"""
+	found = shutil.which('git-third-party')
+	if found is not None:
+		return Path(found).parent
+
+	out = subprocess.run(
+		[
+			'nix',
+			'build',
+			'--no-link',
+			'--print-out-paths',
+			f'{root}?submodules=1#git-third-party',
+		],
+		check=True,
+		cwd=root,
+		text=True,
+		capture_output=True,
+	).stdout.strip()
+	return Path(out) / 'bin'
+
+
 def repo_root(value: str | None) -> Path:
 	if value is not None:
 		return Path(value).resolve()
@@ -593,18 +620,19 @@ def main() -> None:
 
 	root = repo_root(args.repo_root)
 	env = os.environ.copy()
-	git_third_party = root / 'support' / 'tools' / 'git-third-party'
-	env['PATH'] = f'{git_third_party}{os.pathsep}{env.get("PATH", "")}'
 
 	update_submodules_with_cache(root, env)
 
 	if args.third_party == 'none':
 		return
 
+	env['PATH'] = f'{git_third_party_bin(root)}{os.pathsep}{env.get("PATH", "")}'
+
 	third_party_args = shlex.split(args.third_party)
-	for cfg in sorted(root.glob('executors/*/.git-third-party/config.json')):
-		executor = cfg.parent.parent
-		run(['git', 'third-party', 'update', *third_party_args], executor, env)
+	for line in sorted(root.glob('executors/*/.git-third-party')):
+		if not (line / 'manifest.json').exists() and not (line / 'config.json').exists():
+			continue
+		run(['git', 'third-party', 'update', *third_party_args], line.parent, env)
 
 
 if __name__ == '__main__':
