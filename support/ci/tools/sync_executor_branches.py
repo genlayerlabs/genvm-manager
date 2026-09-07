@@ -70,9 +70,10 @@ def sync_line(line: str, manager_branch: str) -> tuple[str, str]:
 	path = f'executors/{line}.x'
 	target = target_branch(manager_branch, declared_branch(path))
 
-	initialized = git(
-		'submodule', 'update', '--init', '--depth', '1', '--', path, check=False
-	)
+	# Full history: a shallow gitlink checkout holds the pinned commit alone, so
+	# git cannot show the push builds on the target branch and the server
+	# rejects even a genuine fast-forward
+	initialized = git('submodule', 'update', '--init', '--', path, check=False)
 	if initialized.returncode != 0:
 		detail = (initialized.stderr or initialized.stdout).strip()
 		raise SyncError(
@@ -88,6 +89,19 @@ def sync_line(line: str, manager_branch: str) -> tuple[str, str]:
 			f'could not resolve the gitlink checkout for `{path}`'
 			+ (f': {detail}' if detail else '')
 		)
+	# A missing target is created by the push below; an existing one is checked
+	# here so a divergence is named instead of surfacing as a push rejection
+	fetched = git('-C', path, 'fetch', 'origin', f'refs/heads/{target}', check=False)
+	if fetched.returncode == 0:
+		contained = git(
+			'-C', path, 'merge-base', '--is-ancestor', 'FETCH_HEAD', sha, check=False
+		)
+		if contained.returncode != 0:
+			raise SyncError(
+				f'`{target}` has diverged: its tip is not an ancestor of `{sha}`; '
+				'reconcile the executor branch with the manager gitlink by hand'
+			)
+
 	result = git(
 		'-C',
 		path,
