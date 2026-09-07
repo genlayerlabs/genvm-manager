@@ -72,3 +72,7 @@ Changed
    code — e.g. exhausting the memory budget there reports
    :ref:`gvm-def-str-trie-value-vm-error-out-of-memory-wasm-memory` — instead of
    being reported as a bare ``invalid_contract``
+#. ``storage_read`` and ``storage_write`` bound an access by the
+   :term:`Storage Slot` length instead of by ``u32`` overflow, so a slot's final
+   octet is addressable; every access naming it was previously refused. See
+   :doc:`02-execution-environment/03-wasi_genlayer_sdk/01-functions`

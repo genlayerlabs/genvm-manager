@@ -452,12 +452,12 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		new_code = typing.cast(bytes, resolve_runners(new_code, root_dir))
 		with open(self.storage_path, 'rb') as storage_file:
 			storage: MockStorage = pickle.load(storage_file)
-		slots = storage._storages[address]
 		code_slots = [
 			slot
-			for slot, data in slots.items()
-			if int.from_bytes(data[:4], byteorder='little') == len(old_code)
-			and bytes(data[4 : 4 + len(old_code)]) == old_code
+			for slot in storage.slots(address)
+			if int.from_bytes(storage.read(address, slot, 0, 4), byteorder='little')
+			== len(old_code)
+			and storage.read(address, slot, 4, len(old_code)) == old_code
 		]
 		assert len(code_slots) == 1, code_slots
 		storage.write(

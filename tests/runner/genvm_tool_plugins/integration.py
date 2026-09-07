@@ -429,12 +429,12 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 		base_mock_storage = MockStorage()
 		if storage_json := top_level_conf.get('storage_json'):
 			storage_b64 = json.loads(await gvm_io.read_file_text(Path(storage_json)))
-			base_mock_storage._storages = {
-				Address(a): {
-					base64.b64decode(k): bytearray(base64.b64decode(v)) for k, v in kv.items()
+			base_mock_storage.load(
+				{
+					Address(a): {base64.b64decode(k): base64.b64decode(v) for k, v in kv.items()}
+					for a, kv in storage_b64.items()
 				}
-				for a, kv in storage_b64.items()
-			}
+			)
 
 		empty_storage = tmp_dir.joinpath('empty-storage.pickle')
 		await gvm_io.write_file_bytes(empty_storage, pickle.dumps(base_mock_storage))
