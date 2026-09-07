@@ -56,3 +56,33 @@ the nested repo's commits and `save`
    `manifest.json` and uses `builtins.fetchGit` plus `pkgs.applyPatches`, ignoring
    `submodules`. So nix sees the committed base plus patches — `save` and commit
    before building any flake package
+
+## Advisory Monitoring
+
+`branch / wasmtime watch` checks every vendored source of every active line
+against [OSV](https://osv.dev) daily and keeps one `wasmtime-maintenance` issue
+in sync with the result. It gates nothing and writes no branch. Run it by hand
+with `./support/ci/run.sh tool wasmtime-watch --dry-run`
+
+Two things are queried per line, because neither covers the other:
+
+1. each repo in `manifest.json`, by its pinned upstream commit
+2. each crate that comes out of one, by its locked version — a vendored tree is
+   dozens of crates (`cranelift-codegen`, `wasmparser`, `wiggle`), and that is
+   where most advisories against this stack are actually published
+
+A crate counts as vendored when `executor/Cargo.lock` gives it no `source` and
+no tracked `Cargo.toml` in the executor repo declares it. Registry crates are
+excluded because they are covered upstream; first-party crates, because they are
+ours. A first-party crate with no committed manifest falls through and is
+queried too — a dismissible false positive, chosen over a silent gap
+
+OSV knows nothing about the features GenVM disables or what the patch series
+changes, so a hit is a finding to rule on, not a proven exposure
+
+The sweep edits its issue in place and never closes or reopens one: closing it
+is the ruling that its findings are handled. The advisory ids that issue covered
+are recorded in its body marker, so later sweeps stay quiet until an id outside
+that set appears, at which point a fresh issue supersedes it.
+`WASMTIME_REBASE_OWNER` (an Actions variable) is the login the issue is assigned
+to at creation; sweeps never reassign it

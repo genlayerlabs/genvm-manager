@@ -37,6 +37,7 @@ import os
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import urllib.parse
 
@@ -355,3 +356,41 @@ def has_write_access(login: str) -> bool:
 	if r.returncode != 0:
 		return False
 	return json.loads(r.stdout).get('permission') in WRITE_ROLES
+
+
+def api_json(method: str, path: str, payload: dict, *, retry: bool = False) -> str:
+	"""
+	`gh api` with a nested JSON body, as the manager.
+
+	Through a temporary file rather than `-f` fields: a payload that nests (a
+	check-run's `output.title`, an issue's `assignees` list) cannot be expressed
+	as `-f` pairs, and `--input -` would need stdin that `gh` above does not
+	plumb. Defaults to `retry=False` because every caller so far is a write, and
+	`gh`'s transient-failure markers can misread a request that in fact
+	succeeded.
+	"""
+	with tempfile.NamedTemporaryFile('w', suffix='.json') as body:
+		json.dump(payload, body)
+		body.flush()
+		return gh_manager(
+			'api', '--method', method, path, '--input', body.name, retry=retry
+		)
+
+
+def ensure_label(name: str, color: str, description: str) -> None:
+	"""
+	Create a repo label if it is missing; already-exists (422) is the normal case.
+	"""
+	gh_manager(
+		'api',
+		'--method',
+		'POST',
+		f'repos/{repo()}/labels',
+		'-f',
+		f'name={name}',
+		'-f',
+		f'color={color}',
+		'-f',
+		f'description={description}',
+		check=False,
+	)
