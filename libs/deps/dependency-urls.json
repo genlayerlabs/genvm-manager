@@ -46,12 +46,12 @@
     "fetcher": "fetchzip"
   },
   {
-    "name": "rust-channel-stable-2026-03-05",
-    "original_url": "https://static.rust-lang.org/dist/2026-03-05/channel-rust-stable.toml",
+    "name": "rust-channel-stable-2026-09-03",
+    "original_url": "https://static.rust-lang.org/dist/2026-09-03/channel-rust-stable.toml",
     "alternative_urls": [
-      "https://storage.googleapis.com/genvm-artifacts/channel-rust-stable-2026-03-05.toml"
+      "https://storage.googleapis.com/genvm-artifacts/channel-rust-stable-2026-09-03.toml"
     ],
-    "hash": "sha256-qqF33vNuAdU5vua96VKVIwuc43j4EFeEXbjQ6+l4mO4=",
+    "hash": "sha256-p8h3Sl/YRByZfZTAKXdsvF6xEenXKrXSVvpphmZENH4=",
     "must_preload": false,
     "needed-for": [
       "x86_64-linux",
@@ -65,7 +65,7 @@
       "executor-arm64-macos"
     ],
     "fetcher": "fetchurl",
-    "upload_as": "channel-rust-stable-2026-03-05.toml"
+    "upload_as": "channel-rust-stable-2026-09-03.toml"
   },
   {
     "name": "binaryen-raw-128",
