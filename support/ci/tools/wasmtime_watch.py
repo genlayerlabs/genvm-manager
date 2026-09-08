@@ -47,6 +47,10 @@ MARKER_RE = re.compile(
 
 OWNER_ENV = 'WASMTIME_REBASE_OWNER'
 
+# A backslash cannot appear inside an f-string expression before python 3.12,
+# and the scheduled workflow runs whatever `python3` the runner ships
+TABLE_PIPE = r'\|'
+
 
 @dataclasses.dataclass(frozen=True)
 class Marker:
@@ -81,7 +85,7 @@ def body_for(
 	if findings:
 		rows = '\n'.join(
 			f'| [{advisory.id}]({advisory.url}) '
-			f'| {advisory.summary.replace("|", r"\|")} '
+			f'| {advisory.summary.replace("|", TABLE_PIPE)} '
 			f'| {", ".join(str(subject) for subject in subjects)} |'
 			for advisory, subjects in findings.items()
 		)

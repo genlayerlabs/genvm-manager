@@ -630,7 +630,7 @@ def main() -> None:
 
 	third_party_args = shlex.split(args.third_party)
 	for line in sorted(root.glob('executors/*/.git-third-party')):
-		if not (line / 'manifest.json').exists() and not (line / 'config.json').exists():
+		if not (line / 'manifest.json').exists():
 			continue
 		run(['git', 'third-party', 'update', *third_party_args], line.parent, env)
 
