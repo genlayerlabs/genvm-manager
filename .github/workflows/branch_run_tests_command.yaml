@@ -31,7 +31,7 @@ jobs:
       actions: write
       contents: read
       issues: write
-      pull-requests: read
+      pull-requests: write
     steps:
       # issue_comment workflows run from the default branch. Keep that trusted
       # checkout: this handler dispatches PR code with credentials in scope
@@ -57,6 +57,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: write
     steps:
       # workflow_run also resolves this workflow from the default branch. Never
       # check out or execute the completed run's potentially PR-authored tree
