@@ -491,7 +491,6 @@ where
                 return Ok(());
             }
         };
-        req.patch_legacy_method_key();
         if req
             .host_hello_data
             .get(1)
