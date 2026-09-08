@@ -248,6 +248,10 @@ TEST_MOCK_BUILD_RUNNERS = DefaultStepInfo(
 TEST_MOCK_BUILD_ALL = TEST_MOCK_BUILD_BINS.merge(TEST_MOCK_BUILD_RUNNERS)
 
 TEST_MOCK_PR = DefaultStepInfo(
+	# The webdriver service is spawned lazily, deep into the suite, under a spawn
+	# budget that a cold image build does not fit in; build it here so that call
+	# is a docker cache hit.
+	build_step=Stage(data=frozenset(['webdriver/image'])),
 	tool_step=Stage(
 		commands_pre=[
 			{'type': 'group-start', 'name': 'precompile'},
@@ -258,7 +262,7 @@ TEST_MOCK_PR = DefaultStepInfo(
 			tests_name_filter_for_or=None,
 			tests_tags_filter_for_or='integration',
 		),
-	)
+	),
 )
 
 TEST_MOCK_RELEASE = DefaultStepInfo(

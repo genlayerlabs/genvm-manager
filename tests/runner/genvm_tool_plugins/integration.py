@@ -83,6 +83,19 @@ default_env = {
 	if genvm_tool.tests.util.environ.DEFAULT_FILTER(k, v)
 }
 
+
+def _normalize_message_fee_allocation(
+	allocation: fees.MessageAllocationNode,
+) -> fees.MessageAllocationNode:
+	allocation = allocation.copy()
+	if isinstance(allocation['recipient'], str):
+		allocation['recipient'] = Address(allocation['recipient'])
+	allocation['children'] = [
+		_normalize_message_fee_allocation(child) for child in allocation['children']
+	]
+	return allocation
+
+
 # `prepare` scripts run `cargo build`; the host `rustc` used for build
 # scripts/proc-macros needs libz etc. on LD_LIBRARY_PATH. Fold in
 # CARGO_LD_LIBRARY_PATH the same way cargo.py does for its own commands.
@@ -764,6 +777,10 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				message_fee_allocation: list[fees.MessageAllocationNode] = single_conf.get(
 					'message_fee_allocation', default_message_fee_allocation
 				)
+				message_fee_allocation = [
+					_normalize_message_fee_allocation(allocation)
+					for allocation in message_fee_allocation
+				]
 
 				if not single_conf['message'].get('is_init', False):
 					code = None
