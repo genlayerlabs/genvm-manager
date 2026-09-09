@@ -83,6 +83,19 @@ default_env = {
 	if genvm_tool.tests.util.environ.DEFAULT_FILTER(k, v)
 }
 
+
+def _normalize_message_fee_allocation(
+	allocation: fees.MessageAllocationNode,
+) -> fees.MessageAllocationNode:
+	allocation = allocation.copy()
+	if isinstance(allocation['recipient'], str):
+		allocation['recipient'] = Address(allocation['recipient'])
+	allocation['children'] = [
+		_normalize_message_fee_allocation(child) for child in allocation['children']
+	]
+	return allocation
+
+
 # `prepare` scripts run `cargo build`; the host `rustc` used for build
 # scripts/proc-macros needs libz etc. on LD_LIBRARY_PATH. Fold in
 # CARGO_LD_LIBRARY_PATH the same way cargo.py does for its own commands.
@@ -429,12 +442,12 @@ class IntegrationSetupStep(genvm_tool.tests.exec.step.Python):
 		base_mock_storage = MockStorage()
 		if storage_json := top_level_conf.get('storage_json'):
 			storage_b64 = json.loads(await gvm_io.read_file_text(Path(storage_json)))
-			base_mock_storage._storages = {
-				Address(a): {
-					base64.b64decode(k): bytearray(base64.b64decode(v)) for k, v in kv.items()
+			base_mock_storage.load(
+				{
+					Address(a): {base64.b64decode(k): base64.b64decode(v) for k, v in kv.items()}
+					for a, kv in storage_b64.items()
 				}
-				for a, kv in storage_b64.items()
-			}
+			)
 
 		empty_storage = tmp_dir.joinpath('empty-storage.pickle')
 		await gvm_io.write_file_bytes(empty_storage, pickle.dumps(base_mock_storage))
@@ -764,6 +777,10 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				message_fee_allocation: list[fees.MessageAllocationNode] = single_conf.get(
 					'message_fee_allocation', default_message_fee_allocation
 				)
+				message_fee_allocation = [
+					_normalize_message_fee_allocation(allocation)
+					for allocation in message_fee_allocation
+				]
 
 				if not single_conf['message'].get('is_init', False):
 					code = None

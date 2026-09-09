@@ -71,6 +71,9 @@ jobs:
         uses: ./.github/actions/get-src
         with:
           with_nix: "false"
+          # Commit messages need history, not vendored sources, and asking for
+          # them would install nix here for nothing.
+          third_party: none
           pr: ${{ inputs.pr }}
           # Needed even with with_nix=false: on a dispatched run there is no
           # GITHUB_BASE_REF, so ci-changes.py resolves the base branch through

@@ -1,0 +1,61 @@
+name: branch / wasmtime watch
+
+# Daily sweep for published advisories against the upstream sources the manager
+# vendors: each repo in an executor line's `manifest.json` by its pinned commit,
+# and each crate that comes out of one by its locked version.
+#
+# It gates nothing and writes no branch: it keeps one `wasmtime-maintenance`
+# issue in sync with what OSV currently says. Nothing PR-triggered could do this
+# job — a pin becomes vulnerable while standing still, with no PR involved.
+#
+# Closing the issue is a human ruling on the findings it names; the tool never
+# closes or reopens one. See support/ci/tools/wasmtime_watch.py.
+
+on:
+  schedule:
+    # Daily, off the hour: a scheduled run on a busy minute is queued or dropped.
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report findings without creating or editing the issue
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+# Never cancel: a cancelled sweep can leave the issue describing a state that no
+# longer holds, and the next run is a day away.
+concurrency:
+  group: wasmtime-watch
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Both files it reads are tracked inside the executor submodules, so this
+      # needs a checkout but not the materialized third-party trees — which is
+      # what lets it skip nix entirely.
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "false"
+          third_party: none
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Sweep the vendored upstream sources
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WASMTIME_REBASE_OWNER: ${{ vars.WASMTIME_REBASE_OWNER }}
+        run: >-
+          ./support/ci/run.sh tool wasmtime-watch
+          ${{ inputs.dry_run && '--dry-run' || '' }}

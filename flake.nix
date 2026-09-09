@@ -12,6 +12,11 @@
       url = "github:cachix/git-hooks.nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    git-third-party = {
+      url = "github:kp2pml30/git-third-party";
+      inputs.nixpkgs.follows = "nixpkgs";
+      inputs.systems.follows = "systems";
+    };
   };
 
   outputs =
@@ -21,6 +26,7 @@
       flake-utils,
       systems,
       git-hooks,
+      git-third-party,
     }:
     let
       for-systems = flake-utils.lib.eachDefaultSystem (
@@ -112,6 +118,7 @@
             glibc
             nix
             genvm-tool
+            git-third-party.packages.${system}.default
           ];
           packages-rust = [ custom-rust ];
           packages-debug-test = with pkgs; [
@@ -159,7 +166,6 @@
             python312Packages.pytest-xdist
           ];
           shell-hook-base = ''
-            export PATH="$(pwd)/support/tools/git-third-party:$PATH"
             export CARGO_LD_LIBRARY_PATH="${toString pkgs.xz.out}/lib:${toString pkgs.zlib.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${toString pkgs.glibc}/lib"
             export LLVM_PROFILE_FILE=/dev/null
             export LSQLITE3_SRC="${deps."lsqlite3-0.9.6"}"
@@ -288,17 +294,8 @@
                 ];
               };
               # --- manager-owned languages: python, lua, ts, nix --------
-              # git-third-party is a vendored helper tool (late imports by
-              # design); the old engine skipped it (keyed on the `.py` ext),
-              # so keep ruff off it.
-              ruff = {
-                enable = true;
-                excludes = [ "^support/tools/git-third-party/" ];
-              };
-              ruff-format = {
-                enable = true;
-                excludes = [ "^support/tools/git-third-party/" ];
-              };
+              ruff.enable = true;
+              ruff-format.enable = true;
               stylua = {
                 enable = true;
                 files = "\\.lua$";
@@ -715,9 +712,12 @@
             # Inputs for producing the three platform artifacts and the
             # platform-independent universal artifact.
             // artifact-prepack-packages
-            # Utility packages (grouped separately).
+            # Utility packages (grouped separately). `git-third-party` is
+            # re-exported so `env.sh` can put the pinned tool on PATH without
+            # entering a dev shell.
             // {
               inherit genvm-tool;
+              git-third-party = git-third-party.packages.${system}.default;
             };
 
           devShells.minimal = pkgs.mkShell {

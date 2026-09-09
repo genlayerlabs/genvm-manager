@@ -21,16 +21,55 @@ type ResolveCallContractExecutorHook = collections.abc.Callable[
 ]
 
 
+SLOT_SIZE = 2**32
+"""
+Size of a single storage slot, as the guest ABI sees it.
+"""
+
+_PAGE_SIZE = 4096
+
+
 class MockStorage:
-	_storages: dict[Address, dict[bytes, bytearray]]
+	"""
+	Slot storage keeping only the pages that were actually touched.
+
+	A slot spans `SLOT_SIZE` bytes, so a write near its end must not
+	materialize everything before it.
+	"""
+
+	_storages: dict[Address, dict[bytes, dict[int, bytearray]]]
 
 	def __init__(self):
 		self._storages = {}
 
+	def load(
+		self,
+		contents: collections.abc.Mapping[
+			Address, collections.abc.Mapping[bytes, collections.abc.Buffer]
+		],
+	) -> None:
+		"""
+		Replaces the contents with slots given from their first byte on.
+		"""
+		self._storages = {}
+		for account, slots in contents.items():
+			for slot, data in slots.items():
+				self.write(account, slot, 0, data)
+
+	def slots(self, account: Address) -> collections.abc.Iterable[bytes]:
+		return self._storages.get(account, {}).keys()
+
 	def read(self, account: Address, slot: bytes, index: int, le: int) -> bytes:
-		res = self._storages.setdefault(account, {})
-		res = res.setdefault(slot, bytearray())
-		return res[index : index + le] + b'\x00' * (le - max(0, len(res) - index))
+		assert index + le <= SLOT_SIZE, 'read past the end of the slot'
+		pages = self._pages(account, slot)
+		res = bytearray(le)
+		at = 0
+		for page_no, offset, take in _spans(index, le):
+			page = pages.get(page_no)
+			if page is not None:
+				res[at : at + take] = page[offset : offset + take]
+			at += take
+		return bytes(res)
 
 	def write(
 		self,
@@ -39,11 +78,29 @@ class MockStorage:
 		index: int,
 		what: collections.abc.Buffer,
 	) -> None:
-		res = self._storages.setdefault(account, {})
-		res = res.setdefault(slot, bytearray())
 		what = memoryview(what)
-		res.extend(b'\x00' * (index + len(what) - len(res)))
-		memoryview(res)[index : index + len(what)] = what
+		assert index + len(what) <= SLOT_SIZE, 'write past the end of the slot'
+		pages = self._pages(account, slot)
+		at = 0
+		for page_no, offset, take in _spans(index, len(what)):
+			page = pages.setdefault(page_no, bytearray(_PAGE_SIZE))
+			page[offset : offset + take] = what[at : at + take]
+			at += take
+
+	def _pages(self, account: Address, slot: bytes) -> dict[int, bytearray]:
+		return self._storages.setdefault(account, {}).setdefault(slot, {})
+
+
+def _spans(index: int, le: int) -> collections.abc.Iterator[tuple[int, int, int]]:
+	"""
+	Splits ``[index, index + le)`` into ``(page, offset in it, length)`` triples.
+	"""
+	while le > 0:
+		page_no, offset = divmod(index, _PAGE_SIZE)
+		take = min(_PAGE_SIZE - offset, le)
+		yield page_no, offset, take
+		index += take
+		le -= take
 
 
 _STOP_CONNECTIONS_TIMEOUT_S = 10.0

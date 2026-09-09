@@ -57,7 +57,10 @@ jobs:
       - name: Get source
         uses: ./.github/actions/get-src
         with:
-          third_party: --all
+          # A nixless cell has no dev shell to build anything in: it replays
+          # prebuilt tarballs and reads no vendored source, so asking for them
+          # would install a nix nothing else here uses.
+          third_party: ${{ inputs.with_nix && '--all' || 'none' }}
           with_nix: ${{ inputs.with_nix && 'true' || 'false' }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
           nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}

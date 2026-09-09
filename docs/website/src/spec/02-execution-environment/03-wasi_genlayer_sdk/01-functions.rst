@@ -10,7 +10,7 @@ Requirements
 ~~~~~~~~~~~~
 
 #. :term:`Sub-VM` must be in deterministic mode
-#. index + buf_len must not overflow
+#. index + buf_len must not exceed the :term:`Storage Slot` length
 
 ``storage_write``
 -----------------
@@ -22,7 +22,7 @@ Requirements
 
 #. :term:`Sub-VM` must be in deterministic mode
 #. :term:`Sub-VM` must have write storage permission
-#. index + buf_len must not overflow
+#. index + buf_len must not exceed the :term:`Storage Slot` length
 #. :term:`Sub-VM` Storage slot must not be locked, unless the sender is in ``upgraders``
 
 ``get_balance``

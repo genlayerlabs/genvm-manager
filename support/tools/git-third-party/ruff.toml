@@ -1,9 +1,0 @@
-indent-width = 2
-
-[format]
-indent-style = "tab"
-line-ending = "lf"
-quote-style = "single"
-
-docstring-code-format = true
-skip-magic-trailing-comma = false

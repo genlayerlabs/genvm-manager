@@ -16,6 +16,7 @@ from tools import (
 	rebase_watch,
 	sync_executor_branches,
 	versions,
+	wasmtime_watch,
 )
 
 PIPELINES: list[ci_lib.Pipeline] = [
@@ -36,6 +37,7 @@ TOOLS: list[ci_lib.Tool] = [
 	*open_executor_prs.COMMANDS,
 	*rebase_watch.COMMANDS,
 	*sync_executor_branches.COMMANDS,
+	*wasmtime_watch.COMMANDS,
 ]
 
 
