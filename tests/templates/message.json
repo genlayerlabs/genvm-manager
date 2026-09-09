@@ -2,6 +2,7 @@
   "contract_address": "AQAAAAAAAAAAAAAAAAAAAAAAAAA=",
   "sender_address": "AgAAAAAAAAAAAAAAAAAAAAAAAAA=",
   "origin_address": "AgAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "signer_address": "AgAAAAAAAAAAAAAAAAAAAAAAAAA=",
   "chain_id": 0,
   "value": 0,
   "is_init": false

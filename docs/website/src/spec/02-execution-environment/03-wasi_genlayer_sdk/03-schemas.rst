@@ -9,7 +9,9 @@ based on operation type.
 Sub-VM Result Encoding
 ----------------------
 
-Operations that spawn sub-VMs (``CallContract``, ``RunNondet``, ``Sandbox``) return
+Operations that spawn sub-VMs (:ref:`gvm-def-gl-call-call-contract`,
+:ref:`gvm-def-gl-call-run-nondet`,
+:ref:`gvm-def-gl-call-sandbox`) return
 results through a file descriptor with the following binary format:
 
 .. code-block::
@@ -27,6 +29,63 @@ The ``data`` portion depends on the result code:
 - **return**: :ref:`Calldata Encoded <gvm-def-calldata-encoding>` return value
 - **user_error**: :ref:`Calldata Encoded <gvm-def-calldata-encoding>` error value
 - **vm_error**: UTF-8 encoded :ref:`gvm-def-str-trie-vm-error` string
+
+.. _gvm-def-proposed-result-validity:
+
+Validity Of A Proposed Result
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A result the executor did not compute itself — the leader-proposed
+non-deterministic result consumed in :ref:`gvm-def-sync-mode` and
+:ref:`gvm-def-validator-mode` — is accepted only if it satisfies all of the
+following. A rejected proposal is replaced by a derived :ref:`gvm-def-vm-error`.
+Sync mode returns that replacement without a vote; validator mode records a
+disagreement without running the comparison stage
+
+#. The buffer is non-empty. An absent or empty proposal yields
+   :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-absent`.
+#. ``result_code`` is one of
+   :ref:`gvm-def-enum-value-result-code-return`,
+   :ref:`gvm-def-enum-value-result-code-user-error` or
+   :ref:`gvm-def-enum-value-result-code-vm-error`; any other byte yields
+   :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`.
+#. For **return** and **user_error**, ``data`` is valid
+   :ref:`gvm-def-calldata-encoding` with no trailing bytes; otherwise
+   :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`.
+#. For **vm_error**, ``data`` is UTF-8, carries no ``" # "`` detail, and names a
+   :ref:`gvm-def-str-trie-vm-error` path, including the canonical spelling of
+   any parameter. Codes outside the trie yield
+   :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`.
+
+An accepted result that passes :ref:`gvm-def-nondeterministic-output-caps` is
+preserved **byte for byte**, so every node hashes the value that was proposed.
+
+.. _gvm-def-derived-outcome-namespace:
+
+Derived-Outcome Namespace
+~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Following :ref:`gvm-def-vm-error` codes are derived by the consuming executor
+rather than proposed:
+
+#. :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-absent`
+#. :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`
+#. :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-uses-this-error`
+#. :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-extra`
+
+A proposed code that equals, or extends at a space boundary,
+``leader_fault nondet_output`` is replaced by
+:ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-uses-this-error`
+whose parameter is the first 6 characters of the
+:doc:`../../04-contract-interface/06-gvm32` encoding of ``sha3_256`` of the
+proposed code. A proposal that is its own replacement maps to the parameter
+``fix_point``, which cannot collide with a derived parameter because it is 9
+characters long and a derived one is always 6.
+
+This check runs **before** the trie-validity check, so proposing a derived code
+verbatim can never produce output byte-equal to the proposal. Distinct proposals
+may share a parameter; the mapping is deterministic and the value carries no
+meaning beyond identifying the proposal as rejected.
 
 .. _gvm-def-module-result-encoding:
 

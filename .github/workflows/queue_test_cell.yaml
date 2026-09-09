@@ -1,0 +1,131 @@
+on:
+  workflow_call:
+    inputs:
+      name:
+        required: true
+        type: string
+      job_json:
+        # JSON {key: step list} from plan-queue-matrix, one key per "Job:" step
+        # below; matrix-cell-step slices out the list for its key.
+        required: true
+        type: string
+      runs_on:
+        required: true
+        type: string
+      disk_reclaim:
+        required: false
+        type: boolean
+        default: false
+      fuzz_host:
+        required: false
+        type: boolean
+        default: false
+      buildx:
+        required: false
+        type: boolean
+        default: false
+      gcp:
+        required: false
+        type: boolean
+        default: false
+
+# A reusable workflow does not inherit the caller's `defaults`, so the shell
+# is set here too: GitHub's stock `bash -e {0}` has no `pipefail`.
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  test:
+    name: test / ${{ inputs.name }}
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 240
+    env:
+      GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
+      OPENAIKEY: ${{ secrets.OPENAIKEY }}
+      HEURISTKEY: ${{ secrets.HEURISTKEY }}
+      ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
+      XAIKEY: ${{ secrets.XAIKEY }}
+      GEMINIKEY: ${{ secrets.GEMINIKEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          lfs: true
+
+      # Guards the "Job:" steps below: every key must have a step, every step a key.
+      - name: Check job keys
+        env:
+          JOB_JSON: ${{ inputs.job_json }}
+        run: ./support/ci/run.sh pipeline check-cell-keys --job-json "$JOB_JSON" configure build tool
+
+      - uses: insightsengineering/disk-space-reclaimer@v1
+        if: ${{ inputs.disk_reclaim }}
+        with:
+          tools-cache: false
+          swap-storage: false
+          docker-images: false
+
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          third_party: --all
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
+
+      - name: Configure fuzzing host
+        if: ${{ inputs.fuzz_host }}
+        run: |
+          echo core | sudo tee /proc/sys/kernel/core_pattern || true
+          echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor || true
+          echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope || true
+
+      - name: Authenticate to Google Cloud
+        if: ${{ inputs.gcp && env.GCP_SA_KEY != '' }}
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Set up Cloud SDK
+        if: ${{ inputs.gcp && env.GCP_SA_KEY != '' }}
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Set up Docker Buildx
+        if: ${{ inputs.buildx }}
+        uses: docker/setup-buildx-action@v3
+
+      - name: "Job: configure"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: configure
+
+      - name: "Job: build"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: build
+
+      - name: "Job: tool"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: tool
+
+      - name: Push to nix cache
+        if: ${{ !cancelled() }}
+        uses: genlayerlabs/github-actions/nix-cache-push@39b0a0d5e9bb27a1612d2e98b0f8509d31745157 # main
+        with:
+          token: ${{ secrets.NIX_CACHE_PUSH_TOKEN }}
+
+      # Postmortem on the same runner the cell just used; see the action for
+      # what it probes and why it is not an `incl_*` reusable workflow.
+      # `failure()` covers any earlier step failing and is already false on a
+      # cancel, so it needs no !cancelled() guard.
+      # `continue-on-error` is belt-and-braces: the action already exits 0.
+      - name: Postmortem
+        if: ${{ failure() }}
+        continue-on-error: true
+        timeout-minutes: 5
+        uses: ./.github/actions/postmortem

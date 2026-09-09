@@ -79,6 +79,34 @@ M.overloaded_statuses = {
 	[529] = true,
 }
 
+--- Map an HTTP status onto the engine's failure vocabulary. Nil means the call
+--- never reached a provider (transport failure) -> network_error.
+--- Every `overloaded_statuses` entry must land on a concrete kind, not "unknown".
+---@param status integer | nil
+---@return string
+M.provider_http_error_description = function(status)
+	if status == nil then
+		return "network_error"
+	elseif status == 429 then
+		return "rate_limit"
+	elseif status == 408 then
+		return "timeout"
+	elseif status == 504 then
+		return "gateway_timeout"
+	elseif status == 401 or status == 403 then
+		return "auth_error"
+	elseif status == 404 then
+		return "model_unavailable"
+	elseif status == 400 then
+		return "bad_request"
+	elseif status == 529 then
+		return "server_overloaded"
+	elseif status >= 500 then
+		return "server_error"
+	end
+	return "unknown"
+end
+
 --- Execute a prompt against a specific provider/model. Delegates to the runtime.
 ---@type fun(ctx, data: { prompt: Prompt, format: Format, model: string, provider: string }): any
 M.exec_prompt_in_provider = rs.exec_prompt_in_provider
@@ -234,7 +262,7 @@ end
 M.exec_prompt_template_transform = function(args)
 	lib.log { level = "debug", message = "exec_prompt_template_transform", args = args }
 
-	my_data = {
+	local my_data = {
 		EqComparative = { template_id = "eq_comparative", format = "bool" },
 		EqNonComparativeValidator = { template_id = "eq_non_comparative_validator", format = "bool" },
 		EqNonComparativeLeader = { template_id = "eq_non_comparative_leader", format = "text" },

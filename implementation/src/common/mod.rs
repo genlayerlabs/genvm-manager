@@ -1,4 +1,5 @@
 use base64::Engine;
+use genlayer_calldata as calldata;
 use genvm_common::*;
 use genvm_modules_interfaces::GenericValue;
 use serde::{Deserialize, Serialize};
@@ -234,12 +235,66 @@ async fn loop_one_inner_handle<T, R>(
 where
     T: calldata::codec::Decode + 'static,
 {
-    let payload = genvm_common::calldata::decode_obj(text)
-        .with_context(|| format!("parsing calldata format {text:?}"))?;
+    let payload =
+        calldata::decode_obj(text).with_context(|| format!("parsing calldata format {text:?}"))?;
     handler
         .handle(payload)
         .await
         .with_context(|| "handling with handler")
+}
+
+/// Classify a handler failure into the wire result the executor reads.
+///
+/// This is the only place the `fatal` flag is spent, and the two outcomes are
+/// not interchangeable:
+///
+/// 1. `FatalError` is turned into a bare `anyhow` by the executor
+///    (`executors/v0.3.x/executor/src/modules.rs`, the `Result::FatalError`
+///    arm), which lands as `ErrorKind::Internal` in `rt/errors.rs` and finally
+///    as `ResultCode::InternalError` in `host/mod.rs`. It has no `RunOk`
+///    representation, so the whole contract run is aborted and the contract
+///    cannot catch it. Downstream, a node turns any GenVM error into a Timeout
+///    vote
+/// 2. `UserError` is handed to the runner as `{"error": ...}`, which
+///    `genlayer-py-std` raises as a catchable `NondetException`
+///
+/// Which one an infrastructure fault deserves is settled: (1). If this node's
+/// own environment failed, it has no valid observation of the world, and a
+/// `UserError` would let it assert to the contract -- and then vote on -- a claim
+/// it never observed. The Timeout vote is the truthful "I could not do the
+/// work", and consensus has that vote for exactly this case. (2) is for things
+/// the run genuinely observed, such as a page that failed to load.
+///
+/// The cost of (1) is diagnostic, not semantic: `FatalError` carries only a
+/// string, so a raiser that wants to stay distinguishable must put a cause in
+/// it. [`ModuleError`]'s `Display` is its JSON, so `causes` survives.
+///
+/// An error that is not a [`ModuleError`] is fatal, so "not a `ModuleError`"
+/// and "`fatal: true`" are indistinguishable past this point
+pub(crate) fn module_error_to_wire<R>(
+    err: anyhow::Error,
+    genvm_id: genvm_modules_interfaces::GenVMId,
+) -> genvm_modules_interfaces::Result<R> {
+    match scripting::try_unwrap_any_err(err) {
+        Ok(err) => {
+            if err.fatal {
+                genvm_modules_interfaces::Result::FatalError(format!("{err:#}"))
+            } else {
+                let res = GenericValue::Map(BTreeMap::from([
+                    (
+                        "causes".to_owned(),
+                        GenericValue::Array(err.causes.into_iter().map(Into::into).collect()),
+                    ),
+                    ("ctx".to_owned(), GenericValue::Map(err.ctx)),
+                ]));
+                genvm_modules_interfaces::Result::UserError(res)
+            }
+        }
+        Err(err) => {
+            log_error_into!(&LoggerWithId, error:ah = &err, genvm_id:id = genvm_id.0; "handler fatal error");
+            genvm_modules_interfaces::Result::FatalError(format!("{err:#}"))
+        }
+    }
 }
 
 async fn loop_one_inner<T, R, S>(
@@ -264,31 +319,10 @@ where
         let res = loop_one_inner_handle(handler, &data).await;
         let res = match res {
             Ok(res) => genvm_modules_interfaces::Result::Ok(res),
-            Err(err) => match scripting::try_unwrap_any_err(err) {
-                Ok(err) => {
-                    if err.fatal {
-                        genvm_modules_interfaces::Result::FatalError(format!("{err:#}"))
-                    } else {
-                        let res = GenericValue::Map(BTreeMap::from([
-                            (
-                                "causes".to_owned(),
-                                GenericValue::Array(
-                                    err.causes.into_iter().map(Into::into).collect(),
-                                ),
-                            ),
-                            ("ctx".to_owned(), GenericValue::Map(err.ctx)),
-                        ]));
-                        genvm_modules_interfaces::Result::UserError(res)
-                    }
-                }
-                Err(err) => {
-                    log_error_into!(&LoggerWithId, error:ah = &err, genvm_id:id = genvm_id.0; "handler fatal error");
-                    genvm_modules_interfaces::Result::FatalError(format!("{err:#}"))
-                }
-            },
+            Err(err) => module_error_to_wire(err, genvm_id),
         };
 
-        let message = genvm_common::calldata::encode_obj(&res);
+        let message = calldata::encode_obj(&res);
 
         write_message(stream, &message)
             .await
@@ -310,7 +344,7 @@ where
     };
 
     let genvm_hello: genvm_modules_interfaces::GenVMHello =
-        genvm_common::calldata::decode_obj(&data).context("decoding GenVMHello")?;
+        calldata::decode_obj(&data).context("decoding GenVMHello")?;
 
     Ok(Some(genvm_hello))
 }
@@ -739,7 +773,7 @@ pub fn is_no_routable_address(err: &reqwest::Error) -> bool {
 /// Resolver that resolves via hickory and drops every address that is not
 /// globally routable. This is the SSRF guard for the web module: it prevents a
 /// contract from steering the node into the operator's internal network (e.g.
-/// link-local, loopback, RFC1918) — including via a DNS-rebinding attack, since
+/// link-local, loopback, RFC1918) -- including via a DNS-rebinding attack, since
 /// the filtering happens in the very resolver reqwest connects through, leaving
 /// no second, unfiltered lookup. The hostname stays in the URL, so TLS SNI,
 /// certificate verification and the `Host` header keep working over HTTPS.
@@ -1063,6 +1097,19 @@ pub mod tests {
         super::base_client_builder().build().map_err(Into::into)
     }
 
+    /// A `package.path` fragment for the `llm_policy` package, which the shipped
+    /// llm dispatch script requires. It ships from the unhardcoded-engine
+    /// submodule; a clone without submodules gets told what to run.
+    pub fn llm_policy_lua_path() -> String {
+        let root = std::path::PathBuf::from("../libs/unhardcoded-engine")
+            .canonicalize()
+            .expect(
+                "libs/unhardcoded-engine is missing; \
+                 run `git submodule update --init libs/unhardcoded-engine`",
+            );
+        format!("{}/?.lua", root.to_str().unwrap())
+    }
+
     pub fn get_hello() -> Arc<genvm_modules_interfaces::GenVMHello> {
         Arc::new(genvm_modules_interfaces::GenVMHello {
             genvm_id: genvm_modules_interfaces::GenVMId(999),
@@ -1143,5 +1190,95 @@ mod ip_filter_tests {
         ] {
             assert!(!bad(ip), "{ip} should be allowed");
         }
+    }
+}
+
+#[cfg(test)]
+mod wire_result_tests {
+    use super::*;
+
+    use genvm_modules_interfaces::Result as WireResult;
+
+    const ID: genvm_modules_interfaces::GenVMId = genvm_modules_interfaces::GenVMId(7);
+
+    fn module_error(fatal: bool) -> anyhow::Error {
+        ModuleError {
+            causes: vec![ErrorKind::STATUS_NOT_OK.into()],
+            fatal,
+            ctx: BTreeMap::from([("status".to_owned(), GenericValue::Number(500.0))]),
+        }
+        .into()
+    }
+
+    /// The classification survives calldata encoding, which is what the executor
+    /// actually reads off the socket
+    fn roundtrip(res: WireResult<String>) -> WireResult<String> {
+        let bytes = calldata::encode_obj(&res);
+        calldata::decode_obj(&bytes).unwrap()
+    }
+
+    // -- fatal: the run is aborted, the contract cannot catch it --------
+
+    #[test]
+    fn fatal_module_error_becomes_fatal_error() {
+        let res: WireResult<String> = module_error_to_wire(module_error(true), ID);
+
+        match roundtrip(res) {
+            WireResult::FatalError(msg) => {
+                assert!(msg.contains("STATUS_NOT_OK"), "unexpected message: {msg}")
+            }
+            WireResult::Ok(_) | WireResult::UserError(_) => {
+                panic!("a fatal module error must become FatalError")
+            }
+        }
+    }
+
+    /// An error that never was a [`ModuleError`] carries no fatality flag at
+    /// all, and is treated as fatal
+    #[test]
+    fn plain_error_becomes_fatal_error() {
+        let res: WireResult<String> =
+            module_error_to_wire(anyhow::anyhow!("something unclassified"), ID);
+
+        match roundtrip(res) {
+            WireResult::FatalError(msg) => assert!(
+                msg.contains("something unclassified"),
+                "unexpected message: {msg}"
+            ),
+            WireResult::Ok(_) | WireResult::UserError(_) => {
+                panic!("an unclassified error must become FatalError")
+            }
+        }
+    }
+
+    // -- non-fatal: a catchable NondetException for the contract ---------
+
+    #[test]
+    fn non_fatal_module_error_becomes_user_error() {
+        let res: WireResult<String> = module_error_to_wire(module_error(false), ID);
+
+        let WireResult::UserError(value) = roundtrip(res) else {
+            panic!("a non-fatal module error must become UserError")
+        };
+
+        let GenericValue::Map(map) = value else {
+            panic!("expected a map, got {value:?}")
+        };
+
+        let Some(GenericValue::Array(causes)) = map.get("causes") else {
+            panic!("expected an array of causes in {map:?}")
+        };
+        let [GenericValue::Str(cause)] = &causes[..] else {
+            panic!("expected exactly one cause, got {causes:?}")
+        };
+        assert_eq!(cause, "STATUS_NOT_OK");
+
+        let Some(GenericValue::Map(ctx)) = map.get("ctx") else {
+            panic!("expected a ctx map in {map:?}")
+        };
+        let Some(GenericValue::Number(status)) = ctx.get("status") else {
+            panic!("expected a numeric status in {ctx:?}")
+        };
+        assert_eq!(*status, 500.0);
     }
 }

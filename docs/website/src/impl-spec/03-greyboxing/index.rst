@@ -4,8 +4,6 @@ Greyboxing Documentation
 .. toctree::
    :maxdepth: 2
 
-   01-lua-api
-
 It refers to the technique of preventing attacks on LLMs. Implementing it is a responsibility of every node,
 as bundled presets can be attacked.
 

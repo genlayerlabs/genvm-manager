@@ -1,0 +1,27 @@
+{
+    "fz\t\uabbbbboo": [
+                       "bar",
+        "baz\n\\z",
+        -1e10,
+
+        -123,
+        123,      -123,
+      
+        -123,
+        -1e10,
+
+        -123,
+        1e20,
+        -123,
+        -1e10,
+     null,
+        true,
+        false,
+        [1, 2, 3]
+    ],
+    "bar": [
+        "русские буквы 日本",
+        "mbbbbbbbbbbbbbbaz\t\uabbbbb",
+        "mbbbbbbbbbbbbb"
+    ]
+}

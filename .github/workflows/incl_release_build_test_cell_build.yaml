@@ -1,0 +1,90 @@
+name: Build one release artifact cell
+
+# One cell of plan-release-matrix's build matrix: replays the cell's `build`
+# steps (one build-and-pack per target) and uploads everything they packed under
+# the plan-assigned artifact name.
+#
+# The name comes from the plan rather than being minted here: every leg of a
+# matrix job writes the same `outputs` key, so a per-leg name cannot be handed
+# back to the test matrix as an output.
+
+on:
+  workflow_call:
+    inputs:
+      name:
+        required: true
+        type: string
+      runs_on:
+        required: true
+        type: string
+      artifact_name:
+        description: artifact to upload the cell's tarballs as
+        required: true
+        type: string
+      job_json:
+        # JSON {key: step list} from plan-release-matrix; matrix-cell-step
+        # slices out the list for its key.
+        required: true
+        type: string
+
+# A reusable workflow does not inherit the caller's `defaults`, so the shell
+# is set here too: GitHub's stock `bash -e {0}` has no `pipefail`.
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  build:
+    name: build / ${{ inputs.name }}
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      # Guards the "Job:" step below: every key must have a step, every step a key.
+      - name: Check job keys
+        env:
+          JOB_JSON: ${{ inputs.job_json }}
+        run: ./support/ci/run.sh pipeline check-cell-keys --job-json "$JOB_JSON" build
+
+      - uses: insightsengineering/disk-space-reclaimer@v1
+        with:
+          tools-cache: false
+          swap-storage: false
+          docker-images: false
+
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          # The executor lines are submodules; nix builds run on
+          # `.?submodules=1` and need them checked out.
+          third_party: --all
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
+
+      - name: "Job: build"
+        uses: ./.github/actions/matrix-cell-step
+        with:
+          job_json: ${{ inputs.job_json }}
+          key: build
+
+      # Not `success()`: a cell that failed late still built most of the
+      # closure, and that is exactly the work the retry should not repeat.
+      - name: Push to nix cache
+        if: ${{ !cancelled() }}
+        uses: genlayerlabs/github-actions/nix-cache-push@39b0a0d5e9bb27a1612d2e98b0f8509d31745157 # main
+        with:
+          token: ${{ secrets.NIX_CACHE_PUSH_TOKEN }}
+          include: genvm|genlayer|(^lief)
+          exclude: genvm-cpython-objs
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          # upload-artifact strips the common prefix, so entries land flat as
+          # genvm-<target>.tar.xz — the names the test cells and the release
+          # uploader index by.
+          path: build/artifacts/*.tar.xz
+          if-no-files-found: error

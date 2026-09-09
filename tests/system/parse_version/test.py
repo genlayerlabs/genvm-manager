@@ -1,4 +1,5 @@
-"""parse-version-pattern system tests.
+"""
+parse-version-pattern system tests.
 
 Each ``*.wat`` here is compiled to wasm and piped into
 ``genvm parse-version-pattern``; its ``*.expected`` sibling holds the expected
@@ -33,7 +34,9 @@ def _add_case(
 	artifacts_dir: Path,
 ) -> None:
 	name = f'tests/system/parse_version/{wat_file.stem}'
-	desc = genvm_tool.tests.test.Description(name).with_tags(['parse_version'])
+	desc = genvm_tool.tests.test.Description(name).with_tags(
+		frozenset({'integration', 'feature-version-parse'})
+	)
 
 	test_env = _default_env()
 

@@ -1,221 +1,63 @@
-"""Manager-root genvm-tool project config.
+"""
+Manager-root genvm-tool project config.
 
 Loaded once by genvm-tool (``common.load_project``) before any subcommand runs;
 subcommands ask it for what they need:
 
-- ``hooks(ctx)`` — the manager's commit-hook definitions (was
-	``support/nix/precommit/hooks.toml``), returned in the same shape the hook
-	engine already understands.
-- ``tests(ctx)`` — the umbrella test suite (was the top-level ``.ya-test.py``):
+- ``tests(ctx)`` -- the umbrella test suite (was the top-level ``.ya-test.py``):
 	imports the plugins it needs and registers collectors + CLI args on the
 	runner's configuration ``Context``. This is the plugins' "initial run" hook;
 	plugins themselves are plain importable modules (no test-runner-specific
 	registry). Per-suite test definitions live next to the tests in
 	``tests/system/<name>/test.py`` and are pulled in via ``ctx.collect_dir``.
-	Heavy imports stay inside this function — they need the plugin search path
+	Heavy imports stay inside this function -- they need the plugin search path
 	(``extra_python_paths`` in ``.genvm-monorepo-root``), which the test command
 	applies before calling us.
 
 General runner config (``artifacts_dir`` / ``extra_python_paths``) lives in
-``.genvm-monorepo-root``. Each executor carries its own ``.genvm-tool.py`` with
-its own ``hooks``.
+``.genvm-monorepo-root``. Each executor carries its own ``.genvm-tool.py``.
+Commit hooks live in each repo's flake (git-hooks.nix), not here.
 """
 
 
-def hooks(ctx):
-	"""Manager commit-hook definitions (was support/nix/precommit/hooks.toml).
-
-	Tools resolve from the sibling flake's buildEnv (``nix = "<flake output>"``);
-	``local`` hooks run a repo-owned script and ``builtin`` hooks run logic baked
-	into genvm-tool. A hook's ``args`` are its check-mode invocation; an optional
-	``fix_args`` is the rewrite-in-place invocation used when ``hook run`` fixes
-	(the default — CI passes ``--check``). ``files``/``exclude`` are repo-relative
-	regexes.
-	"""
-	return [
-		# --- generic checks (mirror the executor's) ------------------------
-		{
-			'id': 'trailing-whitespace',
-			'nix': 'pre-commit-hooks',
-			'entry': 'trailing-whitespace-fixer',
-			'types_or': ['text'],
-			'exclude': r'^\.git-third-party|/fuzz/',
-		},
-		{
-			'id': 'end-of-file-fixer',
-			'nix': 'pre-commit-hooks',
-			'entry': 'end-of-file-fixer',
-			'types_or': ['text'],
-			'exclude': r'^\.git-third-party|/fuzz/',
-		},
-		{
-			'id': 'check-added-large-files',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-added-large-files',
-		},
-		{
-			'id': 'check-json',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-json',
-			'types_or': ['json'],
-			'exclude': r'(^\.git-third-party)|(/tsconfig\.json$)',
-		},
-		{
-			'id': 'check-yaml',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-yaml',
-			'types_or': ['yaml'],
-		},
-		{
-			'id': 'check-toml',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-toml',
-			'types_or': ['toml'],
-		},
-		{
-			'id': 'check-merge-conflict',
-			'nix': 'pre-commit-hooks',
-			'entry': 'check-merge-conflict',
-			'types_or': ['text'],
-		},
-		{
-			# Matches both the hidden vendored `.git-third-party` trees and the
-			# `support/tools/git-third-party` tool dir (vendored LICENSE etc.).
-			'id': 'editorconfig-checker',
-			'nix': 'editorconfig-checker',
-			'entry': 'editorconfig-checker',
-			# text-only: the engine's `text` pseudo-type filters out binaries
-			# (e.g. model/onnx blobs) that editorconfig-checker should not see.
-			'types_or': ['text'],
-			'exclude': r'git-third-party|/fuzz/',
-		},
-		# --- python / lua / ts (manager-owned languages) -------------------
-		{
-			'id': 'ruff-format',
-			'nix': 'ruff',
-			'entry': 'ruff',
-			'args': ['format', '--check'],
-			'fix_args': ['format'],
-			'types_or': ['python'],
-		},
-		# --- python / lua / ts (manager-owned languages) -------------------
-		{
-			'id': 'ruff-check',
-			'nix': 'ruff',
-			'entry': 'ruff',
-			'args': ['check'],
-			'fix_args': ['check', '--fix'],
-			'types_or': ['python'],
-		},
-		{
-			'id': 'stylua',
-			'nix': 'stylua',
-			'entry': 'stylua',
-			'args': ['--check'],
-			'fix_args': [],
-			'files': r'\.lua$',
-		},
-		{
-			'id': 'prettier',
-			'nix': 'prettier',
-			'entry': 'prettier',
-			'args': ['--check'],
-			'fix_args': ['--write'],
-			'types_or': ['ts', 'tsx'],
-			'exclude': r'^\.git-third-party',
-		},
-		{
-			'id': 'nixfmt',
-			'nix': 'nixfmt',
-			'entry': 'nixfmt',
-			'args': ['--check'],
-			'fix_args': [],
-			'files': r'\.nix$',
-		},
-		# --- github workflow/action schemas -------------------------------
-		{
-			'id': 'check-github-workflows',
-			'nix': 'check-jsonschema',
-			'entry': 'check-jsonschema',
-			'args': ['--builtin-schema', 'vendor.github-workflows'],
-			'files': r'^\.github/workflows/.*\.ya?ml$',
-		},
-		{
-			'id': 'check-github-actions',
-			'nix': 'check-jsonschema',
-			'entry': 'check-jsonschema',
-			'args': ['--builtin-schema', 'vendor.github-actions'],
-			'files': r'^\.github/(actions/.+/)?action\.ya?ml$',
-		},
-		# --- local scripts -------------------------------------------------
-		{
-			'id': 'cargo-fmt',
-			'nix': 'cargo',
-			'builtin': 'cargo-fmt',
-			'files': r'\.rs$',
-			'pass_filenames': False,
-		},
-		{
-			# Keep the manager crate's [package] version in lockstep with
-			# .genvm-monorepo-root. The executor submodule is versioned
-			# independently (its own repo/hooks own that); we never touch it.
-			'id': 'check-cargo-versions',
-			'local': True,
-			'entry': 'support/ci/check-versions.py',
-			'args': ['sync'],
-			'pass_filenames': False,
-			'files': r'^(implementation/Cargo\.toml|\.genvm-monorepo-root)$',
-		},
-		{
-			'id': 'markdown-local-links',
-			'builtin': 'md-local-links',
-			'types_or': ['markdown'],
-		},
-	]
-
-
 def tests(ctx):
-	"""Umbrella test suite (was the top-level .ya-test.py).
+	"""
+	Umbrella test suite (was the top-level .ya-test.py).
 
 	``ctx`` is the runner's configuration ``Context``. Collectors close over the
 	imports below (resolved lazily when collection runs).
 	"""
 	import json
+	import platform
 	import sys
 	from pathlib import Path
 
+	import genvm_tool.cmd_configure
 	import genvm_tool.tests
 
 	_info_path = ctx.shared.root_dir / 'build' / 'info.json'
 	if not _info_path.exists():
+		# CI runs tests without configuring first. `configure` writes this same
+		# base plus what the build teaches it, and both call base_info, so the
+		# two writers cannot disagree about the tree.
 		ctx.shared.logger.warning('build/info.json not found, generating default')
 		_build_dir = ctx.shared.root_dir / 'build'
 		_build_dir.mkdir(parents=True, exist_ok=True)
+		_monorepo_cfg = json.loads(
+			(ctx.shared.root_dir / genvm_tool.cmd_configure.MONOREPO_ROOT_FILE).read_text()
+		)
 		_info_path.write_text(
 			json.dumps(
-				{
-					'coverage_dir': str(_build_dir / 'cov'),
-					'build_dir': str(_build_dir),
-					'rust_target_dir': str(_build_dir / 'ya-build' / 'rust-target'),
-				},
+				genvm_tool.cmd_configure.base_info(
+					_monorepo_cfg,
+					ctx.shared.root_dir,
+					_build_dir,
+					_build_dir / 'ya-build' / 'rust-target',
+				),
 				indent=2,
 			)
 			+ '\n'
 		)
-
-	ctx.run_parser.add_argument(
-		'--fuzz-timeout',
-		type=int,
-		default=30,
-		help='Timeout for each fuzzing run in seconds',
-	)
-
-	ctx.run_parser.add_argument(
-		'--fuzz-update-corpus',
-		default=False,
-		action='store_true',
-		help='Whether to update the fuzzing corpus',
-	)
 
 	import genvm_tool_plugins
 
@@ -223,11 +65,15 @@ def tests(ctx):
 		'import path', path=sys.path, plugins_path=genvm_tool_plugins.__path__
 	)
 	from genvm_tool_plugins import (
+		afl,
 		cargo,
 		genvm,
 		integration,
+		npm,
 		pytest,
 	)
+
+	afl.register(ctx)
 
 	def collect_rust(ctx: genvm_tool.tests.stage.collection.Context):
 		for t in filter(lambda x: x.name == 'Cargo.toml', ctx.shared.git_files):
@@ -248,42 +94,63 @@ def tests(ctx):
 				name = f'{name.parent}/{name.stem}'
 				cargo.cargo_fuzz(
 					ctx,
-					genvm_tool.tests.test.Description(
-						name,
-						console_pool=True,
-					),
+					genvm_tool.tests.test.Description(name),
 					rust_root_dir=rust_root_dir,
 					name=fuzz_file.stem,
 				)
 
-	def collect_pytest(ctx: genvm_tool.tests.stage.collection.Context):
-		p = ctx.shared.root_dir.joinpath(
-			'executors', 'v0.3.x', 'runners', 'genlayer-py-std'
-		)
-		pytest.pytest(
-			ctx,
-			genvm_tool.tests.test.Description(
-				'runners/genlayer-py-std/test',
-			),
-			project_root_dir=p,
-		)
-
-		fuzz_files = list(p.glob('fuzz/src/*.py'))
-		fuzz_files.sort()
-		for fuzz_file in fuzz_files:
-			name = fuzz_file.relative_to(ctx.shared.root_dir)
-			name = f'{name.parent}/{name.stem}'
-			continue  # for now let's disable it
-			pytest.py_fuzz(
+	def collect_npm(ctx: genvm_tool.tests.stage.collection.Context):
+		test_files = sorted(f for f in ctx.shared.git_files if f.name.endswith('.test.ts'))
+		for t in filter(lambda x: x.name == 'package.json', ctx.shared.git_files):
+			if 'test' not in npm.scripts(t):
+				continue
+			project_root_dir = t.parent
+			owned = [f for f in test_files if f.is_relative_to(project_root_dir)]
+			ctx.shared.logger.debug('discovered npm project', path=t, test_files=len(owned))
+			npm.npm_project(
 				ctx,
-				genvm_tool.tests.test.Description(
-					name,
-				),
-				project_root_dir=p,
-				name=fuzz_file.stem,
+				project_root_dir=project_root_dir,
+				test_files=owned,
 			)
 
+	def collect_pytest(ctx: genvm_tool.tests.stage.collection.Context):
+		dirs = [
+			ctx.shared.root_dir.joinpath('executors', 'v0.3.x', 'runners', 'genlayer-py-std'),
+			ctx.shared.root_dir.joinpath('support', 'tools', 'genvm-tool'),
+			ctx.shared.root_dir.joinpath('support', 'ci'),
+		]
+		for p in dirs:
+			pytest.pytest(
+				ctx,
+				genvm_tool.tests.test.Description(
+					str(p.relative_to(ctx.shared.root_dir)),
+					console_pool=True,
+					tags=frozenset({'unit'}),
+				),
+				project_root_dir=p,
+			)
+
+			# A project's flake carries python-afl and AFL++ on x86_64-linux only,
+			# so elsewhere the case could not start at all
+			if (platform.system(), platform.machine()) != ('Linux', 'x86_64'):
+				continue
+
+			fuzz_files = list(p.glob('fuzz/src/*.py'))
+			fuzz_files.sort()
+			for fuzz_file in fuzz_files:
+				name = fuzz_file.relative_to(ctx.shared.root_dir)
+				name = f'{name.parent}/{name.stem}'
+				pytest.py_fuzz(
+					ctx,
+					genvm_tool.tests.test.Description(
+						name,
+					),
+					project_root_dir=p,
+					name=fuzz_file.stem,
+				)
+
 	ctx.add_collector(collect_rust)
+	ctx.add_collector(collect_npm)
 	ctx.add_collector(collect_pytest)
 
 	ctx.run_parser.add_argument(
@@ -322,15 +189,20 @@ def tests(ctx):
 		# per-request only under debug_mode >= safe (tests run with unsafe).
 		reroute_to = (
 			getattr(ctx.configuration.args, 'genvm_reroute_to', '')
-			or build_info['primary_executor_version']
+			or build_info.get('primary_executor_version')
+			or ctx.shared.config['active-versions'][0]
 		)
 		no_manager = getattr(ctx.configuration.args, 'no_manager', False)
 		no_webdriver = getattr(ctx.configuration.args, 'no_webdriver', False)
+		ci = ctx.shared.ci
 
 		manager_port = genvm.get_manager_port(ctx.configuration)
+		manager_semaphore = ctx.new_semaphore('manager-listener')
 
 		if no_manager:
-			manager_impl = genvm.ExternalManagerService(port=manager_port)
+			manager_impl = genvm.ExternalManagerService(
+				port=manager_port,
+			)
 			webdriver_impl = genvm.NoOpService()
 			modules_impl = genvm.NoOpService()
 		else:
@@ -338,13 +210,14 @@ def tests(ctx):
 				bin_path=build_dir.joinpath('out', 'bin', 'genvm-modules'),
 				log_path=tests_output_root.joinpath('manager.log'),
 				env=ctx.configuration,
+				ci=ci,
 			)
 			# Create webdriver service
 			if no_webdriver:
 				webdriver_impl = genvm.NoOpService()
 			else:
 				webdriver_impl = genvm_tool.tests.exec.service.FunctionService(
-					lambda: genvm.start_webdriver_service(ctx.configuration)
+					lambda: genvm.start_webdriver_service(ctx.configuration, ci=ci)
 				)
 			# This starts Llm and Web modules on the manager
 			modules_impl = genvm.ModulesService(
@@ -354,8 +227,12 @@ def tests(ctx):
 		manager_service = ctx.new_service(
 			name='manager',
 			manager=manager_impl,
+			semaphores=[manager_semaphore],
 		)
-		manager_service.meta = {'port': manager_port, 'reroute_to': reroute_to}
+		manager_service.meta = {
+			'port': manager_port,
+			'reroute_to': reroute_to,
+		}
 
 		webdriver_service = ctx.new_service(
 			name='webdriver',
@@ -374,9 +251,49 @@ def tests(ctx):
 			manager_service=manager_service,
 			modules_service=modules_service,
 			webdriver_service=webdriver_service,
+			ci=ci,
+		)
+		integration.integration_test_directory(
+			ctx,
+			cases_dir=ctx.shared.root_dir / 'tests' / 'system' / 'cross-major' / 'cases',
+			reroute_to=build_info['executor_versions']['v0.3'],
+			save_hashes=False,
+			manager_service=manager_service,
+			modules_service=modules_service,
+			webdriver_service=webdriver_service,
+			ci=ci,
 		)
 
 		ctx.collect_dir('tests/system/permits', manager_service=manager_service)
+		limited_manager_service = None
+		if not no_manager:
+			limited_manager_service = ctx.new_service(
+				name='manager-cross-major-small-message-cap',
+				manager=genvm.ManagerService(
+					bin_path=build_dir / 'out' / 'bin' / 'genvm-modules',
+					log_path=tests_output_root / 'cross-major-small-message-cap.log',
+					env=ctx.configuration,
+					ci=ci,
+					config={'max_message_bytes': 1024 * 1024},
+				),
+				semaphores=[manager_semaphore],
+			)
+			ctx.collect_dir(
+				'tests/system/manager-socket',
+				manager_semaphore=manager_semaphore,
+				build_dir=build_dir,
+				ci=ci,
+			)
+		ctx.collect_dir(
+			'tests/system/cross-major',
+			manager_service=manager_service,
+			limited_manager_service=limited_manager_service,
+			managed_manager=not no_manager,
+		)
+		ctx.collect_dir(
+			'tests/system/cross-major-observability',
+			manager_service=manager_service,
+		)
 
 	ctx.add_collector(collect_integration)
 
@@ -384,3 +301,8 @@ def tests(ctx):
 		ctx.collect_dir('tests/system/parse_version')
 
 	ctx.add_collector(collect_parse_version)
+
+	def collect_make_zip(ctx: genvm_tool.tests.stage.collection.Context):
+		ctx.collect_dir('tests/system/make_zip')
+
+	ctx.add_collector(collect_make_zip)

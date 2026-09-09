@@ -10,8 +10,7 @@ Requirements
 ~~~~~~~~~~~~
 
 #. :term:`Sub-VM` must be in deterministic mode
-#. :term:`Sub-VM` must have read storage permission
-#. index + buf_len must not overflow
+#. index + buf_len must not exceed the :term:`Storage Slot` length
 
 ``storage_write``
 -----------------
@@ -23,7 +22,7 @@ Requirements
 
 #. :term:`Sub-VM` must be in deterministic mode
 #. :term:`Sub-VM` must have write storage permission
-#. index + buf_len must not overflow
+#. index + buf_len must not exceed the :term:`Storage Slot` length
 #. :term:`Sub-VM` Storage slot must not be locked, unless the sender is in ``upgraders``
 
 ``get_balance``
@@ -60,6 +59,6 @@ Returns
 - ``error_success`` on success
 - ``error_inval`` for invalid requests
 - ``error_forbidden`` for permission violations
-- ``error_inbalance`` for insufficient balance
+- ``error_insufficient_balance`` for insufficient balance
 
 See :doc:`02-gl_call` for the list of available messages.

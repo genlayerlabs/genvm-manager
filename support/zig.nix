@@ -36,6 +36,11 @@ let
       [[ "$arg" == */self-contained/crtendS.o ]]; then
       continue
       fi
+      # Zig's cc driver rejects the aarch64 erratum flag rustc passes; the
+      # workaround only matters on early Cortex-A53 revisions, not our targets.
+      if [[ "$arg" == -Wl,--fix-cortex-a53-843419 ]]; then
+      continue
+      fi
       if [[ "$arg" != --target=* ]] && \
       [[ "$arg" != -framework ]] && \
       [[ "$arg" != CoreFoundation ]] && \

@@ -8,7 +8,7 @@ let
   iconv-src = deps."libiconv-1.18";
 in
 pkgs.stdenvNoCC.mkDerivation {
-  name = "libiconv";
+  name = "genvm-libiconv";
 
   src = iconv-src;
 

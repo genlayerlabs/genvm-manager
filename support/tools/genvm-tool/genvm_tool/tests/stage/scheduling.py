@@ -35,36 +35,94 @@ class Env(typing.NamedTuple):
 	args: SimpleNamespace
 
 
-def _topo_sort_services(services: set[Service]) -> list[Service]:
+def _service_closure(service: Service) -> set[Service]:
+	result: set[Service] = set()
+	pending = [service]
+	while pending:
+		current = pending.pop()
+		if current in result:
+			continue
+		result.add(current)
+		pending.extend(current.depends_on or [])
+	return result
+
+
+def _topo_sort_services(
+	services: set[Service],
+	precedence: set[tuple[Service, Service]],
+) -> list[Service]:
 	"""
-	Topological sort of services via DFS.
-	Returns services in dependency order: dependencies come before dependents.
+	The order the services are started in.
+
+	Dependencies come before dependents, and the owners of one semaphore come one
+	after another, with the whole dependent subtree of the previous owner started
+	before the next one takes it. Which owner goes first is a free choice, and
+	two semaphores whose owners depend on each other can only be ordered jointly,
+	so the choices are searched rather than fixed one semaphore at a time. Among
+	the services that may go next the one declared first wins, so an
+	unconstrained suite keeps its declaration order.
 	"""
-	result: list[Service] = []
-	visited: set[str] = set()
-	in_stack: set[str] = set()
+	closures = {service: _service_closure(service) & services for service in services}
+	predecessors: dict[Service, set[Service]] = {
+		service: {
+			dependency for dependency in service.depends_on or [] if dependency in services
+		}
+		for service in services
+	}
+	for before, after in precedence:
+		if before in services and after in services:
+			predecessors[after].add(before)
 
-	def visit(svc: Service) -> None:
-		if svc.name in visited:
-			return
-		if svc.name in in_stack:
-			raise ValueError(f'Circular dependency detected involving {svc.name}')
+	def can_start(
+		candidate: Service,
+		started: frozenset[Service],
+		remaining: tuple[Service, ...],
+	) -> bool:
+		if not predecessors[candidate].issubset(started):
+			return False
+		# Taking a semaphore stops whoever owns it and everything depending on
+		# that owner, so all of it has to have been started already
+		return not any(
+			holder in started and holder.semaphores & candidate.semaphores
+			for other in remaining
+			if other is not candidate
+			for holder in closures[other]
+		)
 
-		in_stack.add(svc.name)
+	# One dead end is enough to rule out every way of reaching the same set of
+	# started services, which keeps the search out of the combinatorial case
+	dead_ends: set[frozenset[Service]] = set()
 
-		# Visit dependencies first
-		if svc.depends_on:
-			for dep in svc.depends_on:
-				if dep in services:
-					visit(dep)
+	def search(
+		started: frozenset[Service],
+		remaining: tuple[Service, ...],
+	) -> list[Service] | None:
+		if not remaining:
+			return []
+		if started in dead_ends:
+			return None
+		for candidate in remaining:
+			if not can_start(candidate, started, remaining):
+				continue
+			tail = search(
+				started | {candidate},
+				tuple(item for item in remaining if item is not candidate),
+			)
+			if tail is not None:
+				return [candidate, *tail]
+		dead_ends.add(started)
+		return None
 
-		in_stack.remove(svc.name)
-		visited.add(svc.name)
-		result.append(svc)
-
-	for svc in services:
-		visit(svc)
-
+	result = search(
+		frozenset(),
+		tuple(sorted(services, key=lambda service: service.order)),
+	)
+	if result is None:
+		names = ', '.join(sorted(service.name for service in services))
+		raise ValueError(
+			'services cannot be started in any order, their dependencies and '
+			f'semaphores contradict each other: {names}'
+		)
 	return result
 
 
@@ -103,40 +161,30 @@ def _validate_test_dependencies(
 	return cases_by_name
 
 
-def _get_effective_services(
+def _case_services(case: genvm_tool.tests.test.Case) -> set[Service]:
+	services: set[Service] = set()
+	for svc in case.description.needed_services:
+		services.update(_service_closure(svc))
+	return services
+
+
+def _test_dependency_names(
 	case: genvm_tool.tests.test.Case,
 	cases_by_name: dict[str, genvm_tool.tests.test.Case],
-	_memo: dict[str, frozenset[str]] | None = None,
+	memo: dict[str, frozenset[str]],
 ) -> frozenset[str]:
-	"""
-	Compute effective service names for a test case: its own services plus
-	services of all transitive test dependencies. This ensures a dependent
-	test is never placed in an earlier batch than its dependency.
-	"""
-	if _memo is None:
-		_memo = {}
+	if case.description.name in memo:
+		return memo[case.description.name]
 
-	name = case.description.name
-	if name in _memo:
-		return _memo[name]
-
-	names: set[str] = set()
-	# Own services
-	for svc in case.description.needed_services:
-		names.add(svc.name)
-		if svc.depends_on:
-			for dep in svc.depends_on:
-				names.add(dep.name)
-
-	# Transitive test dependency services
-	for dep_name in case.description.depends_on:
-		dep_case = cases_by_name.get(dep_name)
-		if dep_case is not None:
-			names.update(_get_effective_services(dep_case, cases_by_name, _memo))
-
-	result = frozenset(names)
-	_memo[name] = result
-	return result
+	result: set[str] = set()
+	for name in case.description.depends_on:
+		dependency = cases_by_name.get(name)
+		if dependency is None:
+			continue
+		result.add(name)
+		result.update(_test_dependency_names(dependency, cases_by_name, memo))
+	memo[case.description.name] = frozenset(result)
+	return memo[case.description.name]
 
 
 def run(shared: SharedContext, collection_env: CollectionEnv) -> Env:
@@ -149,117 +197,194 @@ def run(shared: SharedContext, collection_env: CollectionEnv) -> Env:
 	# Validate test dependencies and build name lookup
 	cases_by_name = _validate_test_dependencies(collection_env.cases)
 
-	# Collect all services needed by all cases (using effective services)
+	# Collect all services needed by the selected cases
 	all_needed_services: set[Service] = set()
 	for case in collection_env.cases:
-		# Collect direct services
-		for svc in case.description.needed_services:
-			all_needed_services.add(svc)
-			if svc.depends_on:
-				for dep in svc.depends_on:
-					all_needed_services.add(dep)
-		# Also collect services from test dependencies (transitively)
-		for dep_name in case.description.depends_on:
+		all_needed_services.update(_case_services(case))
+
+	# A dependency between tests using different holders of one semaphore orders
+	# those service lifetimes. The dependency runs first, then its holder can be
+	# stopped and the dependent's holder started
+	service_precedence: set[tuple[Service, Service]] = set()
+	test_dependencies_memo: dict[str, frozenset[str]] = {}
+	for case in collection_env.cases:
+		for dep_name in _test_dependency_names(
+			case,
+			cases_by_name,
+			test_dependencies_memo,
+		):
 			dep_case = cases_by_name.get(dep_name)
-			if dep_case is not None:
-				for svc in dep_case.description.needed_services:
-					all_needed_services.add(svc)
-					if svc.depends_on:
-						for dep in svc.depends_on:
-							all_needed_services.add(dep)
+			if dep_case is None:
+				continue
+			for before in _case_services(dep_case):
+				for after in _case_services(case):
+					if before is not after and before.semaphores & after.semaphores:
+						service_precedence.add((before, after))
 
 	# Topo sort: dependencies first, dependents last
-	topo_sorted_services = _topo_sort_services(all_needed_services)
+	service_names = [service.name for service in all_needed_services]
+	if len(service_names) != len(set(service_names)):
+		duplicates = sorted(
+			{name for name in service_names if service_names.count(name) > 1}
+		)
+		raise ValueError(f'duplicate service names: {", ".join(duplicates)}')
+	topo_sorted_services = _topo_sort_services(
+		all_needed_services,
+		service_precedence,
+	)
+	services_by_name = {service.name: service for service in topo_sorted_services}
 
-	# Use effective services for batch placement
-	effective_services_memo: dict[str, frozenset[str]] = {}
-
-	def get_effective_service_names(case: genvm_tool.tests.test.Case) -> frozenset[str]:
-		return _get_effective_services(case, cases_by_name, effective_services_memo)
-
-	# Separate cases by whether they have effective services
-	cases_without_services: list[genvm_tool.tests.test.Case] = []
-	cases_with_services: list[genvm_tool.tests.test.Case] = []
+	def get_required_service_names(case: genvm_tool.tests.test.Case) -> frozenset[str]:
+		return frozenset(service.name for service in _case_services(case))
 
 	for case in collection_env.cases:
-		if len(get_effective_service_names(case)) > 0:
-			cases_with_services.append(case)
-		else:
-			cases_without_services.append(case)
+		services = [services_by_name[name] for name in get_required_service_names(case)]
+		for i, left in enumerate(services):
+			for right in services[i + 1 :]:
+				shared_semaphores = left.semaphores & right.semaphores
+				if shared_semaphores:
+					names = ', '.join(sorted(item.name for item in shared_semaphores))
+					raise ValueError(
+						f'{case.description.name} requires mutually exclusive services '
+						f'{left.name} and {right.name} (semaphores: {names})'
+					)
 
-	# Schedule cases without services first (they can run immediately)
-	parallel_batch_no_services: list[genvm_tool.tests.test.Case] = []
-	for case in cases_without_services:
-		if case.description.console_pool:
-			# Console pool: run alone, await immediately
-			actions.append(StartCases(id=next_id, cases=[case]))
-			actions.append(AwaitAllCases(id=next_id))
-			next_id += 1
-		else:
-			parallel_batch_no_services.append(case)
-
-	if parallel_batch_no_services:
-		batch_id = next_id
-		next_id += 1
-		actions.append(StartCases(id=batch_id, cases=parallel_batch_no_services))
-		running_batches[batch_id] = set()  # No service dependencies
-
-	# Now schedule cases with services
-	# Start services in topo order, start tests as soon as their services are ready
+	# Start services in topo order and cases as soon as their services are ready
 	active_services: set[str] = set()
-	remaining_cases = list(cases_with_services)
+	remaining_cases = list(collection_env.cases)
+	scheduled_cases: set[str] = set()
+
+	def await_batches_for(service_names: set[str]) -> None:
+		for batch_id, batch_services in list(running_batches.items()):
+			if batch_services & service_names:
+				actions.append(AwaitAllCases(id=batch_id))
+				del running_batches[batch_id]
+
+	def stop_services(service_names: set[str]) -> None:
+		await_batches_for(service_names)
+		for service in reversed(topo_sorted_services):
+			if service.name in service_names and service.name in active_services:
+				actions.append(StopService(service=service))
+				active_services.remove(service.name)
+
+	def services_ready(case: genvm_tool.tests.test.Case) -> bool:
+		return get_required_service_names(case).issubset(active_services)
+
+	def dependencies_ready(
+		case: genvm_tool.tests.test.Case,
+		also_starting: frozenset[str],
+	) -> bool:
+		return _test_dependency_names(
+			case,
+			cases_by_name,
+			test_dependencies_memo,
+		).issubset(scheduled_cases | also_starting)
+
+	def schedule_ready_cases() -> None:
+		nonlocal next_id, remaining_cases
+
+		while True:
+			# A batch is awaited as a whole, so a case waiting for a dependency
+			# that only starts after that await would block the runner forever.
+			# Cases of one batch run concurrently, hence may depend on each other
+			parallel_batch = [
+				case
+				for case in remaining_cases
+				if not case.description.console_pool and services_ready(case)
+			]
+			while True:
+				starting = frozenset(case.description.name for case in parallel_batch)
+				kept = [case for case in parallel_batch if dependencies_ready(case, starting)]
+				if len(kept) == len(parallel_batch):
+					break
+				parallel_batch = kept
+
+			if parallel_batch:
+				batch_id = next_id
+				next_id += 1
+				batch_services: set[str] = set()
+				for case in parallel_batch:
+					batch_services.update(get_required_service_names(case))
+					scheduled_cases.add(case.description.name)
+				started = {case.description.name for case in parallel_batch}
+				remaining_cases = [
+					case for case in remaining_cases if case.description.name not in started
+				]
+				actions.append(StartCases(id=batch_id, cases=parallel_batch))
+				running_batches[batch_id] = batch_services
+
+			# A console case holds the whole case pool, so it runs alone. Start it
+			# only once every case it depends on has started, otherwise it would
+			# wait for a later service that cannot start while it holds the pool
+			ready_console = next(
+				(
+					case
+					for case in remaining_cases
+					if case.description.console_pool
+					and services_ready(case)
+					and dependencies_ready(case, frozenset())
+				),
+				None,
+			)
+			if ready_console is not None:
+				remaining_cases.remove(ready_console)
+				scheduled_cases.add(ready_console.description.name)
+				actions.append(StartCases(id=next_id, cases=[ready_console]))
+				actions.append(AwaitAllCases(id=next_id))
+				next_id += 1
+
+			# A console case that finished may unblock cases that depend on it
+			if not parallel_batch and ready_console is None:
+				return
+
+	# Cases without services can start before the first service
+	schedule_ready_cases()
 
 	for svc in topo_sorted_services:
+		conflicting = {
+			name
+			for name in active_services
+			if services_by_name[name].semaphores & svc.semaphores
+		}
+		if conflicting:
+			# A dependent cannot outlive a service being displaced by a mutually
+			# exclusive alternative
+			while True:
+				dependents = {
+					name
+					for name in active_services
+					if any(
+						dep.name in conflicting for dep in services_by_name[name].depends_on or []
+					)
+				}
+				if dependents.issubset(conflicting):
+					break
+				conflicting.update(dependents)
+			stop_services(conflicting)
+
+		missing_dependencies = {
+			dep.name for dep in svc.depends_on or [] if dep.name not in active_services
+		}
+		if missing_dependencies:
+			raise ValueError(
+				f'{svc.name} cannot start after mutually exclusive dependencies stopped: '
+				+ ', '.join(sorted(missing_dependencies))
+			)
+
 		# Start this service
 		actions.append(StartService(service=svc))
 		active_services.add(svc.name)
 
-		# Find cases that can now run (all their effective services are active)
-		ready_cases: list[genvm_tool.tests.test.Case] = []
-		still_waiting: list[genvm_tool.tests.test.Case] = []
+		schedule_ready_cases()
 
-		for case in remaining_cases:
-			required_services = get_effective_service_names(case)
-			if required_services.issubset(active_services):
-				ready_cases.append(case)
-			else:
-				still_waiting.append(case)
-
-		remaining_cases = still_waiting
-
-		# Schedule ready cases
-		parallel_batch: list[genvm_tool.tests.test.Case] = []
-		for case in ready_cases:
-			if case.description.console_pool:
-				# Console pool: run alone, await immediately
-				actions.append(StartCases(id=next_id, cases=[case]))
-				actions.append(AwaitAllCases(id=next_id))
-				next_id += 1
-			else:
-				parallel_batch.append(case)
-
-		if parallel_batch:
-			batch_id = next_id
-			next_id += 1
-			# Track which services this batch depends on
-			batch_services: set[str] = set()
-			for case in parallel_batch:
-				batch_services.update(get_effective_service_names(case))
-			actions.append(StartCases(id=batch_id, cases=parallel_batch))
-			running_batches[batch_id] = batch_services
+	if remaining_cases:
+		names = ', '.join(case.description.name for case in remaining_cases)
+		raise ValueError(
+			f'cases could not be scheduled before their services stopped: {names}'
+		)
 
 	# Ending: stop services in reverse topo order (dependents first, dependencies last)
-	for svc in reversed(topo_sorted_services):
-		# Await all batches that depend on this service
-		batches_to_await = [
-			batch_id for batch_id, services in running_batches.items() if svc.name in services
-		]
-		for batch_id in batches_to_await:
-			actions.append(AwaitAllCases(id=batch_id))
-			del running_batches[batch_id]
-
-		# Stop this service
-		actions.append(StopService(service=svc))
+	stop_services(set(active_services))
 
 	# Await any remaining batches (e.g., those without service dependencies)
 	for batch_id in list(running_batches.keys()):

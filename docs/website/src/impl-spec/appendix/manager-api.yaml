@@ -9,6 +9,24 @@ servers:
     description: Default local development server
 
 paths:
+  /ws:
+    get:
+      summary: Upgrade to the manager socket protocol
+      description: |
+        WebSocket upgrade. Everything past the handshake -- framing, methods,
+        events, error codes -- is specified in the Manager Socket Protocol
+        appendix, not here; OpenAPI cannot describe a bidirectional message
+        stream. Listed so this file stays a complete route table.
+
+        This is the supported way to drive executions. The `/genvm/*` paths
+        below are deprecated adapters over the same core.
+      operationId: managerSocket
+      responses:
+        '101':
+          description: Switching protocols; the connection becomes a manager socket
+        '426':
+          description: Upgrade required (the request was not a WebSocket handshake)
+
   /status:
     get:
       summary: Get manager status
@@ -39,6 +57,12 @@ paths:
                       max:
                         type: integer
                         description: Maximum number of permits
+                      per_sync_run:
+                        type: integer
+                        description: Permits a sync run costs
+                      per_nondet_run:
+                        type: integer
+                        description: Permits a nondet run costs
                   executions:
                     type: object
                     description: Status of running executions
@@ -80,6 +104,8 @@ paths:
                   result:
                     type: string
                     example: module_started
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -114,6 +140,8 @@ paths:
                   result:
                     type: string
                     enum: [module_stopped, module_not_running]
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -157,14 +185,29 @@ paths:
                   result:
                     type: string
                     example: module_restarted
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
   /genvm/run:
     post:
-      summary: Start a GenVM execution
+      summary: Start a GenVM execution (deprecated)
+      deprecated: true
       description: |
-        Start a new GenVM instance for contract execution.
+        Deprecated adapter over the socket protocol's `run` (see the Manager
+        Socket Protocol appendix); kept for one release train while hosts
+        migrate. Unlike the socket `run`, this call responds only after the
+        execution has started (or failed to start).
+
+        Both entry points decode the same request type and share the same start
+        path, so every field of `GenvmRunRequest` behaves identically here --
+        including the ones the socket protocol introduced (`deadline`,
+        `host_hello_data`, `hook_cross_contract_calls`) and the `host_genvm_id`
+        idempotency token, whose reservation happens below both. That is a
+        guarantee for as long as this adapter exists, not an accident of shared
+        types. What differs is only what this call *returns*: an id after the
+        execution has started, rather than immediately.
 
         The request body uses calldata binary encoding (not JSON). The schema below
         shows the logical structure that must be encoded using the calldata format.
@@ -195,8 +238,20 @@ paths:
 
   /genvm/{genvm_id}:
     get:
-      summary: Get GenVM status
-      description: Get the status of a specific GenVM instance.
+      summary: Get GenVM status (deprecated)
+      deprecated: true
+      description: |
+        Deprecated adapter over the socket protocol's `attach` + `ack`; kept
+        for one release train while hosts migrate
+
+        The optional `wait` parameter exists so hosts that cannot use the
+        socket protocol can stop busy-polling. It does not un-deprecate this
+        route; the socket protocol remains the supported interface
+
+        The route preserves the historical destructive semantics: a returned
+        non-null status acknowledges the execution, so a second GET answers
+        null. Socket clients get non-destructive reads with an explicit `ack`
+        instead
       operationId: getGenvmStatus
       parameters:
         - name: genvm_id
@@ -205,6 +260,18 @@ paths:
           schema:
             type: integer
           description: Unique identifier of the GenVM instance
+        - name: wait
+          in: query
+          required: false
+          schema:
+            type: string
+            example: 30s
+          description: |
+            Maximum time to wait for a terminal status, as a number followed
+            by `ms`, `s`, `m`, or `h`, for example `500ms`, `30s`, or `1m`
+
+            Values above 120 seconds are clamped to 120 seconds. If the wait
+            times out, the response has a null status rather than an error
       responses:
         '200':
           description: GenVM status
@@ -218,11 +285,23 @@ paths:
                   status:
                     type: object
                     description: Current status of the GenVM instance
+                    properties:
+                      consumed_result:
+                        type: string
+                        format: byte
+                        nullable: true
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
     delete:
-      summary: Shutdown GenVM instance
-      description: Gracefully shutdown a GenVM instance.
+      summary: Shutdown GenVM instance (deprecated)
+      deprecated: true
+      description: |
+        Deprecated adapter over the socket protocol's `cancel`; kept for one
+        release train while hosts migrate. Socket clients should rely on the
+        request-carried deadline plus `cancel` instead of a client-side
+        timeout that fires DELETE.
       operationId: shutdownGenvm
       parameters:
         - name: genvm_id
@@ -252,6 +331,68 @@ paths:
                         example: timeout during shutdown
                       genvm_id:
                         type: integer
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+
+  /genvm/{genvm_id}/artifact:
+    get:
+      summary: Get retained GenVM artifact
+      description: |
+        Debug convenience adapter over the socket protocol's `get_artifact`.
+        Returns a base64-encoded chunk from one retained artifact. Socket
+        clients should use the framed `get_artifact` method instead.
+      operationId: getGenvmArtifact
+      parameters:
+        - name: genvm_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Unique identifier of the GenVM instance
+        - name: field
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [stdout, stderr, genvm_log]
+          description: Artifact field to read
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: uint64
+            default: 0
+          description: Byte offset within the artifact
+        - name: max_len
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: uint32
+          description: Maximum bytes to return before server-side chunk capping
+      responses:
+        '200':
+          description: Artifact chunk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  genvm_id:
+                    type: integer
+                  field:
+                    type: string
+                  total_len:
+                    type: integer
+                    format: uint64
+                  data_base64:
+                    type: string
+                    format: byte
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
 
   /contract/detect-version:
     post:
@@ -285,6 +426,8 @@ paths:
                   specified_major:
                     type: integer
                     description: Detected major version
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -321,6 +464,8 @@ paths:
                     example: log_level_set
                   level:
                     type: string
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -343,46 +488,6 @@ paths:
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
-  /env:
-    post:
-      summary: Set environment variable
-      description: Set an environment variable in the manager process.
-      operationId: setEnv
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - key
-                - value
-              properties:
-                key:
-                  type: string
-                  description: Environment variable name
-                value:
-                  type: string
-                  description: Environment variable value
-              example:
-                key: DEBUG_MODE
-                value: "true"
-      responses:
-        '200':
-          description: Environment variable set
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  result:
-                    type: string
-                    example: env_var_set
-                  key:
-                    type: string
-        '500':
-          $ref: '#/components/responses/ErrorResponse'
-
   /permits:
     get:
       summary: Get permits
@@ -401,7 +506,10 @@ paths:
                     description: Number of available permits
     post:
       summary: Set permits
-      description: Set the number of execution permits.
+      description: >-
+        Set the number of execution permits, one permit is one gigabyte of RAM.
+        A value below the cost of the most expensive run is rejected, and the
+        response carries the unchanged maximum.
       operationId: setPermits
       requestBody:
         required: true
@@ -430,6 +538,8 @@ paths:
                     example: permits_set
                   permits:
                     type: integer
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -532,6 +642,8 @@ paths:
                     response:
                       type: string
                       nullable: true
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -559,6 +671,8 @@ paths:
                     type: string
                     nullable: true
                     description: Human-readable error description, or null if unknown
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -570,6 +684,51 @@ components:
       description: 20-byte Ethereum-style address as hex string
       example: "0x1234567890abcdef1234567890abcdef12345678"
 
+    ExecutorSelector:
+      description: Which executor line runs a request.
+      oneOf:
+        - $ref: '#/components/schemas/ExecutorSelectorMajor'
+        - $ref: '#/components/schemas/ExecutorSelectorVersion'
+      discriminator:
+        propertyName: kind
+        mapping:
+          major: '#/components/schemas/ExecutorSelectorMajor'
+          version: '#/components/schemas/ExecutorSelectorVersion'
+
+    ExecutorSelectorMajor:
+      type: object
+      description: |
+        Resolved by the manifest's rules, falling back to the newest line when
+        none provides this major. Cannot separate lines that share a semver
+        major, which every released line does.
+      required:
+        - kind
+        - major
+      properties:
+        kind:
+          type: string
+          enum: [major]
+        major:
+          type: integer
+          format: uint32
+
+    ExecutorSelectorVersion:
+      type: object
+      description: |
+        Names a line: an executor directory used as it stands, or a `re:`-prefixed
+        regular expression over manifest version keys, the newest match winning.
+        No match fails the run.
+      required:
+        - kind
+        - version
+      properties:
+        kind:
+          type: string
+          enum: [version]
+        version:
+          type: string
+          example: "v0.2.17"
+
     MessageData:
       type: object
       description: Contract execution message data
@@ -577,7 +736,9 @@ components:
         - contract_address
         - sender_address
         - origin_address
+        - signer_address
         - chain_id
+        - value
         - is_init
       properties:
         contract_address:
@@ -586,12 +747,8 @@ components:
           $ref: '#/components/schemas/Address'
         origin_address:
           $ref: '#/components/schemas/Address'
-        stack:
-          type: array
-          items:
-            $ref: '#/components/schemas/Address'
-          default: []
-          description: View methods call chain (empty for entrypoint)
+        signer_address:
+          $ref: '#/components/schemas/Address'
         chain_id:
           type: string
           description: Chain ID as big integer string
@@ -599,11 +756,11 @@ components:
         value:
           type: string
           description: Transaction value as big integer string
-          default: "0"
+          example: "0"
         is_init:
           type: boolean
           description: Whether this is a contract initialization call
-        datetime:
+        transaction_timestamp:
           type: string
           format: date-time
           description: Transaction timestamp
@@ -614,19 +771,20 @@ components:
         GenVM execution request. This structure must be encoded using the calldata
         binary format before sending.
       required:
-        - major
+        - selector
         - message
         - is_sync
-        - storage_pages
+        - bucket_totals
         - host_data
         - timestamp
         - host
         - calldata
+        - code
+        - leader_public_data
+        - initial_time_units_allocation
       properties:
-        major:
-          type: integer
-          format: uint32
-          description: Major version specification
+        selector:
+          $ref: '#/components/schemas/ExecutorSelector'
         message:
           $ref: '#/components/schemas/MessageData'
         is_sync:
@@ -650,10 +808,14 @@ components:
           format: uint64
           default: 20
           description: Maximum execution time in minutes
-        storage_pages:
-          type: integer
-          format: uint64
-          description: Number of storage pages allocated
+        bucket_totals:
+          type: array
+          items:
+            type: string
+          description: |
+            Per-bucket data-fee balances, as big integer strings, indexed by the
+            bucket numbers the executor's fee config references. No default: a
+            request that omits it is rejected.
         host_data:
           type: string
           description: Host-specific data as JSON string
@@ -678,15 +840,108 @@ components:
           type: string
           format: binary
           nullable: true
-          description: Optional contract bytecode (for deployment)
-        reroute_to:
-          type: string
-          default: ""
           description: |
-            Debug-only override of the executor directory (a version dir under the
-            manager's executors path) to run, bypassing manifest resolution. Honored
-            only when `debug_mode` is `safe` or above; ignored in production
-            (`disabled`) so consensus always runs the manifest-resolved version.
+            Contract bytecode for a deployment, or null for a call. Required to be
+            present; only its value is nullable.
+        leader_public_data:
+          type: string
+          format: binary
+          nullable: true
+          description: |
+            Opaque executor-owned leader public data for a validator run, or null
+            for a leader run. Required to be present; only its value is nullable.
+        initial_time_units_allocation:
+          type: integer
+          format: uint32
+          description: Initial time-unit budget for the execution.
+        permissions:
+          type: string
+          default: wscn
+          description: |
+            Permission meta-properties granted to the entry VM, as a subset of the
+            characters `w` (write storage), `s` (send messages), `c` (call other
+            contracts) and `n` (spawn nondet). **Defaults to all four**, so a host
+            that computes narrower permissions must send this field explicitly.
+        no_modules:
+          type: boolean
+          default: false
+          description: |
+            Run without the LLM and web modules even when the permissions would
+            otherwise require them.
+        gas_data:
+          type: object
+          additionalProperties:
+            type: string
+          default: {}
+          description: Host-provided `node` fee constants.
+        message_fee_allocation:
+          type: array
+          items:
+            type: object
+          default: []
+          description: |
+            Message-fee allocation tree. See `MessageAllocationNode` in
+            `crates/modules-interfaces/src/domain/fees/mod.rs` for the node shape.
+        record_actions:
+          type: array
+          items:
+            type: string
+            enum: [runner_load, vm_spawn]
+          default: []
+          description: Auditable supervisor action kinds to return in the result.
+        host_genvm_id:
+          type: string
+          nullable: true
+          default: null
+          description: |
+            Client correlation token, echoed in this run's events. Also an
+            idempotency key on the socket protocol; see the `run` method in the
+            manager socket protocol page.
+        deadline:
+          type: string
+          nullable: true
+          default: null
+          description: |
+            Duration string that overrides `max_execution_minutes` as the strict
+            deadline when set.
+        host_hello_data:
+          type: array
+          items:
+            type: string
+            format: binary
+          default: []
+          description: |
+            Bytes written verbatim to each host connection, indexed by connection
+            index, before the first method byte. The manager rejects a non-empty
+            entry for a connection it owns itself.
+        hook_cross_contract_calls:
+          type: boolean
+          default: false
+          description: |
+            Whether the host wants to answer `resolve_call_contract_executor`. When
+            false the manager answers it with a null reply and every `CallContract`
+            stays in-process.
+        unsafe_overrides:
+          type: object
+          description: |
+            Overrides that reach boundaries production traffic cannot. Each member
+            states the `debug_mode` it needs; with debugging disabled none apply.
+          properties:
+            reroute_to:
+              type: string
+              default: ""
+              description: |
+                Run this version instead of the one `selector` resolves to, in
+                the same two forms `selector`'s version variant accepts. Empty is
+                no override. Honored from `safe` up.
+            initial_recursion:
+              type: integer
+              format: uint32
+              nullable: true
+              default: null
+              description: |
+                Seeds the chain's recursion budget, replacing the executor's own
+                `VM_RECURSION`. Honored from `unsafe` up.
 
   responses:
     ErrorResponse:

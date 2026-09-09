@@ -1,143 +1,279 @@
 name: GenVM full
 
-# Full GenVM CI. The repo has NO GitHub merge queue: this is the
-# authoritative "genvm CI" gate the Merge action
-# (branch_merge_into_dev.yaml) requires to be green on the exact head it
-# fast-forwards.
+# Full GenVM CI. The App-owned E2E merge train revalidates this native check on
+# the exact manager head before it squash-merges the tested snapshot.
 #
 # For every push to a PR targeting a dev branch (v<X>-dev):
-#   - `initial` (cheap pre-commit + 0-behind check) ALWAYS runs;
-#   - the heavy test jobs run only when a run-full-tests marker is set —
-#     the `rtm` (ready-to-merge) label or the `run-full-tests` label (the
-#     "Force run full tests" checkbox sets the latter);
+#   - `initial` (cheap pre-commit + 0-behind) and `check-executor-prs` (the
+#     executor landability precondition) ALWAYS run, in parallel;
+#   - `gate-check` aggregates them and plans the test matrix (plan-queue-matrix);
+#     the heavy `matrix-tests` cells run when the `run-full-tests` label is set
+#     or `/genvm-run-tests` dispatches a one-shot run. Neither authorizes the App
+#     to merge.
+#     Without a marker the plan is empty, so matrix-tests is skipped;
 #   - without a marker `validate-end` fails, so the CI check stays red
 #     until a full run has happened.
 #
-# The action panel ("Force"/"Rerun full tests") triggers a run directly via
-# `workflow_dispatch` rather than relying on a label edit: a label applied by
-# the bot's GITHUB_TOKEN does NOT emit a `labeled` event (GitHub suppresses
-# recursive runs), but a `workflow_dispatch` from that same token DOES run.
-# The dispatch targets the PR head branch, so the run's head_sha equals the
-# PR head and the Merge gate (which matches by head_sha) counts it.
+# Labels are passive: adding `run-full-tests` or any unrelated label never starts
+# or cancels CI. "Force run full tests" on the action panel and the
+# `/genvm-run-tests` command dispatch this workflow explicitly; a push still
+# starts the always-on checks.
 on:
   pull_request:
     branches: ['v*-dev']
-    types: [opened, synchronize, reopened, ready_for_review, labeled]
+    # Deliberately NOT `edited`: this workflow's concurrency group cancels
+    # in-flight runs, so a typo fix in the PR body would kill a running
+    # matrix-tests cell (over an hour of work). The PR title can therefore be
+    # edited to something invalid after `initial / pr-title` went green. Title
+    # edits should be followed by a fresh run before the App merge is requested.
+    types: [opened, synchronize, reopened, ready_for_review]
   workflow_dispatch:
     inputs:
       pr:
-        description: PR number this manual run validates (used only for the run name)
+        description: >-
+          PR number supplied by the action panel and bound to the dispatch's
+          exact repository head before any CI job runs.
+        type: string
+        required: true
+      release_pipeline_test:
+        description: Exercise the release pipeline without publishing
+        type: boolean
+        required: false
+        default: false
+      request_comment:
+        description: "`/genvm-run-tests` comment id, empty for other triggers"
         type: string
         required: false
+        default: ""
+      request_id:
+        description: Unique `/genvm-run-tests` handler run and attempt
+        type: string
+        required: false
+        default: ""
+      expected_sha:
+        description: Exact manager SHA requested by `/genvm-run-tests`
+        type: string
+        required: false
+        default: ""
 
 run-name: >-
-  GenVM full${{ github.event_name == 'workflow_dispatch' && format(' (manual, PR #{0})', inputs.pr) || '' }}
+  GenVM full${{ github.event_name == 'workflow_dispatch' && format(' (manual, PR #{0})', inputs.pr) || '' }}${{ inputs.request_id != '' && format(' [request={0};comment={1};pr={2}]', inputs.request_id, inputs.request_comment, inputs.pr) || '' }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+# One in-flight full run per PR; a newer push cancels the stale run.
+# The PR number unifies push- and command-triggered runs. Cancelling a
+# superseded head's run is safe: the App only consumes CI that is green on the
+# exact head it merges, which is always the newest one. A command therefore
+# replaces an older run for the same PR rather than duplicating the full matrix.
+concurrency:
+  group: genvm-full-${{ github.event.pull_request.number || inputs.pr || github.run_id }}
+  cancel-in-progress: true
 
 defaults:
   run:
-    shell: bash -x {0}
-
-env:
-  GCS_BUCKET: "gh-af"
+    shell: bash -exo pipefail {0}
 
 jobs:
+  validate-trigger:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Validate CI trigger
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          DISPATCH_ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          PR: ${{ inputs.pr }}
+          REQUEST_COMMENT: ${{ inputs.request_comment }}
+          REQUEST_ID: ${{ inputs.request_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          if [ "$RUN_ATTEMPT" != 1 ]; then
+            echo "::error::CI reruns must be started from the PR action panel"
+            exit 1
+          fi
+          if [ "$EVENT_NAME" != workflow_dispatch ]; then
+            exit 0
+          fi
+          if [ "$DISPATCH_ACTOR" != 'github-actions[bot]' ] || \
+             [ "$TRIGGERING_ACTOR" != 'github-actions[bot]' ]; then
+            echo "::error::full CI must be started from the PR action panel, not the Actions UI"
+            exit 1
+          fi
+          if [[ ! "$PR" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::invalid PR number: $PR"
+            exit 1
+          fi
+          if [ -n "$REQUEST_COMMENT" ] && [[ ! "$REQUEST_COMMENT" =~ ^[1-9][0-9]*$ ]]; then
+            echo "::error::invalid request comment id: $REQUEST_COMMENT"
+            exit 1
+          fi
+          if [ -n "$REQUEST_ID" ] && [[ ! "$REQUEST_ID" =~ ^[1-9][0-9]*-[1-9][0-9]*$ ]]; then
+            echo "::error::invalid request id: $REQUEST_ID"
+            exit 1
+          fi
+          if { [ -n "$REQUEST_ID" ] && [ -z "$REQUEST_COMMENT" ]; } || \
+             { [ -z "$REQUEST_ID" ] && [ -n "$REQUEST_COMMENT" ]; }; then
+            echo "::error::request id and request comment must be supplied together"
+            exit 1
+          fi
+          if [ -n "$REQUEST_ID" ] && [ -z "$EXPECTED_SHA" ]; then
+            echo "::error::command dispatch must include the requested SHA"
+            exit 1
+          fi
+          if [ -n "$EXPECTED_SHA" ] && [[ ! "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::invalid expected SHA: $EXPECTED_SHA"
+            exit 1
+          fi
+          if [ -n "$EXPECTED_SHA" ] && [ "$EXPECTED_SHA" != "$RUN_SHA" ]; then
+            echo "::error::requested SHA is $EXPECTED_SHA, but dispatch resolved $RUN_SHA"
+            exit 1
+          fi
+
+          head="$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" \
+            --jq '[.head.repo.full_name, .head.sha] | @tsv')"
+          IFS=$'\t' read -r head_repo head_sha <<<"$head"
+          if [ "$head_repo" != "$GITHUB_REPOSITORY" ]; then
+            echo "::error::the action panel cannot dispatch CI for a fork PR"
+            exit 1
+          fi
+          if [ "$head_sha" != "$RUN_SHA" ]; then
+            echo "::error::dispatch ref is $RUN_SHA, but PR #$PR is at $head_sha"
+            exit 1
+          fi
+
   initial:
+    needs: validate-trigger
     uses: ./.github/workflows/incl_initial.yaml
+    with:
+      # Resolved from whichever event triggered this run, so the PR-scoped
+      # checks run on BOTH a push and a panel dispatch. They used to test
+      # `github.event_name == 'pull_request'` themselves and so skipped on every
+      # dispatched run — while that run could still conclude `success` and be
+      # accepted by the App, which takes a green run on the exact head sha.
+      pr: ${{ github.event.pull_request.number || inputs.pr }}
     secrets: inherit
 
-  module-test-python:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [initial]
+  # Precondition (run.sh tool pr-branches check): every repo must be rebased on
+  # its base, and every executor line must have its pinned commit in the executor
+  # repo. Ahead-of-base executor work is expected: after the App
+  # lands manager, branch_sync_executors.yaml fast-forwards the executor dev refs.
+  # Read-only (gh API, no submodule checkout).
+  #
+  # Runs on same-repo PRs AND on workflow_dispatch with a PR number (the panel's
+  # rerun path, whose run the App consumes — so the precondition must hold
+  # there too; the PR number then comes from inputs.pr). Fork PRs are skipped: they
+  # get no secrets (the executor PAT would be empty) and cannot push executor mirror
+  # branches, so there is nothing to gate. It checks out the PR being validated
+  # (refs/pull/<n>/head) so the scripts and .genvm-monorepo-root match that PR — on
+  # dispatch the base branch is not in the event context, and its default-branch tree
+  # is the wrong commit. (Checking out PR code is not an extra exposure: for
+  # pull_request GitHub already runs this workflow file from the PR, so a same-repo
+  # author controls it regardless.)
+  check-executor-prs:
+    needs: validate-trigger
+    if: >
+      needs.validate-trigger.result == 'success' &&
+      ((github.event_name == 'workflow_dispatch' && inputs.pr != '') ||
+       (github.event_name == 'pull_request' &&
+        github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
-          lfs: true
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          load_submodules: "false"
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: ./support/ci/pipelines/test-python.sh
-
-  module-test-rust-fuzz:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [initial]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses:  insightsengineering/disk-space-reclaimer@v1
-        with:
-          tools-cache: false
-          swap-storage: false
-          docker-images: false
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          load_submodules: "true"
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - run: |
-          echo core | sudo tee /proc/sys/kernel/core_pattern
-          echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
-          echo 0 | sudo tee /proc/sys/kernel/yama/ptrace_scope
-          ./support/ci/pipelines/test-rust-fuzz.sh && ./support/ci/cargo-clippy.sh
+          ref: refs/pull/${{ github.event.pull_request.number || inputs.pr }}/head
+          # Read-only gh API calls; nothing here pushes, so the checkout
+          # credential should not survive into the PR code this job runs.
+          persist-credentials: false
+      - name: Executor gitlinks are available
         env:
-          OPENAIKEY: ${{ secrets.OPENAIKEY }}
-          HEURISTKEY: ${{ secrets.HEURISTKEY }}
-          ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
-          XAIKEY: ${{ secrets.XAIKEY }}
-          GEMINIKEY: ${{ secrets.GEMINIKEY }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr }}
+          MANAGER_REPO: ${{ github.repository }}
+          MANAGER_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXECUTOR_TOKEN: ${{ secrets.GENVM_EXECUTOR_PR_TOKEN }}
+        run: ./support/ci/run.sh tool pr-branches check
 
-  module-test-rust:
-    if: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
-    needs: [initial]
+  gate-check:
+    needs: [validate-trigger, initial, check-executor-prs]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: ${{ always() }}
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
     steps:
+      - name: Check gate results
+        run: |
+          if [ "${{ needs.validate-trigger.result }}" != "success" ]; then
+            echo "::error::CI trigger validation failed"
+            exit 1
+          fi
+          if [ "${{ needs.initial.result }}" != "success" ]; then
+            echo "::error::initial checks failed"
+            exit 1
+          fi
+          # Executor precondition: fail on failure/cancelled. Skipped (fork PR or
+          # manual dispatch, where check-executor-prs does not run) is acceptable.
+          case "${{ needs.check-executor-prs.result }}" in
+            failure | cancelled)
+              echo "::error::executor mirror PR precondition failed"
+              exit 1
+              ;;
+          esac
       - uses: actions/checkout@v4
-        with:
-          lfs: true
-      - uses:  insightsengineering/disk-space-reclaimer@v1
-        with:
-          tools-cache: false
-          swap-storage: false
-          docker-images: false
-      - name: Get source
-        uses: ./.github/actions/get-src
-        with:
-          load_submodules: "true"
-          with_nix: "true"
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.GCP_SA_KEY }}
-      - name: Set up Cloud SDK # needed for gcloud to upload runners to GCS for caching
-        uses: google-github-actions/setup-gcloud@v2
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - run: |
-          ./support/ci/pipelines/test-rust.sh
+      - name: Plan test matrix
+        id: plan
         env:
-          OPENAIKEY: ${{ secrets.OPENAIKEY }}
-          HEURISTKEY: ${{ secrets.HEURISTKEY }}
-          ANTHROPICKEY: ${{ secrets.ANTHROPICKEY }}
-          XAIKEY: ${{ secrets.XAIKEY }}
-          GEMINIKEY: ${{ secrets.GEMINIKEY }}
+          # Heavy cells run only with a marker; without one the plan is empty and
+          # matrix-tests is skipped.
+          RUN_FULL_TESTS: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+        run: ./support/ci/run.sh pipeline plan-queue-matrix
+
+  matrix-tests:
+    needs: gate-check
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.gate-check.outputs.matrix) }}
+    uses: ./.github/workflows/queue_test_cell.yaml
+    with:
+      name: ${{ matrix.name }}
+      job_json: ${{ matrix.job_json }}
+      runs_on: ${{ matrix.runs_on }}
+      disk_reclaim: ${{ matrix.disk_reclaim }}
+      fuzz_host: ${{ matrix.fuzz_host }}
+      buildx: ${{ matrix.buildx }}
+      gcp: ${{ matrix.gcp }}
+    secrets: inherit
+
+
+  # Opt-in: exercises the release pipeline itself (plan -> build every artifact
+  # -> test every platform) without publishing anything. Not part of
+  # validate-end's gate — it is skipped by default, and `skipped` there is a
+  # failure.
+  release-pipeline-test:
+    needs: [initial, gate-check]
+    if: ${{ (github.event_name == 'workflow_dispatch' && inputs.release_pipeline_test) || contains(github.event.pull_request.labels.*.name, 'test-release-pipeline') }}
+    uses: ./.github/workflows/incl_release_build_test.yaml
+    secrets: inherit
+
 
   validate-end:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: ${{ always() }}
     needs:
       - initial
-      - module-test-python
-      - module-test-rust
-      - module-test-rust-fuzz
+      - gate-check
+      - matrix-tests
     env:
-      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'rtm') || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
+      HAS_MARKER: ${{ github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'run-full-tests') }}
     steps:
       - name: check
         run: |
@@ -149,12 +285,16 @@ jobs:
           # No run-full-tests marker -> heavy tests were skipped; keep the
           # gate red so the PR is not mergeable until they run.
           if [ "$HAS_MARKER" != "true" ]; then
-            echo "::error::full tests have not run — add the 'rtm' label or check 'Force run full tests' on the action panel"
+            echo "::error::full tests have not run — tick 'Force run full tests' or comment '/genvm-run-tests'"
             exit 1
           fi
-          results="${{ needs.module-test-python.result }} ${{ needs.module-test-rust.result }} ${{ needs.module-test-rust-fuzz.result }}"
+          results="${{ needs.matrix-tests.result }}"
           echo "$results"
-          if echo "$results" | grep -qiE '(failure|cancelled|skipped)'; then
+          # Herestring, not `echo "$results" |`: this is the last gate before a
+          # PR is mergeable, and under `pipefail` a non-zero left-hand side would
+          # make the condition false — i.e. fail OPEN, reporting green for a
+          # matrix that failed. Nothing should be able to swallow that.
+          if grep -qiE '(failure|cancelled|skipped)' <<<"$results"; then
             echo "::error::one or more full-test jobs failed/cancelled/skipped"
             exit 1
           fi

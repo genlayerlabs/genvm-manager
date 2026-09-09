@@ -16,6 +16,7 @@ jobs:
   docker-image:
     name: Build and push webdriver image
     runs-on: ubuntu-latest
+    timeout-minutes: 90
 
     permissions:
       contents: read

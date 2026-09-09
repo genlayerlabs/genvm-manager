@@ -1,3 +1,5 @@
+// genvm-tool-test-tags: feature-prompt-text, needs-llm, needs-web
+
 use genvm_common::logger;
 use genvm_common::*;
 use genvm_modules_interfaces::llm::{self as llm_iface};
@@ -96,6 +98,8 @@ async fn test_overloaded() {
         .unwrap()
         .to_owned();
     extra_path.push_str("/?.lua");
+    extra_path.push(';');
+    extra_path.push_str(&common::tests::llm_policy_lua_path());
 
     let config = sync::DArc::new(config::Config {
         base: genvm_common::BaseConfig {

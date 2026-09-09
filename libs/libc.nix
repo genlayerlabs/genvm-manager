@@ -14,7 +14,7 @@ let
   aarch64-compiler-rt = deps."compiler-rt-aarch64-21.1.5-1";
 in
 pkgs.stdenvNoCC.mkDerivation {
-  name = "libc-${name-target}";
+  name = "genvm-libc-${name-target}";
 
   src = musl-src;
 
