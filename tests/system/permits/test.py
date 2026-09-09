@@ -226,7 +226,7 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 					),
 					request_extra={'no_modules': True},
 					shutdown_early=shut_downer,
-					bucket_totals=[2**200] * 20,
+					bucket_totals=base_host.default_bucket_totals(3),
 				)
 			except Exception:
 				pass  # expected when cancelled or contract crashes
@@ -245,7 +245,7 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 				'extra_args': [],
 				'code': code,
 				'calldata': gvm_calldata.encode({}),
-				'bucket_totals': [2**200] * 20,
+				'bucket_totals': base_host.default_bucket_totals(3),
 				'no_modules': True,
 				'leader_public_data': b'',
 				'initial_time_units_allocation': 60,
@@ -295,7 +295,7 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 			'extra_args': [],
 			'code': code,
 			'calldata': gvm_calldata.encode({}),
-			'bucket_totals': [2**200] * 20,
+			'bucket_totals': base_host.default_bucket_totals(3),
 			'no_modules': True,
 			'leader_public_data': b'',
 			'initial_time_units_allocation': 60,
