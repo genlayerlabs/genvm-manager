@@ -1,5 +1,6 @@
 import pytest
 
+from . import calldata as gvm_calldata
 from .leader_public_data import LeaderPublicData, decode, encode
 
 
@@ -8,15 +9,20 @@ def test_round_trip_from_memoryview() -> None:
 	assert decode(memoryview(encode(data))) == data
 
 
-def test_preserves_legacy_encoding() -> None:
-	assert LeaderPublicData([b'test']).encode() == b'\xcc\x84test\x86padded'
+def test_has_stable_encoding() -> None:
+	assert LeaderPublicData([b'a', b'bc']).encode() == b'\x0e\x07nd_outs\x15\x0ba\x13bc'
 
 
-def test_empty_timeout_decodes_as_no_outputs() -> None:
-	assert LeaderPublicData.decode(b'') == LeaderPublicData([])
-
-
-@pytest.mark.parametrize('encoded', [b'\xc0', b'\xc7\x86padded\x00', b'\xc2\x81\x01'])
+@pytest.mark.parametrize(
+	'encoded',
+	[
+		b'',
+		b'\xcc\x84test\x86padded',
+		gvm_calldata.encode({}),
+		gvm_calldata.encode({'nd_outs': [1]}),
+		gvm_calldata.encode({'nd_outs': []}) + b'\x00',
+	],
+)
 def test_rejects_invalid_encoding(encoded: bytes) -> None:
-	with pytest.raises(ValueError):
+	with pytest.raises((ValueError, gvm_calldata.DecodingError)):
 		LeaderPublicData.decode(encoded)
