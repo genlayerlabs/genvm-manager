@@ -256,6 +256,7 @@ def tests(ctx):
 		integration.integration_test_directory(
 			ctx,
 			cases_dir=ctx.shared.root_dir / 'tests' / 'system' / 'cross-major' / 'cases',
+			executor_major=3,
 			reroute_to=build_info['executor_versions']['v0.3'],
 			save_hashes=False,
 			manager_service=manager_service,
