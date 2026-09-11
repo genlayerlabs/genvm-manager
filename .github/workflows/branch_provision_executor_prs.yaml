@@ -55,7 +55,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: refs/pull/${{ inputs.pr }}/head
           # Provisioning goes through the executor token via `gh`, never `git
