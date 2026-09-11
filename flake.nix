@@ -619,11 +619,11 @@
           # ---- Release distribution bundles -------------------------
           # `executor[-<platform>]` (no version) merges every active line's
           # executor tree (executor/<version>/...) into one bundle. The release
-          # publishes each line on its own (`executor-<version>[-<platform>]`,
-          # one release per line in the executor repo), so this merged bundle has
-          # no CI consumer; it stays as the convenient "give me every line"
-          # target for local use. Runners are NOT included; they ship
-          # platform-independently via artifact-prepack-genvm-universal.
+          # packs artifact-prepack-genvm-<platform> (manager + every line)
+          # instead, so this merged bundle has no CI consumer; it stays as the
+          # convenient "give me every line" target for local use. Runners are
+          # NOT included; they ship platform-independently via
+          # artifact-prepack-genvm-universal.
           combine-executors =
             suffix:
             pkgs.runCommand "genvm-executor${suffix}"

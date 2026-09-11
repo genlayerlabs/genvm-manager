@@ -12,6 +12,17 @@
 Executor crates are versioned **independently**: a line's `manifest.json` holds
 `executor-version` and no manager script rewrites it
 
+A platform release asset bundles every active line, so post-install downloads
+a line only when the install root lacks it, from `executor_download_urls` in
+`support/manifest-base.yaml`: `genvm-<platform>-executor.tar.xz` on a release
+of the executor repo tagged with the line's `executor-version`. The download is
+accepted only against `executor-sha256` in the line's `manifest.json`, a
+`{platform: sha256}` map copied from that release's published checksums; an unpinned
+platform is refused. So the executor release must exist before the manifest
+that pins it is committed, and a re-release under the same tag needs a manifest
+bump. No line pins anything today: the executor repo publishes no releases, and
+the fallback fails closed until it does
+
 Manager branches are named after the *manager* train, not an executor line:
 `v<X>` is the release branch, `v<X>-dev` the integration branch. Here `<X>` is
 major.minor, for example `v0.6`

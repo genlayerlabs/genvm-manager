@@ -1,9 +1,10 @@
 use super::*;
 
 /// The manifest the manager ships: two live lines, both semver major zero.
+/// `sha256` is post-install's pin map; the manager must tolerate it.
 fn live_manifest() -> Manifest {
     serde_yaml::from_str(
-        "executor_versions:\n  \"v0.2.17\":\n    available_after: 2024-09-01T00:00:00Z\n  \"v0.3.0-rc7\":\n    available_after: 2024-09-01T00:00:00Z\n",
+        "executor_versions:\n  \"v0.2.17\":\n    available_after: 2024-09-01T00:00:00Z\n  \"v0.3.0-rc7\":\n    available_after: 2024-09-01T00:00:00Z\n    sha256:\n      amd64-linux: \"0000000000000000000000000000000000000000000000000000000000000000\"\n",
     )
     .unwrap()
 }
