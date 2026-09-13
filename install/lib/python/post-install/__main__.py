@@ -490,27 +490,47 @@ def download_runners_from_json(
 
 def download_executor(executor_version: str):
 	"""
-	Fetch an executor line from its own release and unpack it at the install root.
+	Fetch an executor line's tarball and unpack it at the install root.
 
-	Since the repo split the manager release carries no executors: each line is
-	released separately, under its own executor-version. The tarball is laid out
-	as `executor/<version>/...`, i.e. relative to the install root, so it is
+	A platform release asset already bundles every active line, so this only
+	runs for an install root that lacks one (a `manager-<platform>` tree
+	installed on its own). The tarball is laid out as
+	`executor/<version>/...`, i.e. relative to the install root, so it is
 	unpacked there.
+
+	The tarball must match the sha256 the manager pinned for this platform in
+	its manifest (`executor_versions.<version>.sha256.<platform>`): the download
+	is over plain HTTPS from a release page and is native code, so no hash means
+	no download.
 	"""
 	templates = manifest.get('executor_download_urls', [])
 	if not templates:
 		raise RuntimeError('manifest has no executor_download_urls')
+
+	platform = f'{args.arch}-{args.os}'
+	pinned = manifest['executor_versions'][executor_version].get('sha256') or {}
+	expected = pinned.get(platform)
+	if not isinstance(expected, str):
+		raise RuntimeError(
+			f'manifest pins no sha256 for executor {executor_version} on {platform}; refusing to download'
+		)
 
 	data = _download_template(
 		f'executor {executor_version}',
 		templates,
 		{
 			'version': executor_version,
-			'platform': f'{args.arch}-{args.os}',
+			'platform': platform,
 			'arch': args.arch,
 			'os': args.os,
 		},
 	)
+
+	actual = hashlib.sha256(data).hexdigest()
+	if actual != expected.lower():
+		raise RuntimeError(
+			f'sha256 mismatch for executor {executor_version} on {platform}: expected {expected}, got {actual}'
+		)
 
 	with tarfile.open(fileobj=io.BytesIO(data), mode='r:xz') as tar:
 		tar.extractall(genvm_root_dir, filter='data')
@@ -547,9 +567,9 @@ def process_executor_version(executor_version: str):
 	executor_root_dir = genvm_root_dir.joinpath('executor', executor_version)
 	executor_executable = executor_root_dir.joinpath('bin', 'genvm')
 
-	# The manager bundle no longer ships the executors, so fetch what is missing
-	# before anything below expects it on disk. A failure here is only fatal if a
-	# missing executor is (--error-on-missing-executor).
+	# A platform asset bundles every line, so this only fetches what a partial
+	# install lacks. A failure here is only fatal if a missing executor is
+	# (--error-on-missing-executor).
 	if args.executor_download and not executor_executable.exists():
 		logger.info(f'Executor {executor_version} is not installed, downloading it')
 		try:
