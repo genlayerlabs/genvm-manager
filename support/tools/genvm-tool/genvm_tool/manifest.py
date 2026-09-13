@@ -9,7 +9,7 @@ the version keys and availability always track the executor submodules.
 Inputs, all under the monorepo root:
 
 	* `.genvm-monorepo-root`              -> `active-versions` (the executor trains)
-	* `executors/v<ver>.x/manifest.json`  -> `executor-version` + `available-after`
+	* `executors/v<ver>.x/manifest.json`  -> `executor-version`, `available-after`, `executor-sha256`
 	* `support/manifest-base.yaml`        -> static fields (runner download URLs)
 
 Used in-process by `genvm-tool configure` (dev) and exposed as the
@@ -17,6 +17,7 @@ Used in-process by `genvm-tool configure` (dev) and exposed as the
 """
 
 import json
+import re
 from pathlib import Path
 
 from ruamel.yaml import YAML
@@ -27,10 +28,28 @@ from . import common
 # Manager-root-relative; holds the build-independent fields (runner URLs).
 BASE_REL = Path('support') / 'manifest-base.yaml'
 
+# The platforms a release ships (support/ci/pipelines/release.py PLATFORMS).
+PLATFORMS = frozenset({'amd64-linux', 'arm64-linux', 'arm64-macos'})
+_SHA256 = re.compile(r'[0-9a-fA-F]{64}')
+
 
 def _executor_manifest(root: Path, bare_version: str) -> dict:
 	path = root / f'executors/v{bare_version}.x' / 'manifest.json'
 	return json.loads(path.read_text())
+
+
+def _pins(bare_version: str, pins: dict) -> dict[str, str]:
+	"""`executor-sha256` checked here, where a typo is a build error, not a refused install."""
+	for platform, digest in pins.items():
+		if platform not in PLATFORMS:
+			raise common.ToolError(
+				f'executors/v{bare_version}.x/manifest.json: executor-sha256 names unknown platform {platform!r}'
+			)
+		if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
+			raise common.ToolError(
+				f'executors/v{bare_version}.x/manifest.json: executor-sha256[{platform!r}] is not a hex sha256'
+			)
+	return {platform: digest.lower() for platform, digest in sorted(pins.items())}
 
 
 def build(root: Path):
@@ -43,9 +62,17 @@ def build(root: Path):
 		em = _executor_manifest(root, version)
 		# Quote the timestamp so YAML keeps it a string rather than parsing it
 		# into a native timestamp (the manager expects an RFC 3339 string).
-		executor_versions[em['executor-version']] = {
+		entry = {
 			'available_after': DoubleQuotedScalarString(em['available-after']),
 		}
+		# {platform: sha256} of the line's own release tarballs; post-install
+		# refuses to download a line whose platform has no pinned hash.
+		if 'executor-sha256' in em:
+			entry['sha256'] = {
+				k: DoubleQuotedScalarString(v)
+				for k, v in _pins(version, em['executor-sha256']).items()
+			}
+		executor_versions[em['executor-version']] = entry
 
 	doc = YAML(typ='rt').load((root / BASE_REL).read_text())
 	doc.insert(0, 'executor_versions', executor_versions)

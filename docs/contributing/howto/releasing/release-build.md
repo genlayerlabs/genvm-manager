@@ -36,7 +36,26 @@ An asset is the prepacked tree itself, already named — nothing renames it:
 All of them go onto a single **genvm-manager** release, tagged with `version`
 from `.genvm-monorepo-root` ([versioning.md](versioning.md)). They overlay onto
 one install root, so a full install is one platform asset plus
-`genvm-universal`
+`genvm-universal`. The platform asset already carries every active executor
+line; post-install's executor download is only a fallback for a root missing
+one ([versioning.md](versioning.md))
+
+## Verifying an Asset
+
+The publisher uploads `SHA256SUMS` next to the tarballs and records a keyless
+sigstore provenance attestation for each of them, bound to `release.yaml` in
+this repository at the commit the run was dispatched from (the tag is created
+after the attestation, so it is not part of the identity). Verify a download
+with either:
+
+```bash
+sha256sum -c --ignore-missing SHA256SUMS
+gh attestation verify genvm-amd64-linux.tar.xz --owner genlayerlabs
+```
+
+The second one is the stronger check: it proves the file came out of this
+repository's release workflow, not merely that it matches a list published
+alongside it
 
 To exercise the whole pipeline on a PR without releasing anything, add the
 `test-release-pipeline` label: `queue.yaml` then runs the same

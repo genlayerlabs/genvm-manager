@@ -35,7 +35,7 @@ jobs:
     steps:
       # issue_comment workflows run from the default branch. Keep that trusted
       # checkout: this handler dispatches PR code with credentials in scope
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Dispatch full tests
@@ -61,7 +61,7 @@ jobs:
     steps:
       # workflow_run also resolves this workflow from the default branch. Never
       # check out or execute the completed run's potentially PR-authored tree
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           persist-credentials: false
       - name: Report full-test result

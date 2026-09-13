@@ -186,7 +186,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: refs/pull/${{ github.event.pull_request.number || inputs.pr }}/head
           # Read-only gh API calls; nothing here pushes, so the checkout
@@ -226,7 +226,9 @@ jobs:
               exit 1
               ;;
           esac
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - name: Plan test matrix
         id: plan
         env:

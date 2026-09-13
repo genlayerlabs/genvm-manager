@@ -52,7 +52,7 @@ jobs:
       # Check out the PR head so the handler runs the PR's own CI scripts.
       # This runs PR-authored code — the `ci-safe` gate on the job above is
       # what makes that safe.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
           # The handler talks to GitHub through `gh` (GH_TOKEN below) and never

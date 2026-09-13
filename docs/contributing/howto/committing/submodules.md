@@ -6,7 +6,7 @@
    `runners/`, `support/`, `install/`
 2. **Executor lines** — `executors/v0.2.x`, `executors/v0.3.x`: checkouts of
    the **same** repo, `genlayerlabs/genvm-executor`, on different branches.
-   Each line's `manifest.json` owns its `executor-version`
+   Each line's `manifest.json` owns its `executor-version` (and `executor-sha256`, see [versioning.md](../releasing/versioning.md))
 3. **`libs/unhardcoded-engine`** — the LLM policy engine used by
    `implementation/`; the build fails loudly when it is missing
 
