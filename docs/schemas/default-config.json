@@ -351,19 +351,17 @@
     "genvm-fees-bucket-conf": {
       "type": "object",
       "properties": {
-        "bucket_no": {
+        "buckets": {
           "oneOf": [
             {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 255
+              "type": "string",
+              "minLength": 1
             },
             {
               "type": "array",
               "items": {
-                "type": "integer",
-                "minimum": 0,
-                "maximum": 255
+                "type": "string",
+                "minLength": 1
               },
               "minItems": 1
             }
@@ -379,7 +377,7 @@
           "description": "cost charged per change, evaluated with the `units` variable; see `expr_prelude`"
         }
       },
-      "required": ["bucket_no", "delta_expr"],
+      "required": ["buckets", "delta_expr"],
       "additionalProperties": false
     },
     "genvm-fees-conf": {
