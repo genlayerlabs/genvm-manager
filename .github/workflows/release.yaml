@@ -43,7 +43,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Ensure tag is free
         env:
           VERSION_OVERRIDE: ${{ inputs.version_override }}
@@ -71,37 +71,39 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: write  # Needed for creating releases
+      id-token: write  # Sigstore identity for the provenance attestation
+      attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # Full history + tags: the release-notes step diffs against the
           # previous tag via `git describe`.
           fetch-depth: 0
 
       - name: Download release notes
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build-and-test.outputs.artifact_notes }}
           path: artifacts/notes
       # Each artifact holds exactly one tarball, already named as the asset it
       # is published as, so they all land in one dir and need no renaming.
       - name: Download universal artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build-and-test.outputs.artifact_universal }}
           path: release-assets
       - name: Download amd64-linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build-and-test.outputs.artifact_amd64_linux }}
           path: release-assets
       - name: Download arm64-linux artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build-and-test.outputs.artifact_arm64_linux }}
           path: release-assets
       - name: Download arm64-macos artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: ${{ needs.build-and-test.outputs.artifact_arm64_macos }}
           path: release-assets
@@ -117,6 +119,21 @@ jobs:
             }
           done
 
+      # Plain checksums for a verifier without `gh`; the attestation below is
+      # what binds them to this workflow on this tag.
+      - name: Write checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum *.tar.xz | tee SHA256SUMS
+
+      # Keyless sigstore provenance, verifiable with
+      # `gh attestation verify <asset> --owner genlayerlabs`.
+      - name: Attest provenance
+        uses: actions/attest-build-provenance@96278af6caaf10aea03fd8d33a09a777ca52d62f # v3.2.0
+        with:
+          subject-path: release-assets/*
+
       - name: Tag the release
         env:
           TAG: ${{ needs.build-and-test.outputs.tag }}
@@ -126,9 +143,11 @@ jobs:
           git push origin "$TAG"
 
       - name: Create Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
-          files: release-assets/*.tar.xz
+          files: |
+            release-assets/*.tar.xz
+            release-assets/SHA256SUMS
           name: Release ${{ needs.build-and-test.outputs.tag }}
           tag_name: ${{ needs.build-and-test.outputs.tag }}
           body_path: artifacts/notes/${{ needs.build-and-test.outputs.notes_file }}

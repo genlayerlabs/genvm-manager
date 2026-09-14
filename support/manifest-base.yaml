@@ -4,8 +4,9 @@
 # build-independent and lives under version control.
 runners_download_urls:
   - "https://storage.googleapis.com/gh-af/genvm_runners/{name}/{hash}.{ext}"
-# Each executor line is released on its own, in its own repo, tagged with its
-# executor-version — the manager bundle does not carry them. `{version}` is that
-# tag and `{platform}` is the nix-style token (amd64-linux, arm64-macos, ...).
+# Fallback source for a line missing from the install root (a platform release
+# asset already bundles every active line). `{version}` is the line's
+# executor-version and `{platform}` the nix-style token (amd64-linux,
+# arm64-macos, ...). Accepted only against the line's pinned `executor-sha256`.
 executor_download_urls:
   - "https://github.com/genlayerlabs/genvm-executor/releases/download/{version}/genvm-{platform}-executor.tar.xz"

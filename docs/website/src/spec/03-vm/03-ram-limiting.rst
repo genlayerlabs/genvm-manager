@@ -7,7 +7,12 @@ The deterministic budget starts at 4294967295 octets (4 GiB).
 Every :ref:`gvm-def-gl-call-run-nondet` gets its own non-deterministic budget,
 starting at what its caller had remaining at the moment of the call, so a
 nondet block never gets more RAM than its caller had left.
-All :term:`sub-VM` instances within one budget share it.
+A :term:`sub-VM` does not share its caller's budget. It starts from a copy of
+what the caller had remaining and spends from that copy, so what a
+:term:`sub-VM` spends never reduces what its caller may still spend, and a
+caller that spawns many children in sequence is not drained by them. Only the
+charges for data the caller keeps after a child returns move to the caller; see
+`RAM Release`_.
 
 .. _gvm-def-ram-consumption:
 
@@ -104,7 +109,8 @@ RAM Release
 -----------
 
 File content memory is released when the corresponding file descriptor is closed via ``fd_close``.
-When a :term:`sub-VM` finishes execution, all remaining RAM consumed by it is released back to the shared budget.
+When a :term:`sub-VM` finishes execution, its copy of the budget is discarded,
+so every charge it still held is released at once.
 This applies to runner charges as well: memory consumed by loading or
 registering a runner is released when the registering :term:`sub-VM` finishes,
 like any other charge.
