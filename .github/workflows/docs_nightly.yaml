@@ -71,6 +71,10 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           repository: ${{ env.SITE_REPO }}
+          # The site repo is private, and `ref` is what keeps checkout from
+          # asking the REST API for the default branch with this repo's token,
+          # which cannot see it. The deploy key covers the clone itself.
+          ref: main
           path: build/site
           ssh-key: ${{ secrets.DOCS_DEPLOY_KEY }}
 
