@@ -29,6 +29,7 @@ fn main() -> Result<()> {
     }
     .inspect_err(|e| {
         log_error!(
+            @operator,
             error:ah = e;
             "error in main"
         );

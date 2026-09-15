@@ -20,11 +20,18 @@ shows up as ninja's `missing and no known rule to make it`
 | `all/data` | runner data via nix |
 | `all/runners` | the runners themselves via nix, x86_64 Linux only |
 | `codegen` | generated sources ([genvm-tool.md](../genvm-tool.md)) |
+| `cargo/clippy` | clippy over every registered crate, warnings fatal |
+| `cargo/clippy/fix` | the same lints, applying every machine-applicable fix |
+| `cargo/fmt` | `cargo fmt` over every crate |
 
 Outputs land in `build/out`: `bin/genvm-modules`, `bin/genvm-manager`,
 `bin/genvm-post-install`, and `executor/<version>/bin/genvm` per built line,
 where the version comes from `executors/<line>.x/manifest.json` and is recorded
 in `build/info.json`
+
+The full CI matrix has a `clippy` cell running `cargo/clippy`; when it fails it
+reruns `cargo/clippy/fix` and prints the resulting patch in the job log and
+summary, so run the target locally before pushing
 
 Release packages: [release-build.md](../releasing/release-build.md). Runners:
 [runners.md](runners.md)

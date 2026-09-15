@@ -90,7 +90,7 @@ impl TokenUsage {
 /// clamping and logging avoids the silent wrap that could otherwise under-bill.
 fn narrow_token_count(v: u64) -> u32 {
     u32::try_from(v).unwrap_or_else(|_| {
-        log_error!(value = v; "provider reported token count exceeding u32; saturating to u32::MAX");
+        log_error!(@operator, value = v; "provider reported token count exceeding u32; saturating to u32::MAX");
         u32::MAX
     })
 }
@@ -147,7 +147,7 @@ pub trait Provider {
         // Unparseable output still cost the operator; charge the usage with an
         // empty object rather than dropping the tokens by erroring.
         let parsed = serde_json::from_str(&json_str).unwrap_or_else(|e| {
-            log_warn!(json = json_str, error = e.to_string(); "unparseable json response, charging usage with empty object");
+            log_warn!(@operator, json = json_str, error = e.to_string(); "unparseable json response, charging usage with empty object");
             serde_json::Map::new()
         });
 
@@ -166,7 +166,7 @@ pub trait Provider {
         if let Some(val) = result_val {
             Ok(ProviderResponse::new(val, res.tokens))
         } else {
-            log_error!(result:? = res.result; "no result in reason, returning false");
+            log_error!(@operator, result:? = res.result; "no result in reason, returning false");
 
             Ok(ProviderResponse::new(false, res.tokens))
         }
@@ -344,7 +344,7 @@ impl Provider for OpenAICompatible {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", &format!("Bearer {}", &self.config.key))
+            .header("Authorization", &format!("Bearer {}", self.config.key))
             .body(request.clone());
         let res = scripting::send_request_get_lua_compatible_response_json(
             &ctx.metrics,
@@ -373,7 +373,7 @@ impl Provider for OpenAICompatible {
         }
 
         let response = response.unwrap_or_else(|| {
-            log_warn!(body:serde = res.body; "openai: missing content, charging usage with empty response");
+            log_warn!(@operator, body:serde = res.body; "openai: missing content, charging usage with empty response");
             ""
         });
 
@@ -427,7 +427,7 @@ impl Provider for OpenAICompatible {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", &format!("Bearer {}", &self.config.key))
+            .header("Authorization", &format!("Bearer {}", self.config.key))
             .body(request.clone());
         let res = scripting::send_request_get_lua_compatible_response_json(
             &ctx.metrics,
@@ -445,7 +445,7 @@ impl Provider for OpenAICompatible {
             .pointer("/choices/0/message/content")
             .and_then(|v| if v.is_null() { Some("") } else { v.as_str() })
             .unwrap_or_else(|| {
-                log_warn!(body:serde = res.body; "openai: missing json content, charging usage with empty response");
+                log_warn!(@operator, body:serde = res.body; "openai: missing json content, charging usage with empty response");
                 ""
             });
 
@@ -556,7 +556,7 @@ impl Provider for OLlama {
             .and_then(|v| v.get("response"))
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| {
-                log_warn!(body:serde = res.body; "ollama: missing response, charging usage with empty response");
+                log_warn!(@operator, body:serde = res.body; "ollama: missing response, charging usage with empty response");
                 ""
             });
         Ok(ProviderResponse::new(response.to_owned(), tokens))
@@ -618,7 +618,7 @@ impl Provider for OLlama {
             .and_then(|v| v.get("response"))
             .and_then(|v| v.as_str())
             .unwrap_or_else(|| {
-                log_warn!(body:serde = res.body; "ollama: missing json response, charging usage with empty response");
+                log_warn!(@operator, body:serde = res.body; "ollama: missing json response, charging usage with empty response");
                 ""
             });
         Ok(ProviderResponse::new(sanitize_json_str(response), tokens))
@@ -714,7 +714,7 @@ impl Provider for Gemini {
         }
 
         let res = res.unwrap_or_else(|| {
-            log_warn!(body:serde = res_json.body; "gemini: missing text, charging usage with empty response");
+            log_warn!(@operator, body:serde = res_json.body; "gemini: missing text, charging usage with empty response");
             ""
         });
         Ok(ProviderResponse::new(res.into(), tokens))
@@ -778,7 +778,7 @@ impl Provider for Gemini {
         }
 
         let res = res.unwrap_or_else(|| {
-            log_warn!(body:serde = res_json.body; "gemini: missing json text, charging usage with empty response");
+            log_warn!(@operator, body:serde = res_json.body; "gemini: missing json text, charging usage with empty response");
             ""
         });
 
@@ -891,7 +891,7 @@ impl Provider for Anthropic {
             .pointer("/content/0/text")
             .and_then(|x| x.as_str())
             .unwrap_or_else(|| {
-                log_warn!(body:serde = res.body; "anthropic: missing text, charging usage with empty response");
+                log_warn!(@operator, body:serde = res.body; "anthropic: missing text, charging usage with empty response");
                 ""
             });
 
@@ -968,7 +968,7 @@ impl Provider for Anthropic {
             .and_then(|x| x.as_object())
             .cloned()
             .unwrap_or_else(|| {
-                log_warn!(body:serde = res.body; "anthropic: missing json input, charging usage with empty object");
+                log_warn!(@operator, body:serde = res.body; "anthropic: missing json input, charging usage with empty object");
                 serde_json::Map::new()
             });
 
@@ -1041,7 +1041,7 @@ impl Provider for Anthropic {
             .pointer("/content/0/input/result")
             .and_then(|x| x.as_bool())
             .unwrap_or_else(|| {
-                log_error!(body:serde = res.body; "no result in reason, returning false");
+                log_error!(@operator, body:serde = res.body; "no result in reason, returning false");
                 false
             });
 

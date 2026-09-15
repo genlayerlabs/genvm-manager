@@ -482,7 +482,7 @@ where
     }
 
     async fn handle_run(&mut self, request_id: u64, payload: &[u8]) -> Result<()> {
-        let RunPayload::Run(mut req) = match decode_payload::<RunPayload>(payload) {
+        let RunPayload::Run(req) = match decode_payload::<RunPayload>(payload) {
             Ok(req) => req,
             Err(e) => {
                 self.writer
@@ -806,7 +806,7 @@ pub async fn handle_connection(socket: WebSocket, ctx: sync::DArc<AppContext>) {
         Ok(Ok(())) => {}
         Ok(Err(e)) => log_debug!(error:ah = e; "manager websocket writer stopped"),
         Err(e) if e.is_cancelled() => {}
-        Err(e) => log_warn!(error:err = e; "manager websocket writer task failed"),
+        Err(e) => log_warn!(@operator, error:err = e; "manager websocket writer task failed"),
     }
 }
 
