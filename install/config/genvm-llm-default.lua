@@ -334,7 +334,7 @@ local function dispatch_prompt(ctx, mapped_prompt, remaining_gen)
 
 	lib.log {
 		level = "error",
-		audience = "user",
+		audience = "operator",
 		message = "no provider could handle prompt",
 		error = step.result.error,
 		trace = step.result.trace,
