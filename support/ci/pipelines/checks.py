@@ -275,25 +275,84 @@ class PrTitle(ci_lib.Pipeline):
 		return 0
 
 
+SUMMARY_DIFF_LIMIT = 512 * 1024
+
+
+def _worktree_diff() -> str:
+	# `--submodule=diff`: executor crates live in submodules, whose changes would
+	# otherwise collapse into an unusable "dirty gitlink" line.
+	return ci_lib.output(['git', 'diff', '--submodule=diff'])
+
+
+def _summary_patch(diff: str) -> str:
+	# GitHub caps a job summary at 1 MiB and drops the whole file past it; cut on
+	# a line boundary so what is shown stays an appliable patch, and the log above
+	# always carries the full one.
+	if len(diff) <= SUMMARY_DIFF_LIMIT:
+		return f'```diff\n{diff}```\n'
+	shown = diff[:SUMMARY_DIFF_LIMIT].rsplit('\n', 1)[0]
+	return f'```diff\n{shown}\n```\n\nPatch truncated, see the job log.\n'
+
+
 class CargoClippy(ci_lib.Pipeline):
 	"""
-	Check cargo clippy availability and enumerate crates.
+	Lint every registered crate, reporting a failure as an appliable patch.
+
+	Clippy names the lint but not the edit. On failure the `--fix` edges rerun
+	over the same tree and the resulting diff is printed and put in the job
+	summary, so the author can apply it verbatim; lints `--fix` cannot rewrite
+	stay visible in the diagnostics above it.
+
+	Must run in a dev shell carrying the pinned toolchain — clippy is a component
+	of it, and the linted crates must be the ones the rest of CI builds.
 	"""
 
 	def name(self) -> str:
 		return 'cargo-clippy'
 
 	def handler(self, args: argparse.Namespace) -> int:
-		if ci_lib.run(['cargo', 'clippy', '--version'], check=False).returncode != 0:
-			print('ERROR: cargo clippy not installed')
-			return 1
-		for path in ci_lib.output(['git', 'ls-files']).splitlines():
-			if not path.endswith('Cargo.toml'):
-				continue
-			if path == 'runners/nix/trg/py/modules/genvm-cpython-ext/Cargo.toml':
-				continue
-			print(f'clippy in {path}')
-		return 0
+		# Lint edges declare no inputs, so nothing regenerates sources for them; a
+		# drifted generated file would be linted as if it were current.
+		with ci_lib.github_group('codegen'):
+			ci_lib.run(['ninja', '-C', 'build', 'codegen'])
+
+		# Anything dirty here is not clippy's doing and must not be presented as
+		# its patch below.
+		pre_existing = ci_lib.output(['git', 'diff', '--name-only']).split()
+
+		# `-k 0`: report every crate's diagnostics in one run, not just the first
+		# failing one.
+		with ci_lib.github_group('clippy'):
+			ok = (
+				ci_lib.run(
+					['ninja', '-k', '0', '-C', 'build', 'cargo/clippy'], check=False
+				).returncode
+				== 0
+			)
+		if ok:
+			return 0
+
+		with ci_lib.github_group('suggested patch'):
+			if pre_existing:
+				print(
+					'the worktree was already dirty before the fix run, so the patch below '
+					f'also carries unrelated changes to: {" ".join(pre_existing)}'
+				)
+			ci_lib.run(['ninja', '-k', '0', '-C', 'build', 'cargo/clippy/fix'], check=False)
+			diff = _worktree_diff()
+			if diff.strip():
+				print(diff)
+				ci_lib.github_step_summary(
+					'### `cargo clippy` failed\n\n'
+					'Machine-applicable part of the fix:\n\n' + _summary_patch(diff)
+				)
+			else:
+				print('`cargo clippy --fix` rewrote nothing; fix the diagnostics by hand')
+
+		ci_lib.github_error(
+			'cargo clippy failed; see the diagnostics and the suggested patch above'
+		)
+		return 1
 
 
 COMMANDS = [CommitHooks(), CommitMessages(), BehindCheck(), PrTitle(), CargoClippy()]

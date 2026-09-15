@@ -344,7 +344,7 @@ impl Provider for OpenAICompatible {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", &format!("Bearer {}", &self.config.key))
+            .header("Authorization", &format!("Bearer {}", self.config.key))
             .body(request.clone());
         let res = scripting::send_request_get_lua_compatible_response_json(
             &ctx.metrics,
@@ -427,7 +427,7 @@ impl Provider for OpenAICompatible {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", &format!("Bearer {}", &self.config.key))
+            .header("Authorization", &format!("Bearer {}", self.config.key))
             .body(request.clone());
         let res = scripting::send_request_get_lua_compatible_response_json(
             &ctx.metrics,

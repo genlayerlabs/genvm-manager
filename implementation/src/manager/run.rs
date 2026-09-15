@@ -1277,6 +1277,16 @@ impl ManagerHostStreamState {
     }
 }
 
+struct ManagerHostStream {
+    full_ctx: sync::DArc<crate::manager::AppContext>,
+    exec_ctx: sync::DArc<SingleGenVMContext>,
+    parent_req: Arc<Request>,
+    consumed_result: sync::DArc<tokio::sync::OnceCell<Vec<u8>>>,
+    genvm_id: GenVMId,
+    is_top_level: bool,
+    state: Arc<ManagerHostStreamState>,
+}
+
 struct NestedRunRegistration(sync::DArc<SingleGenVMContext>);
 
 impl NestedRunRegistration {
@@ -1530,16 +1540,20 @@ fn nested_effect(reported: &genvm_modules_interfaces::ReportedResult) -> Option<
 
 fn read_manager_host_stream(
     parent_fd: FdWrapper,
-    full_ctx: sync::DArc<crate::manager::AppContext>,
-    exec_ctx: sync::DArc<SingleGenVMContext>,
-    parent_req: Arc<Request>,
-    consumed_result: sync::DArc<tokio::sync::OnceCell<Vec<u8>>>,
-    genvm_id: GenVMId,
-    is_top_level: bool,
-    stream_state: Arc<ManagerHostStreamState>,
+    stream: ManagerHostStream,
 ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
     Box::pin(async move {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let ManagerHostStream {
+            full_ctx,
+            exec_ctx,
+            parent_req,
+            consumed_result,
+            genvm_id,
+            is_top_level,
+            state: stream_state,
+        } = stream;
 
         let file = match parent_fd.into_async_fd() {
             Ok(f) => f,
@@ -2477,13 +2491,15 @@ async fn run_genvm_process(
     let _manager_stream_guard = sync::DropGuard::new(move || manager_stream_state_on_drop.close());
     tokio::spawn(read_manager_host_stream(
         manager_parent,
-        full_ctx.clone(),
-        exec_ctx.clone(),
-        Arc::new(req.clone()),
-        consumed_result,
-        genvm_id,
-        is_top_level,
-        manager_stream_state.clone(),
+        ManagerHostStream {
+            full_ctx: full_ctx.clone(),
+            exec_ctx: exec_ctx.clone(),
+            parent_req: Arc::new(req.clone()),
+            consumed_result,
+            genvm_id,
+            is_top_level,
+            state: manager_stream_state.clone(),
+        },
     ));
 
     if let Some(mut stdin_task) = stdin_task {
