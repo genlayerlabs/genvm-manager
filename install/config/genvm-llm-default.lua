@@ -180,8 +180,8 @@ _G.host = {
 	now_ms = function()
 		return lib.rs.monotonic_ms()
 	end,
-	log = function(level, event, fields)
-		lib.log { level = level, message = event, fields = fields }
+	log = function(level, event, fields, audience)
+		lib.log { level = level, message = event, fields = fields, audience = audience }
 	end,
 }
 

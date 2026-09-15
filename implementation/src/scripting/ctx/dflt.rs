@@ -77,9 +77,12 @@ pub fn create_global(
         let level = as_serde.remove("level");
         let level = level.and_then(|x| x.as_str().map(|x| x.to_owned())).map(|x| logger::Level::from_str(&x).unwrap_or(logger::Level::Info)).unwrap_or(logger::Level::Info);
 
+        let audience = as_serde.remove("audience");
+        let audience = audience.and_then(|x| x.as_str().and_then(|x| logger::Audience::from_str(x).ok())).unwrap_or_default();
+
         let script_message = as_serde.remove("message").and_then(|x| x.as_str().map(|x| x.to_owned())).unwrap_or_else(|| "<none>".to_owned());
 
-        log_with_level_into!(level, &LoggerWithId, log:serde = as_serde, genvm_id:id = crate::common::get_genvm_id().0; "script_log: {script_message}");
+        log_with_level_into!(level, @(audience), &LoggerWithId, log:serde = as_serde, genvm_id:id = crate::common::get_genvm_id().0; "script_log: {script_message}");
         Ok(())
     })?)?;
 

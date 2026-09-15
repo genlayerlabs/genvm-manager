@@ -1085,6 +1085,7 @@ trait LogAppender {
     async fn append_structured(
         &mut self,
         level: logger::Level,
+        audience: logger::Audience,
         data: serde_json::Map<String, serde_json::Value>,
     );
     async fn append_text(&mut self, serde_err: serde_json::Error, text: &str);
@@ -1116,9 +1117,10 @@ impl LogAppender for LogAppenderToLog {
     async fn append_structured(
         &mut self,
         level: logger::Level,
+        audience: logger::Audience,
         data: serde_json::Map<String, serde_json::Value>,
     ) {
-        log_with_level_into!(level, &LoggerWithId, log:serde = data, genvm_id:id = self.0.0; "genvm log");
+        log_with_level_into!(level, @(audience), &LoggerWithId, log:serde = data, genvm_id:id = self.0.0; "genvm log");
     }
     #[inline(always)]
     async fn append_text(&mut self, serde_err: serde_json::Error, text: &str) {
@@ -1133,11 +1135,13 @@ impl LogAppender for LogAppenderToValue {
     async fn append_structured(
         &mut self,
         level: logger::Level,
+        audience: logger::Audience,
         mut data: serde_json::Map<String, serde_json::Value>,
     ) {
         log_trace!(log:serde = data; "genvm log");
 
         data.insert("level".to_owned(), level.to_string().into());
+        data.insert("audience".to_owned(), audience.to_string().into());
 
         self.0.push(LogSinkElement::Map(data));
     }
@@ -1145,6 +1149,13 @@ impl LogAppender for LogAppenderToValue {
     #[inline(always)]
     async fn append_text(&mut self, _serde_err: serde_json::Error, text: &str) {
         self.0.push(LogSinkElement::Line(text.to_owned()));
+    }
+}
+
+fn take_string(map: &mut serde_json::Map<String, serde_json::Value>, key: &str) -> Option<String> {
+    match map.remove(key)? {
+        serde_json::Value::String(s) => Some(s),
+        _ => None,
     }
 }
 
@@ -1165,20 +1176,15 @@ async fn read_log_pipe<LA: LogAppender>(
         }
         match serde_json::from_str(line) {
             Ok::<serde_json::Map<String, serde_json::Value>, _>(mut log_record) => {
-                let level = log_record
-                    .remove("level")
-                    .map(|x| {
-                        if let serde_json::Value::String(s) = x {
-                            Some(s)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(None)
+                let level = take_string(&mut log_record, "level")
                     .and_then(|x| logger::Level::from_str(&x).ok())
                     .unwrap_or(logger::Level::Info);
 
-                sink.append_structured(level, log_record).await;
+                let audience = take_string(&mut log_record, "audience")
+                    .and_then(|x| logger::Audience::from_str(&x).ok())
+                    .unwrap_or_default();
+
+                sink.append_structured(level, audience, log_record).await;
             }
             Err(e) => {
                 sink.append_text(e, line).await;
@@ -1714,14 +1720,6 @@ async fn wait_for_output(exec: &SingleGenVMContext) {
     log_debug!(id = exec.id; "stdout/stderr sem acquired");
 }
 
-fn drain_log_sink(log_sink: &LogSink) -> Vec<serde_json::Map<String, serde_json::Value>> {
-    let mut as_vec = Vec::new();
-    while let Some(data) = log_sink.pop() {
-        as_vec.push(data.into_json());
-    }
-    as_vec
-}
-
 async fn finish_execution(
     exec: &SingleGenVMContext,
     status: Option<std::process::ExitStatus>,
@@ -1750,7 +1748,7 @@ async fn finish_execution(
 
     let stdout = exec.stdout.get().map(|x| x.as_str()).unwrap_or("");
     let stderr = exec.stderr.get().map(|x| x.as_str()).unwrap_or("");
-    let genvm_log = drain_log_sink(&exec.log_sink);
+    let genvm_log = exec.log_sink.drain();
     let cause = exec.finish_cause().unwrap_or(default_cause);
     let exit_code = status.and_then(|status| status.code()).map(i64::from);
 
