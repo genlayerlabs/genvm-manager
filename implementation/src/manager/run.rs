@@ -236,7 +236,7 @@ async fn spawn_module_relay(
             handler(Box::new(stream), Some(exec_ctx)).await;
         }
         Err(e) => {
-            log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, module = module_name, error:err = e; "failed to create async stream");
+            log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, module = module_name, error:err = e; "failed to create async stream");
         }
     }
 
@@ -386,7 +386,7 @@ impl SingleGenVMContext {
                     out.push(b'\n');
                 }
                 Err(e) => {
-                    log_error!(error:err = e; "failed to serialize genvm log artifact line");
+                    log_error!(@operator, error:err = e; "failed to serialize genvm log artifact line");
                 }
             }
         }
@@ -540,7 +540,7 @@ impl Ctx {
 
         let min = self.min_permits();
         if permits < min {
-            log_warn!(permits = permits, min = min; "cannot set permits below the most expensive run");
+            log_warn!(@operator, permits = permits, min = min; "cannot set permits below the most expensive run");
             return permits_lock.max;
         }
 
@@ -708,7 +708,7 @@ impl Ctx {
 
     #[cfg(target_os = "macos")]
     fn detect_free_gigabytes() -> usize {
-        log_warn!("automatic permits detection is not supported on macOS, using default value");
+        log_warn!(@operator; "automatic permits detection is not supported on macOS, using default value");
 
         32
     }
@@ -751,6 +751,7 @@ impl Ctx {
         };
         let permits = if permits < min_permits {
             log_warn!(
+                @operator,
                 permits = permits, min = min_permits;
                 "permits are below the most expensive run, raising"
             );
@@ -821,7 +822,7 @@ async fn gc_step(ctx: &sync::DArc<Ctx>) {
         };
 
         if val.strict_deadline < now && val.terminal_event.get().is_none() {
-            log_warn_into!(&LoggerWithId, genvm_id:id = key.0; "genvm execution exceeded strict deadline, terminating");
+            log_warn_into!(@operator, &LoggerWithId, genvm_id:id = key.0; "genvm execution exceeded strict deadline, terminating");
             let _ = ctx.request_finish(key, FinishCause::Deadline).await;
         }
     }
@@ -840,7 +841,7 @@ async fn gc_step(ctx: &sync::DArc<Ctx>) {
         };
         let passed = now.signed_duration_since(terminal_at);
         if passed > retention {
-            log_warn_into!(&LoggerWithId, genvm_id:id = k.0; "removing zombie genvm execution context");
+            log_warn_into!(@operator, &LoggerWithId, genvm_id:id = k.0; "removing zombie genvm execution context");
             if let Some(host_genvm_id) = &v.host_genvm_id {
                 expired_host_ids.push((host_genvm_id.clone(), *k));
             }
@@ -1253,7 +1254,7 @@ async fn pipe_read<P: tokio::io::AsyncReadExt + Unpin>(
     }
 
     if let Err(e) = to.set(result) {
-        log_error!(error:err = e; "failed to set stdout/stderr content");
+        log_error!(@operator, error:err = e; "failed to set stdout/stderr content");
     }
 
     std::mem::drop(permit);
@@ -1446,7 +1447,7 @@ fn guard_top_level_consumed_result(data: Vec<u8>, genvm_id: GenVMId) -> anyhow::
         genvm_modules_interfaces::ResultCode::FatalVmError,
         "top-level executor returned a fatal VM error after its publication boundary"
     );
-    log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "top-level executor returned a fatal VM error; downgrading it to vm_error");
+    log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0; "top-level executor returned a fatal VM error; downgrading it to vm_error");
     Ok(downgrade_fatal_reported_result(reported))
 }
 
@@ -1564,7 +1565,7 @@ fn read_manager_host_stream(
         let file = match parent_fd.into_async_fd() {
             Ok(f) => f,
             Err(e) => {
-                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to create async fd for manager host stream");
+                log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to create async fd for manager host stream");
                 stream_state.close();
                 return;
             }
@@ -1583,7 +1584,7 @@ fn read_manager_host_stream(
                     return;
                 }
                 Err(e) => {
-                    log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read method from manager host stream");
+                    log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read method from manager host stream");
                     return;
                 }
             }
@@ -1593,7 +1594,7 @@ fn read_manager_host_stream(
                     let data = match read_length_prefixed(&mut reader, u32::MAX as usize).await {
                         Ok(data) => data,
                         Err(e) => {
-                            log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to read consumed result");
+                            log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to read consumed result");
                             return;
                         }
                     };
@@ -1601,7 +1602,7 @@ fn read_manager_host_stream(
                         match guard_top_level_consumed_result(data, genvm_id) {
                             Ok(data) => data,
                             Err(e) => {
-                                log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "refusing invalid top-level consume_result");
+                                log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "refusing invalid top-level consume_result");
                                 return;
                             }
                         }
@@ -1613,11 +1614,11 @@ fn read_manager_host_stream(
 
                     let mut writer = writer.lock().await;
                     if let Err(e) = writer.write_all(&[0]).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to send ACK for consume_result");
+                        log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to send ACK for consume_result");
                         return;
                     }
                     if let Err(e) = writer.flush().await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to flush ACK for consume_result");
+                        log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to flush ACK for consume_result");
                         return;
                     }
                 }
@@ -1628,7 +1629,7 @@ fn read_manager_host_stream(
                     let data = match read_length_prefixed(&mut reader, u32::MAX as usize).await {
                         Ok(data) => data,
                         Err(e) => {
-                            log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to read run_nested request");
+                            log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to read run_nested request");
                             return;
                         }
                     };
@@ -1655,20 +1656,20 @@ fn read_manager_host_stream(
                             {
                                 Ok(reply) => reply,
                                 Err(e) => {
-                                    log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "nested run failed");
+                                    log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "nested run failed");
                                     nested_internal_error()
                                 }
                             }
                         }
                         Err(e) => {
-                            log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to decode run_nested envelope");
+                            log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to decode run_nested envelope");
                             nested_internal_error()
                         }
                     };
                     let encoded = calldata::encode_obj(&reply);
                     let mut writer = writer.lock().await;
                     if let Err(e) = write_length_prefixed(&mut *writer, &encoded).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to send run_nested reply");
+                        log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to send run_nested reply");
                     }
                 }
                 Ok(host_fns::Methods::ResolveCallContractExecutor) => {
@@ -1677,26 +1678,26 @@ fn read_manager_host_stream(
                     // node's host, and a null reply means "stay in-process".
                     let mut request = [0u8; calldata::ADDRESS_SIZE + 2];
                     if let Err(e) = reader.read_exact(&mut request).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read resolve_call_contract_executor request");
+                        log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to read resolve_call_contract_executor request");
                         return;
                     }
                     let encoded = calldata::encode_obj(&calldata::Value::Null);
                     let mut writer = writer.lock().await;
                     if let Err(e) = writer.write_all(&[host_fns::Errors::Ok as u8]).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to send resolve_call_contract_executor status");
+                        log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = e; "failed to send resolve_call_contract_executor status");
                         return;
                     }
                     if let Err(e) = write_length_prefixed(&mut *writer, &encoded).await {
-                        log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to send resolve_call_contract_executor reply");
+                        log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:ah = &e; "failed to send resolve_call_contract_executor reply");
                         return;
                     }
                 }
                 Ok(method) => {
-                    log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, method = method as u8; "unexpected method on manager host stream");
+                    log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, method = method as u8; "unexpected method on manager host stream");
                     return;
                 }
                 Err(()) => {
-                    log_error_into!(&LoggerWithId, genvm_id:id = genvm_id.0, method = method_buf[0]; "unknown method on manager host stream");
+                    log_error_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, method = method_buf[0]; "unknown method on manager host stream");
                     return;
                 }
             }
@@ -1766,7 +1767,7 @@ async fn finish_execution(
     };
     let event = exec.finished_event(&done);
     if let Err(e) = exec.result.set(done) {
-        log_warn!(error:err = e; "error setting genvm result; it can happen rarely due to concurrency");
+        log_warn!(@operator, error:err = e; "error setting genvm result; it can happen rarely due to concurrency");
         return false;
     }
     exec.publish_terminal(event)
@@ -2107,7 +2108,7 @@ impl Ctx {
             "nested CallContract message value must be zero"
         );
         if parent_req.host.trim_start().starts_with("fd://") {
-            log_error_into!(&LoggerWithId, genvm_id:id = exec_ctx.id.0, host = parent_req.host; "cannot start nested executor because host 0 is not addressable");
+            log_error_into!(@operator, &LoggerWithId, genvm_id:id = exec_ctx.id.0, host = parent_req.host; "cannot start nested executor because host 0 is not addressable");
             anyhow::bail!("host 0 uses fd:// and cannot be re-dialed by a nested executor");
         }
 
@@ -2315,6 +2316,7 @@ async fn resolve_selector(
     }
 
     log_warn!(
+        @operator,
         major = major,
         genvm_id:id = genvm_id.0;
         "no line provides the requested major, falling back to the newest one"

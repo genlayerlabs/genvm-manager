@@ -291,7 +291,7 @@ pub(crate) fn module_error_to_wire<R>(
             }
         }
         Err(err) => {
-            log_error_into!(&LoggerWithId, error:ah = &err, genvm_id:id = genvm_id.0; "handler fatal error");
+            log_error_into!(@operator, &LoggerWithId, error:ah = &err, genvm_id:id = genvm_id.0; "handler fatal error");
             genvm_modules_interfaces::Result::FatalError(format!("{err:#}"))
         }
     }
@@ -371,7 +371,7 @@ where
         .context("handling");
 
     if let Err(close) = handler.cleanup().await {
-        log_error_into!(&LoggerWithId, error:ah = &close, genvm_id:id = genvm_id.0; "cleanup error");
+        log_error_into!(@operator, &LoggerWithId, error:ah = &close, genvm_id:id = genvm_id.0; "cleanup error");
     }
 
     res
@@ -392,7 +392,7 @@ pub async fn handle_stream<T, R, S, P: MessageHandlerProvider<T, R>>(
     log_trace!("reading hello");
     let hello = match read_hello(&mut stream).await {
         Err(e) => {
-            log_error!(error:ah = &e; "read hello failed");
+            log_error!(@operator, error:ah = &e; "read hello failed");
             return;
         }
         Ok(None) => return,
@@ -407,7 +407,7 @@ pub async fn handle_stream<T, R, S, P: MessageHandlerProvider<T, R>>(
         match handler_provider.create_execution_context(hello) {
             Ok(ctx) => ctx,
             Err(e) => {
-                log_error!(error:ah = &e; "failed to create execution context");
+                log_error!(@operator, error:ah = &e; "failed to create execution context");
                 return;
             }
         }
@@ -418,7 +418,7 @@ pub async fn handle_stream<T, R, S, P: MessageHandlerProvider<T, R>>(
         .scope(genvm_id, async {
             log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "peer accepted");
             if let Err(e) = loop_one_impl(handler_provider, &mut stream, exec_ctx).await {
-                log_error_into!(&LoggerWithId, error:ah = &e, genvm_id:id = genvm_id.0; "internal loop error");
+                log_error_into!(@operator, &LoggerWithId, error:ah = &e, genvm_id:id = genvm_id.0; "internal loop error");
             }
             log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "peer done");
         })
@@ -537,7 +537,7 @@ where
     let cleanup_path = path.to_owned();
     let _dropper = sync::DropGuard::new(move || {
         if let Err(e) = std::fs::remove_file(&cleanup_path) {
-            log_error!(error:err = &e, socket_path:? = cleanup_path; "cleaning up unix socket failed");
+            log_error!(@operator, error:err = &e, socket_path:? = cleanup_path; "cleaning up unix socket failed");
         }
     });
 
@@ -854,7 +854,7 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
             _ => false,
         };
         if bad {
-            log_warn!(url = attempt.url().as_str(); "redirect to non-globally-routable IP-literal rejected");
+            log_warn!(@user, url = attempt.url().as_str(); "redirect to non-globally-routable IP-literal rejected");
             return attempt.error(NoRoutableAddress);
         }
         let downgrade = attempt
@@ -862,7 +862,7 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
             .last()
             .is_some_and(|prev| prev.scheme() == "https" && attempt.url().scheme() == "http");
         if downgrade {
-            log_warn!(url = attempt.url().as_str(); "HTTPS->HTTP downgrade redirect rejected");
+            log_warn!(@user, url = attempt.url().as_str(); "HTTPS->HTTP downgrade redirect rejected");
             return attempt.error(SchemeDowngrade);
         }
         attempt.follow()
@@ -925,7 +925,7 @@ pub fn setup_cancels(
                             continue;
                         }
 
-                        log_warn!(old = parent_pid, new_parent_pid = new_parent_pid; "parent pid changed, closing");
+                        log_warn!(@operator, old = parent_pid, new_parent_pid = new_parent_pid; "parent pid changed, closing");
                         canceller();
                    },
                    _ = token.chan.closed() => {
