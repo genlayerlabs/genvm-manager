@@ -66,7 +66,7 @@ impl<T, C, E: 'static> Pool<T, C, E> {
         let vm = match self.inner.free.pop() {
             Some(vm) => vm,
             None => {
-                log_warn!("vm pool empty, building a vm on demand");
+                log_warn!(@operator; "vm pool empty, building a vm on demand");
                 Arc::new((self.inner.factory)().await?)
             }
         };
