@@ -403,7 +403,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 							'no_modules': True,
 							'hook_cross_contract_calls': hook_cross_contract_calls,
 						},
-						bucket_totals=[2**200] * 20,
+						bucket_totals=base_host.default_bucket_totals(line),
 					)
 				if apply_changes and result.result_kind == host_fns.ResultCode.RETURN:
 					assert mock_host.storage is not None
@@ -500,7 +500,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			'code': None,
 			'calldata': _calldata('call', ADDR_BUSY_V02),
 			'leader_public_data': None,
-			'bucket_totals': [2**200] * 20,
+			'bucket_totals': base_host.default_bucket_totals(line),
 			'gas_data': base_host.DEFAULT_GAS_DATA,
 			'message_fee_allocation': [],
 			'initial_time_units_allocation': 60,

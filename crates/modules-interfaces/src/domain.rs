@@ -35,7 +35,7 @@ pub struct ExecutionData {
     #[serde(default)]
     #[calldata(default = default_host_hello_data)]
     pub host_hello_data: Vec<Bytes>,
-    pub bucket_totals: Vec<num_bigint::BigInt>,
+    pub bucket_totals: std::collections::BTreeMap<String, num_bigint::BigInt>,
     /// Host-provided `node` fee constants (moved off `host_data`).
     pub gas_data: std::collections::BTreeMap<String, String>,
     /// Message-fee allocation tree passed alongside the execution.
@@ -410,7 +410,7 @@ pub struct ReportedResult {
     pub nondet_disagreement: Option<u32>,
     pub leader_public_data: bytes::Bytes,
 
-    pub data_fees_remaining: Vec<primitive_types::U256>,
+    pub data_fees_remaining: std::collections::BTreeMap<String, primitive_types::U256>,
     pub data_fees_consumed: BucketsConsumed,
 
     pub llm_consumed_gen_wei: primitive_types::U256,

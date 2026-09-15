@@ -135,6 +135,19 @@ Requirements
 #. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
 #. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
+Allocation-funded fees
+~~~~~~~~~~~~~~~~~~~~~~
+
+For an allocation-funded internal message, ``declaredBudget`` is the metered
+primary reserve plus the budgets of the direct children in its emitted allocation
+subtree. The same amount is deducted from the matching allocation and the
+transaction's message-fee pool. Grandchild budgets are already contained within
+their direct parent's budget and are not added again. The primary reserve includes
+the consensus developer and DAO gross-up on its time-unit portion; the execution
+budget is not grossed up. This formula is identical for messages emitted on
+acceptance and finalization; the primary reserve already covers the child's
+configured lifecycle, including appeals
+
 .. _gvm-gl-call-balance-fees:
 
 Balance-funded fees
@@ -168,7 +181,8 @@ Semantics:
   transaction's ``declaredBudget`` — the contract balance is the only bound. The
   consensus term is charged at the guest's ``max_price_gen_per_time_unit`` cap
   (matching the chain's ``minMessagePrimaryFees``), not the node's live
-  ``genPerTimeUnit``, so the fee scales with the cap.
+  ``genPerTimeUnit``, so the fee scales with the cap. The consensus developer and
+  DAO gross-up applies to this time-unit portion but not the execution budget
 - The message is excluded from allocation matching, so no matching node is
   required (and none is consulted).
 - The contract must be able to cover ``value + metered_fee`` from its balance;
@@ -191,16 +205,22 @@ Semantics:
   ``validator_time_units_allocation``, each ``rotations`` entry) below
   2\ :sup:`32`. These bounds keep the metered floor within ``U256``.
 
-Metering additionally enforces node-configured floors, surfaced as ``VMError``\ s:
+Metering additionally enforces node-configured bounds, surfaced as ``VMError``\ s:
 
-- ``fee below_minimum`` — a per-phase time-unit allocation below
-  ``node.minTimeUnitsPerPhase``, or a non-zero ``execution_budget_per_round`` below
+- :ref:`gvm-def-str-trie-value-vm-error-fee-phase-timeout-out-of-bounds` —
+  unless both time-unit allocations are
+  zero, the leader allocation is outside ``node.minProposeTimeout`` through
+  ``node.maxProposeTimeout``, or the validator allocation is outside
+  ``node.minCommitTimeout`` through ``node.maxCommitTimeout``.
+- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — a non-zero
+  ``execution_budget_per_round`` below
   ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``).
-- ``fee too_many_rounds`` — ``rotations`` implies more consensus rounds than the
+- :ref:`gvm-def-str-trie-value-vm-error-fee-too-many-rounds` — ``rotations``
+  implies more consensus rounds than the
   node's validator table supports (on-chain ``MAX_ROUNDS``).
 
 ``EmitInternalDeployMessage`` Message
-------------------------------------
+-------------------------------------
 
 Deploys new intelligent contract to blockchain.
 
