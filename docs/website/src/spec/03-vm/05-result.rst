@@ -121,9 +121,10 @@ caller and MUST NOT be included in ``LeaderPublicData``
 Leader Output Format
 --------------------
 
-``LeaderPublicData`` is encoded as an RLP list containing every non-deterministic
-block result, in execution order, followed by the byte string ``padded``. Each
-result uses :ref:`gvm-def-subvm-result-encoding`
+``LeaderPublicData`` uses :ref:`gvm-def-calldata-encoding` with the shape
+``{"nd_outs": bytes[]}``. The array contains every non-deterministic block result
+in execution order; each element uses :ref:`gvm-def-subvm-result-encoding`. Empty
+bytes and all other representations are malformed
 
 Contract Result Encoding
 ------------------------
@@ -184,7 +185,8 @@ with the following keys (in this order):
 #. ``backtrace``
 #. ``data`` — the contract result value
 #. ``data_fees_consumed``
-#. ``data_fees_remaining``
+#. ``data_fees_remaining`` — map from each fee-bucket name to its remaining
+   ``U256`` balance
 #. ``emissions`` — emitted messages and events, in emission order
 #. ``kind`` — the :ref:`gvm-def-vm-result` result code
 #. ``storage_deltas``
