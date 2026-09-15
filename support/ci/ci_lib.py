@@ -104,6 +104,15 @@ def github_error(
 	print(f'::error{msg_prefix}::{message.replace(chr(10), " ")}')
 
 
+def github_step_summary(markdown: str) -> None:
+	"""Append markdown to the job summary; a no-op outside GitHub Actions."""
+	path = os.environ.get('GITHUB_STEP_SUMMARY')
+	if not path:
+		return
+	with open(path, 'a', encoding='utf-8') as f:
+		f.write(markdown.rstrip('\n') + '\n\n')
+
+
 def run(
 	command: list[str | Path],
 	*,

@@ -482,7 +482,7 @@ where
     }
 
     async fn handle_run(&mut self, request_id: u64, payload: &[u8]) -> Result<()> {
-        let RunPayload::Run(mut req) = match decode_payload::<RunPayload>(payload) {
+        let RunPayload::Run(req) = match decode_payload::<RunPayload>(payload) {
             Ok(req) => req,
             Err(e) => {
                 self.writer

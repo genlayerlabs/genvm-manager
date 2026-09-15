@@ -63,7 +63,7 @@ pub async fn create_vm(config: &sync::DArc<config::Config>) -> anyhow::Result<Us
             scripting::load_script(&vm, &config.mod_base.lua_script_path)
                 .await
                 .with_context(|| {
-                    format!("loading script from {}", &config.mod_base.lua_script_path)
+                    format!("loading script from {}", config.mod_base.lua_script_path)
                 })?;
 
             // get functions populated by script
