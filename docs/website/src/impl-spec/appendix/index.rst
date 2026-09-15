@@ -7,3 +7,4 @@ Appendix
    host-loop
    manager-api
    manager-socket
+   log-record

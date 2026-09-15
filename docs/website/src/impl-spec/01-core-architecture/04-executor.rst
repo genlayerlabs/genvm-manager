@@ -41,9 +41,10 @@ Output **capture** is a derived property with three states:
 - ``disabled`` — nothing is captured into the result: the executor's
   stdout/stderr go to ``/dev/null`` and its logs are *forwarded to the manager's
   own log* (so they are not lost, just not returned in the response).
-- ``bounded`` — captured into the result, but bounded: at most the 128 most
-  recent log entries are kept (oldest dropped), and stdout/stderr are truncated
-  to a 4 MiB tail each.
+- ``bounded`` — captured into the result, but bounded: at most 128 log entries
+  are kept, evicted by audience first and by age second (see
+  :doc:`../appendix/log-record`), and stdout/stderr are truncated to a 4 MiB
+  tail each.
 - ``unbounded`` — captured into the result in full.
 
 When capture is ``disabled`` the result's log/stdout/stderr fields are empty
