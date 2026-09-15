@@ -59,6 +59,7 @@ impl common::MessageHandler<web_iface::Message, RenderAnswer> for Handler {
                 let mut wait_after_loaded = payload.wait_after_loaded.as_secs_f64();
                 if wait_after_loaded > max_wait {
                     log_warn!(
+                        @user,
                         requested = wait_after_loaded,
                         max = max_wait;
                         "wait_after_loaded clamped to maximum"
