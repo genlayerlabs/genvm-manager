@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
+use genlayer_calldata as calldata;
 use genvm_common::*;
 
 use crate::{common, scripting};
@@ -147,3 +148,6 @@ pub fn entrypoint(args: CliArgs) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

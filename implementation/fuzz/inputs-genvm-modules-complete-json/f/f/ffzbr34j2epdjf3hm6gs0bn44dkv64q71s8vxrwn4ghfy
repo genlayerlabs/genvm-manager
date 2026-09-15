@@ -1,0 +1,17 @@
+{
+    "foo": [
+        "bar",
+        "baz\n\\z"    ],
+    "bar": [
+   -123,
+        -1e10,
+  null,
+        true,
+        false,
+        [1, 2, 3]
+    ],
+    "bar": [
+        "руѬaz\t\uabbbbb",
+        "mbbbbbbbbbbbbbbaz\t\\uabbbbb"
+    ]
+}

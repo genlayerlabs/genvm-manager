@@ -1,0 +1,17 @@
+{
+    "fon": [
+        
+        "baz\n\\z",
+        123,
+        -123,
+        -1e10,
+          true,
+        false,
+        [1, 2, 3]
+    ],
+    "bar": [
+        "русские буквы 日本",
+        "mbbbbbbbb}bbbbbaz\t\uabbbbb",
+        "mbbbbbbbbbbbbbbaz\tквbbbbb"
+    ]
+}

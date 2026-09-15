@@ -24,6 +24,10 @@ local value2json = require("value2json")
 ---@field filter_text fun(text: string, filters: string[]): string
 ---@field filter_image fun(image: string, filters: any[]): string
 ---@field random_bytes fun(length: integer): string
+---@field sha2_256 fun(data: string): string
+---@field sha3_256 fun(data: string): string
+---@field keccak256 fun(data: string): string
+---@field monotonic_ms fun(): integer
 ---@field random_float fun(): number
 ---@field data_dir string
 

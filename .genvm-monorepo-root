@@ -1,6 +1,15 @@
 {
-    "version": "v0.6.0-rc0",
-    "active-versions": ["v0.3"],
+    "version": "v0.6.0-rc1",
+    "active-versions": [
+        "v0.3",
+        "v0.2"
+    ],
+    "support-only-versions": [
+        "v0.2"
+    ],
     "artifacts_dir": "build/test-artifacts",
-    "extra_python_paths": ["tests/runner"]
+    "tags_registry": "tests/tags.json",
+    "extra_python_paths": [
+        "tests/runner"
+    ]
 }

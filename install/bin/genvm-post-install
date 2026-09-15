@@ -1,0 +1,103 @@
+#!/usr/bin/env python3
+
+# NOTE: This script is a wrapper for the actual post-install script.
+
+import argparse
+import logging
+import subprocess
+import sys
+from pathlib import Path
+
+logging.basicConfig(level=logging.INFO)
+
+logger = logging.getLogger(__name__)
+
+
+def str_to_bool(value):
+	if value.lower() in ('yes', 'true', 't', 'y', '1'):
+		return True
+	elif value.lower() in ('no', 'false', 'f', 'n', '0'):
+		return False
+	else:
+		raise argparse.ArgumentTypeError('Boolean value expected.')
+
+
+parser = argparse.ArgumentParser(add_help=False)
+parser.add_argument(
+	'--create-venv',
+	type=str_to_bool,
+	default=True,
+	help='Whether to create a virtual environment (true/false)',
+)
+parser.add_argument(
+	'--use-patchelf',
+	type=str_to_bool,
+	default=False,
+	help='Set the ELF interpreter with patchelf instead of lief (true/false)',
+)
+
+args, rest_args = parser.parse_known_args()
+
+has_help_arg = '-h' in rest_args or '--help' in rest_args
+
+if has_help_arg:
+	parser.print_help()
+
+genvm_root_dir = Path(__file__).parent.parent
+
+
+def requirements_for(base: Path) -> Path:
+	"""
+	The requirements to install into the venv.
+
+	lief is a heavy binary wheel whose only job is rewriting the ELF interpreter,
+	so `--use-patchelf` drops it — patchelf does that instead. The venv is keyed
+	by the hash of its requirements, so the two variants get separate venvs and
+	neither invalidates the other.
+	"""
+	if not args.use_patchelf:
+		return base
+
+	kept = [line for line in base.read_text().splitlines() if 'lief' not in line]
+	filtered = genvm_root_dir.joinpath('data', 'venvs', 'requirements-patchelf.txt')
+	filtered.parent.mkdir(parents=True, exist_ok=True)
+	filtered.write_text('\n'.join(kept) + '\n')
+	return filtered
+
+
+if not has_help_arg and args.create_venv:
+	venvs_path = genvm_root_dir.joinpath('data', 'venvs')
+	logger.info(f'venvs path: {venvs_path}')
+
+	requirements_path = requirements_for(
+		genvm_root_dir.joinpath('lib', 'python', 'post-install', 'requirements.txt')
+	)
+
+	create_venv_path = Path(genvm_root_dir).joinpath(
+		'lib', 'python', 'post-install', 'create_venv.py'
+	)
+
+	create_venv_src = create_venv_path.read_text()
+	create_venv_src_globals = {}
+	create_venv_code = compile(create_venv_src, str(create_venv_path), 'exec')
+	exec(create_venv_code, create_venv_src_globals)
+	create_venv = create_venv_src_globals['create_venv']
+	venv_path: Path = create_venv(genvm_root_dir, requirements_path)
+	actual_python = venv_path.joinpath('bin', 'python')
+else:
+	actual_python = Path(sys.executable)
+
+
+subprocess.run(
+	[
+		actual_python,
+		'-B',
+		genvm_root_dir.joinpath('lib', 'python', 'post-install', '__main__.py'),
+		# argparse consumed this above, so it is no longer in rest_args, but the
+		# real script needs it too.
+		f'--use-patchelf={args.use_patchelf}',
+	]
+	+ rest_args,
+	check=True,
+	text=True,
+)

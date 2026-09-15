@@ -1,0 +1,19 @@
+{
+       "": [
+        "bar",
+        "baz\n\\{",
+ 123,
+        -1e10,
+        1e20,
+        null,
+        true,
+        false,
+        [1, 2, 3]
+    ],
+    " ar": [ ],
+    "bar": [
+        "русские буквЇ 日本",
+        "mbbbbbbbbbbbbbbaz\t\uabbb b",
+        "mmmmmmmbbbbbbbbaz\t\\uabbbbb"
+    ]
+}
