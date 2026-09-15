@@ -34,7 +34,9 @@ local value2json = require("value2json")
 ---@type RS
 M.rs = __dflt ---@diagnostic disable-line
 
---- Log a message or structured data. The argument table may contain `level` and `message` fields.
+--- Log a message or structured data. The argument table may contain `level`, `message` and
+--- `audience` fields. `audience` is `"user" | "operator" | "introspector"` and defaults to
+--- `"introspector"`.
 ---@param arg any value to log; converted to JSON via `value2json` before sending
 M.log = function(arg)
 	M.rs.log_json(value2json(arg))

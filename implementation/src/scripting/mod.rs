@@ -224,7 +224,7 @@ where
     P: AsRef<std::path::Path> + Into<String> + std::fmt::Debug,
 {
     let script_contents = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading script from {:?}", &path))?;
+        .with_context(|| format!("reading script from {:?}", path))?;
     let chunk = vm.load(script_contents);
 
     let mut name = String::from("@");
