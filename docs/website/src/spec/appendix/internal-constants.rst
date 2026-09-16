@@ -34,7 +34,7 @@ Value: ``96``
 runner_load_cost
 ~~~~~~~~~~~~~~~~
 
-Value: ``4096``
+Value: ``1048576``
 
 .. _gvm-def-consts-value-memory-limiter-consts-vm-spawn-cost:
 
@@ -62,21 +62,28 @@ Value: ``128``
 execution_emission_base_size
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Value: ``256``
+Value: ``1024``
 
 .. _gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size:
 
 message_fee_rotation_element_size
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-Value: ``32``
+Value: ``128``
 
 .. _gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size:
 
 nondet_output_base_size
 ~~~~~~~~~~~~~~~~~~~~~~~
 
-Value: ``32``
+Value: ``128``
+
+.. _gvm-def-consts-value-memory-limiter-consts-zip-file-cost:
+
+zip_file_cost
+~~~~~~~~~~~~~
+
+Value: ``128``
 
 .. _gvm-def-consts-top-limits:
 
@@ -134,6 +141,13 @@ max_fds
 
 Value: ``1024``
 
+.. _gvm-def-consts-value-top-limits-max-runners:
+
+max_runners
+~~~~~~~~~~~
+
+Value: ``128``
+
 .. _gvm-def-consts-value-top-limits-wasm-call-depth:
 
 wasm_call_depth
@@ -154,6 +168,13 @@ vfs_path_components
 ~~~~~~~~~~~~~~~~~~~
 
 Value: ``128``
+
+.. _gvm-def-consts-value-top-limits-vfs-path-len:
+
+vfs_path_len
+~~~~~~~~~~~~
+
+Value: ``16384``
 
 .. _gvm-def-consts-runner-limits:
 

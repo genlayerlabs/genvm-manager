@@ -865,10 +865,6 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					assert len(k) == 36
 					index = int.from_bytes(k[32:], byteorder='big')
 					index *= 32
-					if index >= 4096:
-						logger.warning(
-							'suspicious storage writing', index=index, key=k.hex(), value=v.hex()
-						)
 					mock_host.storage.write(
 						mock_host.running_address,
 						k[:32],

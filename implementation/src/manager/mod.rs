@@ -236,7 +236,7 @@ fn error_response(status: StatusCode, error: impl Into<String>) -> Response {
 }
 
 fn internal_error(error: anyhow::Error) -> Response {
-    log_error!(err:ah = &error; "internal server error");
+    log_error!(@operator, err:ah = &error; "internal server error");
     error_response(StatusCode::INTERNAL_SERVER_ERROR, format!("{:#}", error))
 }
 

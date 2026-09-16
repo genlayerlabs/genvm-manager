@@ -96,7 +96,7 @@ A new :term:`sub-VM` is created for:
 - :ref:`gvm-def-gl-call-run-nondet`
 
 Creation is rejected with
-:ref:`gvm-def-str-trie-value-vm-error-out-of-vm-recursion` if the new
+:ref:`gvm-def-str-trie-value-vm-error-out-of-subvm-recursion` if the new
 :ref:`gvm_vm_field_depth` is greater than or equal to
 :ref:`gvm-def-consts-value-top-limits-vm-recursion`.
 
@@ -157,10 +157,10 @@ The child is read-only.
   - :ref:`gvm-perm-use-balance-for-message-fees` is false
 
 - :ref:`gvm_vm_field_state_mode` is the requested storage view (*param*
-  ``state``); a request of :ref:`gvm-def-enum-value-storage-type-default`
+  ``state``); a request of :ref:`gvm-def-enum-value-storage-view-default`
   keeps the parent's value (the plain copy rule), so by default the callee
   observes a view at least as recent as its caller's. Because the child
-  cannot write, its :ref:`gvm-def-enum-value-storage-type-default` view is
+  cannot write, its :ref:`gvm-def-enum-value-storage-view-default` view is
   the decided state: it never includes the calling transaction's uncommitted
   writes (see :ref:`contract-execution-flow`).
 - :ref:`gvm_vm_field_topmost_runner_id` is the callee's contract runner.

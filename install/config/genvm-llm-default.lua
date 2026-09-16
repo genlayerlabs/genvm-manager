@@ -180,8 +180,8 @@ _G.host = {
 	now_ms = function()
 		return lib.rs.monotonic_ms()
 	end,
-	log = function(level, event, fields)
-		lib.log { level = level, message = event, fields = fields }
+	log = function(level, event, fields, audience)
+		lib.log { level = level, message = event, fields = fields, audience = audience }
 	end,
 }
 
@@ -256,12 +256,17 @@ local function run_candidate(ctx, mapped_prompt, timeout, request)
 
 	local as_user_error = lib.rs.as_user_error(result)
 	if as_user_error == nil then
-		lib.log { level = "warning", message = "non-user-error", original = result }
+		lib.log { level = "warning", audience = "operator", message = "non-user-error", original = result }
 		error(result)
 	end
 
 	local status = as_user_error.ctx and as_user_error.ctx.status
-	lib.log { level = "warning", message = "provider failed, looking for next", error = as_user_error }
+	lib.log {
+		level = "warning",
+		audience = "operator",
+		message = "provider failed, looking for next",
+		error = as_user_error,
+	}
 
 	return nil,
 		{
@@ -280,7 +285,7 @@ local function wait_until(until_ms)
 	if delay <= 0 then
 		return
 	end
-	lib.log { level = "debug", message = "policy backoff", seconds = delay }
+	lib.log { level = "debug", audience = "operator", message = "policy backoff", seconds = delay }
 	lib.rs.sleep_seconds(math.min(delay, MAX_WAIT_SECONDS))
 end
 
@@ -291,6 +296,7 @@ local function dispatch_prompt(ctx, mapped_prompt, remaining_gen)
 	if timeout and timeout < 1 then
 		lib.log {
 			level = "warning",
+			audience = "user",
 			message = "computed timeout is very low, failing immediately",
 			timeout = timeout,
 		}
@@ -328,6 +334,7 @@ local function dispatch_prompt(ctx, mapped_prompt, remaining_gen)
 
 	lib.log {
 		level = "error",
+		audience = "operator",
 		message = "no provider could handle prompt",
 		error = step.result.error,
 		trace = step.result.trace,
@@ -470,6 +477,7 @@ function Teardown(ctx)
 	if not ok then
 		lib.log {
 			level = "warning",
+			audience = "operator",
 			message = "failed to persist llm stats during teardown",
 			error = tostring(err),
 		}

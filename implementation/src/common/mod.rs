@@ -291,7 +291,7 @@ pub(crate) fn module_error_to_wire<R>(
             }
         }
         Err(err) => {
-            log_error_into!(&LoggerWithId, error:ah = &err, genvm_id:id = genvm_id.0; "handler fatal error");
+            log_error_into!(@operator, &LoggerWithId, error:ah = &err, genvm_id:id = genvm_id.0; "handler fatal error");
             genvm_modules_interfaces::Result::FatalError(format!("{err:#}"))
         }
     }
@@ -371,7 +371,7 @@ where
         .context("handling");
 
     if let Err(close) = handler.cleanup().await {
-        log_error_into!(&LoggerWithId, error:ah = &close, genvm_id:id = genvm_id.0; "cleanup error");
+        log_error_into!(@operator, &LoggerWithId, error:ah = &close, genvm_id:id = genvm_id.0; "cleanup error");
     }
 
     res
@@ -392,7 +392,7 @@ pub async fn handle_stream<T, R, S, P: MessageHandlerProvider<T, R>>(
     log_trace!("reading hello");
     let hello = match read_hello(&mut stream).await {
         Err(e) => {
-            log_error!(error:ah = &e; "read hello failed");
+            log_error!(@operator, error:ah = &e; "read hello failed");
             return;
         }
         Ok(None) => return,
@@ -407,7 +407,7 @@ pub async fn handle_stream<T, R, S, P: MessageHandlerProvider<T, R>>(
         match handler_provider.create_execution_context(hello) {
             Ok(ctx) => ctx,
             Err(e) => {
-                log_error!(error:ah = &e; "failed to create execution context");
+                log_error!(@operator, error:ah = &e; "failed to create execution context");
                 return;
             }
         }
@@ -418,7 +418,7 @@ pub async fn handle_stream<T, R, S, P: MessageHandlerProvider<T, R>>(
         .scope(genvm_id, async {
             log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "peer accepted");
             if let Err(e) = loop_one_impl(handler_provider, &mut stream, exec_ctx).await {
-                log_error_into!(&LoggerWithId, error:ah = &e, genvm_id:id = genvm_id.0; "internal loop error");
+                log_error_into!(@operator, &LoggerWithId, error:ah = &e, genvm_id:id = genvm_id.0; "internal loop error");
             }
             log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "peer done");
         })
@@ -537,7 +537,7 @@ where
     let cleanup_path = path.to_owned();
     let _dropper = sync::DropGuard::new(move || {
         if let Err(e) = std::fs::remove_file(&cleanup_path) {
-            log_error!(error:err = &e, socket_path:? = cleanup_path; "cleaning up unix socket failed");
+            log_error!(@operator, error:err = &e, socket_path:? = cleanup_path; "cleaning up unix socket failed");
         }
     });
 
@@ -854,7 +854,7 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
             _ => false,
         };
         if bad {
-            log_warn!(url = attempt.url().as_str(); "redirect to non-globally-routable IP-literal rejected");
+            log_warn!(@user, url = attempt.url().as_str(); "redirect to non-globally-routable IP-literal rejected");
             return attempt.error(NoRoutableAddress);
         }
         let downgrade = attempt
@@ -862,7 +862,7 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
             .last()
             .is_some_and(|prev| prev.scheme() == "https" && attempt.url().scheme() == "http");
         if downgrade {
-            log_warn!(url = attempt.url().as_str(); "HTTPS->HTTP downgrade redirect rejected");
+            log_warn!(@user, url = attempt.url().as_str(); "HTTPS->HTTP downgrade redirect rejected");
             return attempt.error(SchemeDowngrade);
         }
         attempt.follow()
@@ -925,7 +925,7 @@ pub fn setup_cancels(
                             continue;
                         }
 
-                        log_warn!(old = parent_pid, new_parent_pid = new_parent_pid; "parent pid changed, closing");
+                        log_warn!(@operator, old = parent_pid, new_parent_pid = new_parent_pid; "parent pid changed, closing");
                         canceller();
                    },
                    _ = token.chan.closed() => {
@@ -947,67 +947,196 @@ pub enum LogSinkElement {
 
 impl LogSinkElement {
     pub fn into_json(self) -> serde_json::Map<String, serde_json::Value> {
-        match self {
-            LogSinkElement::Map(v) => v,
-            LogSinkElement::Line(text) => serde_json::Map::from_iter([
-                ("level".into(), serde_json::Value::String("info".into())),
-                (
-                    "message".into(),
-                    serde_json::Value::String("genvm log".into()),
-                ),
-                ("line".into(), text.into()),
-            ]),
-            LogSinkElement::Raw(s) => {
-                if let Ok(v) = serde_json::from_slice(&s) {
-                    v
-                } else {
+        // the fallback carries the audience of an entry that names none: a line the
+        // executor failed to format ours is an operator matter, while a well-formed
+        // one from an executor that knows nothing about audiences (v0.2.x) is not
+        let (mut map, fallback) = match self {
+            LogSinkElement::Map(v) => (v, logger::Audience::Introspector),
+            LogSinkElement::Line(text) => (
+                serde_json::Map::from_iter([
+                    ("level".into(), serde_json::Value::String("info".into())),
+                    (
+                        "message".into(),
+                        serde_json::Value::String("genvm log".into()),
+                    ),
+                    ("line".into(), text.into()),
+                ]),
+                logger::Audience::Operator,
+            ),
+            LogSinkElement::Raw(s) => match serde_json::from_slice(&s) {
+                Ok(v) => (v, logger::Audience::Introspector),
+                Err(_) => {
                     let mut as_encoded = String::new();
                     base64::prelude::BASE64_STANDARD.encode_string(s, &mut as_encoded);
-                    serde_json::Map::from_iter([
-                        ("level".into(), serde_json::Value::String("error".into())),
-                        (
-                            "message".into(),
-                            serde_json::Value::String("genvm log".into()),
-                        ),
-                        ("line".into(), as_encoded.into()),
-                    ])
+                    (
+                        serde_json::Map::from_iter([
+                            ("level".into(), serde_json::Value::String("error".into())),
+                            (
+                                "message".into(),
+                                serde_json::Value::String("genvm log".into()),
+                            ),
+                            ("line".into(), as_encoded.into()),
+                        ]),
+                        logger::Audience::Operator,
+                    )
                 }
-            }
-        }
+            },
+        };
+
+        let audience = parse_audience(&map).unwrap_or(fallback);
+        let level = map
+            .remove("level")
+            .unwrap_or_else(|| serde_json::Value::String("info".into()));
+        map.remove("audience");
+
+        // `level` and `audience` lead the record, as they do in the executor's own format
+        let mut out = serde_json::Map::with_capacity(map.len() + 2);
+        out.insert("level".into(), level);
+        out.insert(
+            "audience".into(),
+            serde_json::Value::String(audience.to_string()),
+        );
+        out.extend(map);
+
+        out
     }
 }
 
-/// Maximum number of buffered log entries kept per execution when not in debug
-/// mode; older entries are evicted to bound memory usage.
+fn parse_audience(map: &serde_json::Map<String, serde_json::Value>) -> Option<logger::Audience> {
+    use std::str::FromStr;
+
+    logger::Audience::from_str(map.get("audience")?.as_str()?).ok()
+}
+
+/// Number of buffered log entries per execution that makes the sink start
+/// evicting when not in debug mode. See [`LogSinkInner::push`] for what goes first.
 pub const LOG_SINK_LIMIT: usize = 128;
+
+/// Message of the entry that reports the compaction to the node runner
+pub const INTROSPECTOR_DROPPED: &str = "introspector logs dropped";
+
+/// What the sink does when it is full. It only ever advances, and it is reached
+/// by hitting the cap, so a run that stays under it keeps every line.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum Eviction {
+    #[default]
+    Fresh,
+    NoIntrospector,
+    Fifo,
+}
+
+struct LogSinkEntry {
+    audience: logger::Audience,
+    data: serde_json::Map<String, serde_json::Value>,
+}
+
+impl LogSinkEntry {
+    fn new(elem: LogSinkElement) -> Self {
+        let data = elem.into_json();
+
+        Self {
+            audience: parse_audience(&data).unwrap_or_default(),
+            data,
+        }
+    }
+
+    fn introspector_dropped_marker() -> Self {
+        Self::new(LogSinkElement::Map(serde_json::Map::from_iter([
+            ("level".into(), serde_json::Value::String("warn".into())),
+            (
+                "audience".into(),
+                serde_json::Value::String(logger::Audience::Operator.to_string()),
+            ),
+            (
+                "message".into(),
+                serde_json::Value::String(INTROSPECTOR_DROPPED.into()),
+            ),
+        ])))
+    }
+}
+
+fn make_room_for_one(queue: &mut std::collections::VecDeque<LogSinkEntry>) {
+    while queue.len() + 1 > LOG_SINK_LIMIT {
+        queue.pop_front();
+    }
+}
+
+#[derive(Default)]
+struct LogSinkState {
+    queue: std::collections::VecDeque<LogSinkEntry>,
+    eviction: Eviction,
+}
 
 #[derive(Default)]
 pub struct LogSinkInner {
-    queue: crossbeam::queue::SegQueue<LogSinkElement>,
+    /// Per execution: every sink has its own eviction state.
+    state: std::sync::Mutex<LogSinkState>,
     debug: bool,
 }
 
 impl LogSinkInner {
     pub fn new(debug: bool) -> Self {
         Self {
-            queue: crossbeam::queue::SegQueue::new(),
+            state: Default::default(),
             debug,
         }
     }
 
-    /// Appends an entry. In debug mode the sink is unbounded; otherwise the
-    /// oldest entries are dropped to keep at most [`LOG_SINK_LIMIT`] buffered.
+    /// Appends an entry. In debug mode the sink is unbounded; otherwise it holds at
+    /// most [`LOG_SINK_LIMIT`] entries: the first overflow sacrifices every
+    /// introspector entry, and only a later one starts dropping the oldest of any
+    /// audience.
     pub fn push(&self, elem: LogSinkElement) {
-        if !self.debug {
-            while self.queue.len() >= LOG_SINK_LIMIT {
-                self.queue.pop();
-            }
+        let entry = LogSinkEntry::new(elem);
+
+        let mut state = self.state.lock().unwrap();
+
+        if self.debug {
+            state.queue.push_back(entry);
+            return;
         }
-        self.queue.push(elem);
+
+        // introspector entries are sacrificed for good: once the cap was hit they are
+        // never wanted back, not even by the fifo phase
+        if state.eviction != Eviction::Fresh && entry.audience == logger::Audience::Introspector {
+            return;
+        }
+
+        if state.queue.len() + 1 > LOG_SINK_LIMIT {
+            if state.eviction == Eviction::Fresh {
+                state
+                    .queue
+                    .retain(|e| e.audience != logger::Audience::Introspector);
+                state.eviction = Eviction::NoIntrospector;
+
+                // the marker is an entry like any other and takes a slot of its own
+                make_room_for_one(&mut state.queue);
+                state
+                    .queue
+                    .push_back(LogSinkEntry::introspector_dropped_marker());
+
+                // the entry that triggered the compaction is subject to it too
+                if entry.audience == logger::Audience::Introspector {
+                    return;
+                }
+            } else {
+                state.eviction = Eviction::Fifo;
+            }
+
+            make_room_for_one(&mut state.queue);
+        }
+
+        state.queue.push_back(entry);
     }
 
-    pub fn pop(&self) -> Option<LogSinkElement> {
-        self.queue.pop()
+    pub fn buffered(&self) -> usize {
+        self.state.lock().unwrap().queue.len()
+    }
+
+    pub fn drain(&self) -> Vec<serde_json::Map<String, serde_json::Value>> {
+        let mut state = self.state.lock().unwrap();
+
+        state.queue.drain(..).map(|e| e.data).collect()
     }
 }
 
