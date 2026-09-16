@@ -364,6 +364,8 @@ Runner actions are executed left-recursively, until :ref:`gvm-def-start-wasm` is
 If it was not reached, it will result in a :ref:`gvm-def-vm-error` with
 ``invalid_contract runner malformed`` code.
 
+.. _gvm-def-runner-load-charge:
+
 Loading a :term:`runner` goes through a single **load action**, defined per
 :term:`sub-VM`. Each :term:`sub-VM` owns a **loaded-runner set**: the runner
 ids it has already loaded. The load action for an id is:
@@ -373,9 +375,18 @@ ids it has already loaded. The load action for an id is:
   :ref:`gvm-def-consts-value-top-limits-max-runners` ids, the load fails with
   :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` and nothing is charged —
   a count cap is refused exactly like an exhausted RAM budget;
-- otherwise :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus the runner's size in octets is charged as
+- otherwise :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost`
+  plus the runner's raw size and metadata cost in octets is charged as
   :ref:`gvm-def-ram-consumption` against the :term:`sub-VM`'s RAM budget, and
   the id is then added to the loaded set.
+
+The raw size is the length of the runner's code or archive bytes. For a ZIP
+runner, the metadata cost is the sum of
+:ref:`gvm-def-consts-value-memory-limiter-consts-zip-file-cost` plus the UTF-8
+filename length in octets for each distinct non-directory entry. Repeated
+filenames count once, using the last entry. Non-ZIP runners have no additional
+metadata charge. Insufficient RAM for either charge exits the :term:`sub-VM`
+with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`
 
 Whether the executor has the archive cached internally is not observable: the
 charge depends only on the :term:`sub-VM`'s own load history, never on cache
@@ -392,9 +403,9 @@ A load action occurs when:
 - receiving a custom-runner grant at :term:`sub-VM` creation
   (see :ref:`gvm-meta-property-custom-runners`).
 
-For a ``chain:`` runner the size is the length of the code blob read from
-storage. A ``chain:`` load costs the same as any other load of that size —
-there is no doubled charge and no separate fee component.
+For a ``chain:`` runner the raw size is the length of the code blob read from
+storage. The same content has the same load charge regardless of its source;
+there is no doubled charge and no separate fee component
 
 .. _gvm-def-custom-runner-visibility:
 

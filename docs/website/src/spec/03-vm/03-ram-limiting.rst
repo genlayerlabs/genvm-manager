@@ -44,7 +44,8 @@ The following operations consume RAM:
 - **File mapping**: :ref:`gvm-def-consts-value-memory-limiter-consts-file-mapping` octets base cost plus the length of the filename in bytes
 - **File descriptor allocation**: :ref:`gvm-def-consts-value-memory-limiter-consts-fd-allocation` octets per descriptor
 - **Runner loading**: the first load of a :term:`runner` in a :term:`sub-VM`
-  costs :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus the runner's size in octets. A runner already
+  consumes its :ref:`load charge <gvm-def-runner-load-charge>`, including ZIP
+  metadata. A runner already
   in that :term:`sub-VM`'s loaded set costs nothing, and the charge is released
   when the :term:`sub-VM` finishes, like any other charge. Loading covers
   spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``

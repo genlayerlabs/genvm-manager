@@ -368,15 +368,19 @@ Semantics
 that returns the same runner id. Otherwise
 :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus ``code`` length is charged against
 the caller's RAM budget before the archive is parsed; on success, the runner
-enters the caller's loaded set.
+also incurs its :ref:`metadata charge <gvm-def-runner-load-charge>` and enters
+the caller's loaded set
 
-The outcomes, in check order, are:
+The outcomes are:
 
 #. Missing :ref:`gvm-def-det-mode`: the call fails with ``Forbidden``. Nothing
    is charged and no state changes.
-#. Insufficient memory for the charge: the :term:`sub-VM` exits with an
-   out-of-memory :ref:`gvm-def-vm-error`. Nothing is charged and the runner is
-   not registered.
+#. Insufficient memory for the base cost and ``code`` length: the :term:`sub-VM`
+   exits with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`. Nothing is
+   charged and the runner is not registered
+#. Insufficient memory for metadata while loading: the :term:`sub-VM` exits
+   with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` and the runner is
+   not registered
 #. Malformed archive: the call fails with a deterministic invalid-contract
    :ref:`gvm-def-vm-error`. The charge is retained until the :term:`sub-VM`
    finishes, and the runner is not in the loaded set.

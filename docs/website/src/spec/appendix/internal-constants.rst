@@ -78,6 +78,13 @@ nondet_output_base_size
 
 Value: ``128``
 
+.. _gvm-def-consts-value-memory-limiter-consts-zip-file-cost:
+
+zip_file_cost
+~~~~~~~~~~~~~
+
+Value: ``128``
+
 .. _gvm-def-consts-top-limits:
 
 top_limits

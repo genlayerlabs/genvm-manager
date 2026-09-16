@@ -31,6 +31,8 @@ v0.3
 Breaking
 ~~~~~~~~
 
+#. ZIP :term:`runner` loads charge per-entry metadata in addition to the raw
+   archive size and base load cost (see :ref:`runner load charges <gvm-def-runner-load-charge>`)
 #. ``LeaderPublicData`` uses calldata ``{"nd_outs": bytes[]}`` instead of an
    RLP list with a trailing ``padded`` sentinel. Its fee and output-cap
    accounting uses a conservative 64-byte frame plus a 64-byte header and
