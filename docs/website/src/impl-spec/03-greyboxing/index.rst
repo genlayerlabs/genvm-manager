@@ -160,10 +160,3 @@ of the LLM module config and MUST contain the documented ``#{...}`` placeholders
 
 Missing placeholders are a config error and surface as :ref:`gvm-def-internal-error`
 at module startup.
-
-Generated Reference
--------------------
-
-The auto-generated signature reference for the Lua tables exposed to scripts
-(``lib.rs.*``, ``llm.rs.*``, ``web.rs.*``, the ``Prompt`` shape, etc.) lives in
-:doc:`01-lua-api`.

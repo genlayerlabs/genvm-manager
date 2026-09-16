@@ -58,17 +58,13 @@ The following operations consume RAM:
   already written from its caller, and repeated writes to a region, cost nothing
 - **Emissions**: each emitted message or event costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-execution-emission-base-size`
-  octets,
-  plus its retained calldata, code, allocation subtree, topics, event data, and
-  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-arg-element-size`
-  octets per
-  retained positional argument,
-  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-kwarg-entry-size`
-  octets per
-  retained keyword argument, and
+  octets, plus the encoded length of each payload it retains — calldata, code,
+  allocation subtree, topics and event data — and
   :ref:`gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size`
   octets
-  per retained message-fee rotation
+  per retained message-fee rotation. Calldata is charged by its
+  :ref:`encoded <gvm-def-calldata-encoding>` length, so positional and keyword
+  arguments carry no charge of their own
 - **Nondeterministic outputs**: each output costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size`
   octets plus its encoded length on every role

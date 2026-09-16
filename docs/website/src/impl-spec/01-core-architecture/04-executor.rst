@@ -20,7 +20,7 @@ executor installs no signal handlers and has no graceful-shutdown path, so it
 **can be killed at any moment**, between any two operations, without notice.
 
 Implications
------------
+------------
 
 - The executor keeps no durable state of its own. All persistent state lives in
   the host and is written only as part of delivering a result. A killed executor

@@ -97,7 +97,7 @@ Changed
 #. Unless both time-unit allocations are zero, internal message emission checks
    leader units against propose bounds and validator units against commit bounds;
    violations report
-   :ref:`gvm-def-str-trie-value-vm-error-fee-phase-timeout-out-of-bounds`
+   :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum`
 #. A missing or malformed runner archive/comment header is now reported as
    :ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-absent` or
    :ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-malformed`

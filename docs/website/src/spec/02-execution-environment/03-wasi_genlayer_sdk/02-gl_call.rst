@@ -207,14 +207,12 @@ Semantics:
 
 Metering additionally enforces node-configured bounds, surfaced as ``VMError``\ s:
 
-- :ref:`gvm-def-str-trie-value-vm-error-fee-phase-timeout-out-of-bounds` —
-  unless both time-unit allocations are
-  zero, the leader allocation is outside ``node.minProposeTimeout`` through
-  ``node.maxProposeTimeout``, or the validator allocation is outside
+- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — either a non-zero
+  ``execution_budget_per_round`` below ``node.messageBudgetFloor`` (the chain's
+  ``BudgetTooLow``), or — unless both time-unit allocations are zero — a leader
+  allocation outside ``node.minProposeTimeout`` through
+  ``node.maxProposeTimeout`` or a validator allocation outside
   ``node.minCommitTimeout`` through ``node.maxCommitTimeout``.
-- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — a non-zero
-  ``execution_budget_per_round`` below
-  ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``).
 - :ref:`gvm-def-str-trie-value-vm-error-fee-too-many-rounds` — ``rotations``
   implies more consensus rounds than the
   node's validator table supports (on-chain ``MAX_ROUNDS``).
