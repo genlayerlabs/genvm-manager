@@ -334,7 +334,12 @@ class Ninja:
 
 		self.build('phony_touch', files_trg).add_implicit_dependency(all_files).finish()
 
-		clippy_lints = ['--', '-A', 'clippy::upper_case_acronyms', '-Dwarnings']
+		# Everything past `--` reaches clippy-driver as rustc flags.
+		clippy_allowed = ['clippy::upper_case_acronyms']
+		clippy_rustc_flags = ['--'] + [
+			flag for lint in clippy_allowed for flag in ('-A', lint)
+		]
+		clippy_lints = clippy_rustc_flags + ['-Dwarnings']
 
 		# Lint/format edges declare no inputs and produce no output file: cargo does
 		# its own staleness tracking, and a stale ninja stamp hid real diagnostics.
@@ -350,12 +355,15 @@ class Ninja:
 		clippy.finish()
 		self.all_clippy.append('target/' + rel_path + '/clippy')
 
+		# No `-Dwarnings` on the fix edge: `cargo fix` re-verifies after rewriting
+		# and discards a crate's edits when it no longer compiles, so denying the
+		# lints that `--fix` cannot rewrite would throw away the ones it can.
 		fix = self.build('cargo', 'target/' + rel_path + '/clippy/fix')
 		fix.var('subcommand', 'clippy')
 		fix.var('wd', crate_dir)
 		fix.var(
 			'extra_args',
-			extra_args + ['--fix', '--allow-dirty', '--allow-staged'] + clippy_lints,
+			extra_args + ['--fix', '--allow-dirty', '--allow-staged'] + clippy_rustc_flags,
 		)
 		fix.var('env', CARGO_ENV)
 		if target_dir is not None:

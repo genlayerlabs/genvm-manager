@@ -44,13 +44,16 @@ The following operations consume RAM:
 - **File mapping**: :ref:`gvm-def-consts-value-memory-limiter-consts-file-mapping` octets base cost plus the length of the filename in bytes
 - **File descriptor allocation**: :ref:`gvm-def-consts-value-memory-limiter-consts-fd-allocation` octets per descriptor
 - **Runner loading**: the first load of a :term:`runner` in a :term:`sub-VM`
-  costs :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus the runner's size in octets. A runner already
+  consumes its :ref:`load charge <gvm-def-runner-load-charge>`, including ZIP
+  metadata. A runner already
   in that :term:`sub-VM`'s loaded set costs nothing, and the charge is released
   when the :term:`sub-VM` finishes, like any other charge. Loading covers
   spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``
   and ``RegisterRunner`` ``gl_call``\ s, and receiving a custom-runner grant at
   sub-VM creation (see :doc:`../02-execution-environment/04-runners` and
-  :ref:`gvm-meta-property-custom-runners`)
+  :ref:`gvm-meta-property-custom-runners`). A :term:`sub-VM` holds at most
+  :ref:`gvm-def-consts-value-top-limits-max-runners` runners: a load past that
+  fails the same way an exhausted budget does, and charges nothing
 - **Storage writes**: writing to a 32-octet aligned region of a
   :term:`Storage Slot` costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-new-storage-page` octets the
@@ -58,17 +61,13 @@ The following operations consume RAM:
   already written from its caller, and repeated writes to a region, cost nothing
 - **Emissions**: each emitted message or event costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-execution-emission-base-size`
-  octets,
-  plus its retained calldata, code, allocation subtree, topics, event data, and
-  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-arg-element-size`
-  octets per
-  retained positional argument,
-  :ref:`gvm-def-consts-value-memory-limiter-consts-calldata-kwarg-entry-size`
-  octets per
-  retained keyword argument, and
+  octets, plus the encoded length of each payload it retains — calldata, code,
+  allocation subtree, topics and event data — and
   :ref:`gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size`
   octets
-  per retained message-fee rotation
+  per retained message-fee rotation. Calldata is charged by its
+  :ref:`encoded <gvm-def-calldata-encoding>` length, so positional and keyword
+  arguments carry no charge of their own
 - **Nondeterministic outputs**: each output costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size`
   octets plus its encoded length on every role

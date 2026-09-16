@@ -164,6 +164,13 @@ Path Resolution
 ``path_*`` functions take a directory :term:`FD` and a path. Resolution is
 purely lexical and identical in both modes:
 
+#. The supplied path must be at most
+   :ref:`gvm-def-consts-value-top-limits-vfs-path-len` octets long and contain
+   at most :ref:`gvm-def-consts-value-top-limits-vfs-path-components` ``/``
+   separators, otherwise the call fails with ``Inval``. Both bound the argument
+   as written, before any normalization, so a separator that yields no component
+   still counts. Neither bound applies to the directory descriptor's own path,
+   which is bounded by how the :ref:`gvm-def-vfs` was populated.
 #. The directory descriptor's own path and the supplied path are concatenated
    and split on ``/``. Empty and ``.`` components are dropped, a ``..``
    component pops the preceding one, and a ``..`` that would escape the root is

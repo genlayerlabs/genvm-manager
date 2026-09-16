@@ -31,6 +31,8 @@ v0.3
 Breaking
 ~~~~~~~~
 
+#. ZIP :term:`runner` loads charge per-entry metadata in addition to the raw
+   archive size and base load cost (see :ref:`runner load charges <gvm-def-runner-load-charge>`)
 #. ``LeaderPublicData`` uses calldata ``{"nd_outs": bytes[]}`` instead of an
    RLP list with a trailing ``padded`` sentinel. Its fee and output-cap
    accounting uses a conservative 64-byte frame plus a 64-byte header and
@@ -97,7 +99,7 @@ Changed
 #. Unless both time-unit allocations are zero, internal message emission checks
    leader units against propose bounds and validator units against commit bounds;
    violations report
-   :ref:`gvm-def-str-trie-value-vm-error-fee-phase-timeout-out-of-bounds`
+   :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum`
 #. A missing or malformed runner archive/comment header is now reported as
    :ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-absent` or
    :ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-malformed`

@@ -235,6 +235,23 @@ TEST_OTHER = DefaultStepInfo(
 	)
 )
 
+# Not `configure_step`: that configures in `minimal`, which carries no
+# toolchain, and configure bakes the `cargo` it finds on PATH into build.ninja —
+# on a hosted runner, the ambient rustup shim, whose lint set is not the pinned
+# one.
+TEST_CLIPPY = DefaultStepInfo(
+	build_step=Stage(
+		data=frozenset(),
+		commands_pre=[
+			step_nix_develop('.?submodules=1#rust-test', ['genvm-tool', 'configure', '--ci']),
+			step_nix_develop(
+				'.?submodules=1#rust-test',
+				['./support/ci/run.sh', 'pipeline', 'cargo-clippy'],
+			),
+		],
+	),
+)
+
 TEST_MOCK_BUILD_BINS = DefaultStepInfo(
 	configure_step=Stage(None),
 	build_step=Stage(data=frozenset(['all/bin'])),
@@ -304,6 +321,7 @@ def _cell(
 
 QUEUE_CELLS = [
 	_cell('other', TEST_OTHER, fuzz_host=True),
+	_cell('clippy', TEST_CLIPPY, disk_reclaim=True),
 	_cell('rust-executors', TEST_RUST_EXECUTORS, fuzz_host=True, disk_reclaim=True),
 	_cell('rust-manager', TEST_RUST_MANAGER, fuzz_host=True, disk_reclaim=True),
 	_cell(

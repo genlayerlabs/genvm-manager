@@ -207,14 +207,12 @@ Semantics:
 
 Metering additionally enforces node-configured bounds, surfaced as ``VMError``\ s:
 
-- :ref:`gvm-def-str-trie-value-vm-error-fee-phase-timeout-out-of-bounds` —
-  unless both time-unit allocations are
-  zero, the leader allocation is outside ``node.minProposeTimeout`` through
-  ``node.maxProposeTimeout``, or the validator allocation is outside
+- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — either a non-zero
+  ``execution_budget_per_round`` below ``node.messageBudgetFloor`` (the chain's
+  ``BudgetTooLow``), or — unless both time-unit allocations are zero — a leader
+  allocation outside ``node.minProposeTimeout`` through
+  ``node.maxProposeTimeout`` or a validator allocation outside
   ``node.minCommitTimeout`` through ``node.maxCommitTimeout``.
-- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — a non-zero
-  ``execution_budget_per_round`` below
-  ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``).
 - :ref:`gvm-def-str-trie-value-vm-error-fee-too-many-rounds` — ``rotations``
   implies more consensus rounds than the
   node's validator table supports (on-chain ``MAX_ROUNDS``).
@@ -370,15 +368,19 @@ Semantics
 that returns the same runner id. Otherwise
 :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus ``code`` length is charged against
 the caller's RAM budget before the archive is parsed; on success, the runner
-enters the caller's loaded set.
+also incurs its :ref:`metadata charge <gvm-def-runner-load-charge>` and enters
+the caller's loaded set
 
-The outcomes, in check order, are:
+The outcomes are:
 
 #. Missing :ref:`gvm-def-det-mode`: the call fails with ``Forbidden``. Nothing
    is charged and no state changes.
-#. Insufficient memory for the charge: the :term:`sub-VM` exits with an
-   out-of-memory :ref:`gvm-def-vm-error`. Nothing is charged and the runner is
-   not registered.
+#. Insufficient memory for the base cost and ``code`` length: the :term:`sub-VM`
+   exits with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`. Nothing is
+   charged and the runner is not registered
+#. Insufficient memory for metadata while loading: the :term:`sub-VM` exits
+   with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` and the runner is
+   not registered
 #. Malformed archive: the call fails with a deterministic invalid-contract
    :ref:`gvm-def-vm-error`. The charge is retained until the :term:`sub-VM`
    finishes, and the runner is not in the loaded set.

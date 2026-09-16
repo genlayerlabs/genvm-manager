@@ -53,7 +53,7 @@ pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
             patch: version.patch + 1,
         };
         if manifest.executor_versions.contains_key(&next) {
-            log_info!(version:? = version; "skipping executor: a newer patch exists");
+            log_info!(@operator, version:? = version; "skipping executor: a newer patch exists");
             continue;
         }
 
@@ -77,7 +77,7 @@ pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
             .with_context(|| format!("spawning {genvm:?}"))?;
 
         if !status.success() {
-            log_error!(version = orig_key.as_str(), status:? = status; "executor check failed");
+            log_error!(@operator, version = orig_key.as_str(), status:? = status; "executor check failed");
             failures.push(orig_key.clone());
         }
     }
@@ -89,7 +89,7 @@ pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
         );
     }
 
-    log_info!("check-install succeeded for all executors");
+    log_info!(@operator; "check-install succeeded for all executors");
 
     Ok(())
 }
