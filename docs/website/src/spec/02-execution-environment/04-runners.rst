@@ -369,6 +369,10 @@ Loading a :term:`runner` goes through a single **load action**, defined per
 ids it has already loaded. The load action for an id is:
 
 - if the id is already in the :term:`sub-VM`'s loaded set, nothing is charged;
+- otherwise, when the loaded set already holds
+  :ref:`gvm-def-consts-value-top-limits-max-runners` ids, the load fails with
+  :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` and nothing is charged —
+  a count cap is refused exactly like an exhausted RAM budget;
 - otherwise :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus the runner's size in octets is charged as
   :ref:`gvm-def-ram-consumption` against the :term:`sub-VM`'s RAM budget, and
   the id is then added to the loaded set.

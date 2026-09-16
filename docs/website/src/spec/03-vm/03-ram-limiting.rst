@@ -50,7 +50,9 @@ The following operations consume RAM:
   spawning the entry-point runner, ``Depends``/``With`` actions, the ``MapFile``
   and ``RegisterRunner`` ``gl_call``\ s, and receiving a custom-runner grant at
   sub-VM creation (see :doc:`../02-execution-environment/04-runners` and
-  :ref:`gvm-meta-property-custom-runners`)
+  :ref:`gvm-meta-property-custom-runners`). A :term:`sub-VM` holds at most
+  :ref:`gvm-def-consts-value-top-limits-max-runners` runners: a load past that
+  fails the same way an exhausted budget does, and charges nothing
 - **Storage writes**: writing to a 32-octet aligned region of a
   :term:`Storage Slot` costs
   :ref:`gvm-def-consts-value-memory-limiter-consts-new-storage-page` octets the
