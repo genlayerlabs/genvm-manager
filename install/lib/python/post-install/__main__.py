@@ -452,6 +452,13 @@ def download_runners_from_json(
 			logger.warning(f'Executor path {file} does not exist, skipping')
 			return
 	logger.info(f'checking that all runners are present for {file}')
+	if not verify_hash:
+		logger.warning(
+			f'!!! downloading runners for {file} WITHOUT hash verification: '
+			'code fetched over the network is written to disk unchecked. It is '
+			'rejected only by the later check-install step, which --precompile=false '
+			'skips entirely'
+		)
 	all_runners = _load_registry(file)
 
 	for name, hashes in all_runners.items():
