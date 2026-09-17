@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     ops::DerefMut,
-    os::fd::{AsRawFd, FromRawFd},
+    os::fd::AsRawFd,
     str::FromStr,
     sync::{
         atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering},
@@ -957,6 +957,10 @@ pub struct UnsafeOverrides {
     #[serde(default)]
     #[calldata(default = default_initial_recursion)]
     pub initial_recursion: Option<u32>,
+    /// Override worker concurrency from `debug_mode >= Unsafe`.
+    #[serde(default)]
+    #[calldata(default = Option::default)]
+    pub allow_two_workers: Option<bool>,
 }
 
 #[serde_as]
@@ -1096,9 +1100,7 @@ trait LogAppender {
 /// manager's own log instead of buffering them into the result.
 struct LogAppenderToLog(GenVMId);
 
-// `read_log_pipe` takes `impl DerefMut<Target = LA>`. The value-capturing
-// appender is wrapped in `Arc<Mutex<..>>` (which derefs to it), but this
-// forwarding appender holds no shared state, so it derefs to itself.
+// Let `read_log_pipe` own this appender while borrowing the capturing one.
 impl std::ops::Deref for LogAppenderToLog {
     type Target = Self;
 
@@ -1194,6 +1196,18 @@ async fn read_log_pipe<LA: LogAppender>(
     }
 
     Ok(())
+}
+
+async fn collect_process_logs(
+    process: impl std::future::Future<Output = anyhow::Result<std::process::ExitStatus>>,
+    log_reader: impl std::future::Future<Output = std::io::Result<()>>,
+    genvm_id: GenVMId,
+) -> anyhow::Result<std::process::ExitStatus> {
+    let (result, logs) = tokio::join!(process, log_reader);
+    if let Err(error) = logs {
+        log_warn_into!(@operator, &LoggerWithId, genvm_id:id = genvm_id.0, error:err = error; "failed to read genvm logs");
+    }
+    result
 }
 
 /// Maximum bytes of stdout/stderr kept (as a tail) per execution when not in
@@ -1786,18 +1800,27 @@ fn fail_to_start(exec: &SingleGenVMContext, error: anyhow::Error) {
 /// Creates a pipe for GenVM logging. Returns `(read_fd, write_fd)` with
 /// the read end set to nonblocking + cloexec.
 fn create_log_pipe() -> anyhow::Result<(std::os::unix::io::OwnedFd, std::os::unix::io::OwnedFd)> {
-    let mut read_write_fd = [0; 2];
-    let result_code = unsafe { libc::pipe(std::ptr::from_mut(&mut read_write_fd).cast()) };
-    if result_code != 0 {
-        anyhow::bail!("failed to create pipe for genvm logging: {result_code}");
-    }
-
-    let read_fd = unsafe { FdWrapper::from_raw_fd(read_write_fd[0]) };
-    let write_fd = unsafe { std::os::unix::io::OwnedFd::from_raw_fd(read_write_fd[1]) };
-
+    let (read_fd, write_fd) = std::io::pipe()?;
+    let read_fd = FdWrapper::new(read_fd.into());
     read_fd.set_nonblocking(true)?;
-    read_fd.set_cloexec(true)?;
-    Ok((read_fd.into_inner(), write_fd))
+    Ok((read_fd.into_inner(), write_fd.into()))
+}
+
+fn configure_log_pipe(
+    proc: &mut tokio::process::Command,
+    log_write_fd: &std::os::unix::io::OwnedFd,
+) {
+    proc.arg(format!("--log-fd={}", log_write_fd.as_raw_fd()));
+    let log_fd = log_write_fd.as_raw_fd();
+    // Only this executor may inherit the writer, or unrelated children delay EOF.
+    unsafe {
+        proc.pre_exec(move || {
+            if libc::fcntl(log_fd, libc::F_SETFD, 0) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
 }
 
 /// Builds the `tokio::process::Command` for GenVM with all standard arguments
@@ -1811,7 +1834,7 @@ fn build_genvm_command(
     let mut proc = tokio::process::Command::new(command_path);
 
     proc.stdin(std::process::Stdio::piped());
-    proc.arg(format!("--log-fd={}", log_write_fd.as_raw_fd()));
+    configure_log_pipe(&mut proc, log_write_fd);
 
     proc.arg("run");
     proc.args(&req.extra_args);
@@ -1917,7 +1940,10 @@ fn strict_deadline_from_request(req: &Request) -> chrono::DateTime<chrono::Utc> 
         + chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::hours(24))
 }
 
-fn execution_data_from_request(req: &Request) -> genvm_modules_interfaces::ExecutionData {
+fn execution_data_from_request(
+    req: &Request,
+    config: &super::Config,
+) -> genvm_modules_interfaces::ExecutionData {
     let mut method_hosts = vec![0; host_fns::Methods::SIZE];
     method_hosts[host_fns::Methods::ConsumeResult as usize] = 1;
     method_hosts[host_fns::Methods::RunNested as usize] = 1;
@@ -1926,6 +1952,12 @@ fn execution_data_from_request(req: &Request) -> genvm_modules_interfaces::Execu
     }
 
     genvm_modules_interfaces::ExecutionData {
+        allow_two_workers: if req.debug_mode >= genvm_common::DebugMode::Unsafe {
+            req.unsafe_overrides.allow_two_workers
+        } else {
+            None
+        }
+        .unwrap_or(config.allow_two_workers),
         calldata: req.calldata.clone(),
         message: req.message.clone(),
         host_data: req.host_data.clone(),
@@ -2163,7 +2195,7 @@ impl Ctx {
             // routing as its parent.
             hook_cross_contract_calls: parent_req.hook_cross_contract_calls,
         };
-        let mut execution_data = execution_data_from_request(&req);
+        let mut execution_data = execution_data_from_request(&req, &full_ctx.config);
         execution_data.code = None;
         execution_data.leader_public_data = None;
         execution_data.record_actions.clear();
@@ -2248,7 +2280,7 @@ async fn supervise_genvm_inner(
     modules_lock: Box<dyn std::any::Any + Send + Sync>,
     permits: tokio::sync::OwnedSemaphorePermit,
 ) -> anyhow::Result<()> {
-    let execution_data = execution_data_from_request(&req);
+    let execution_data = execution_data_from_request(&req, &full_ctx.config);
     let result = run_genvm_process(
         full_ctx,
         exec_ctx.clone(),
@@ -2450,187 +2482,190 @@ async fn run_genvm_process(
 
     let execution_data_bytes = bytes::Bytes::from(calldata::encode_obj(&execution_data));
 
-    // Spawn log reader: capture into the sink, or (when capture is disabled)
-    // forward to the manager log instead of buffering into the result.
-    if capture == Capture::Disabled {
-        tokio::spawn(read_log_pipe(read_fd, LogAppenderToLog(genvm_id)));
-    } else {
-        let logger = Arc::new(tokio::sync::Mutex::new(LogAppenderToValue(
-            log_sink.clone(),
-        )));
-        let l = logger.clone().lock_owned().await;
-        tokio::spawn(read_log_pipe(read_fd, l));
-    }
-
-    // Spawn child process, then drop child-side FDs
-    let mut child = proc.spawn()?;
-    log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, pid:? = child.id(); "genvm process started");
-    std::mem::drop(module_child_fds);
-    std::mem::drop(manager_child);
-
-    let stdin_task = child
-        .stdin
-        .take()
-        .map(|stdin| spawn_stdin_writer(stdin, execution_data_bytes));
-
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let stdout_perm = if stdout.is_some() {
-        Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
-    } else {
-        None
-    };
-    let stderr_perm = if stderr.is_some() {
-        Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
-    } else {
-        None
+    let log_reader = async {
+        if capture == Capture::Disabled {
+            read_log_pipe(read_fd, LogAppenderToLog(genvm_id)).await
+        } else {
+            let mut logger = LogAppenderToValue(log_sink.clone());
+            read_log_pipe(read_fd, &mut logger).await
+        }
     };
 
-    let manager_stream_state = Arc::new(ManagerHostStreamState::default());
-    let manager_stream_state_on_drop = manager_stream_state.clone();
-    let _manager_stream_guard = sync::DropGuard::new(move || manager_stream_state_on_drop.close());
-    tokio::spawn(read_manager_host_stream(
-        manager_parent,
-        ManagerHostStream {
-            full_ctx: full_ctx.clone(),
-            exec_ctx: exec_ctx.clone(),
-            parent_req: Arc::new(req.clone()),
-            consumed_result,
-            genvm_id,
-            is_top_level,
-            state: manager_stream_state.clone(),
-        },
-    ));
+    let process = async {
+        // Spawn child process, then drop child-side FDs
+        let mut child = proc.spawn()?;
+        drop(write_fd);
+        log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, pid:? = child.id(); "genvm process started");
+        std::mem::drop(module_child_fds);
+        std::mem::drop(manager_child);
 
-    if let Some(mut stdin_task) = stdin_task {
+        let stdin_task = child
+            .stdin
+            .take()
+            .map(|stdin| spawn_stdin_writer(stdin, execution_data_bytes));
+
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let stdout_perm = if stdout.is_some() {
+            Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
+        } else {
+            None
+        };
+        let stderr_perm = if stderr.is_some() {
+            Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
+        } else {
+            None
+        };
+
+        let manager_stream_state = Arc::new(ManagerHostStreamState::default());
+        let manager_stream_state_on_drop = manager_stream_state.clone();
+        let _manager_stream_guard =
+            sync::DropGuard::new(move || manager_stream_state_on_drop.close());
+        tokio::spawn(read_manager_host_stream(
+            manager_parent,
+            ManagerHostStream {
+                full_ctx: full_ctx.clone(),
+                exec_ctx: exec_ctx.clone(),
+                parent_req: Arc::new(req.clone()),
+                consumed_result,
+                genvm_id,
+                is_top_level,
+                state: manager_stream_state.clone(),
+            },
+        ));
+
+        if let Some(mut stdin_task) = stdin_task {
+            let deadline_duration = exec_ctx
+                .strict_deadline
+                .signed_duration_since(chrono::Utc::now())
+                .to_std()
+                .unwrap_or_default();
+            let stop =
+                wait_for_process_stop(&exec_ctx, caller_stream.as_deref(), deadline_duration);
+            tokio::pin!(stop);
+            tokio::select! {
+                result = &mut stdin_task => match result {
+                    Ok(Ok(())) => {
+                        log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "execution data written");
+                    }
+                    Ok(Err(e)) => {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        anyhow::bail!("failed to write execution data to child stdin: {e}");
+                    }
+                    Err(e) => {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        anyhow::bail!("stdin write task panicked: {e}");
+                    }
+                },
+                status = child.wait() => {
+                    stdin_task.abort();
+                    return match status {
+                        Ok(status) => Ok(status),
+                        Err(e) => {
+                            let _ = child.start_kill();
+                            let _ = child.wait().await;
+                            Err(e.into())
+                        }
+                    };
+                }
+                reason = &mut stop => {
+                    if reason == ProcessStop::Deadline {
+                        exec_ctx.request_finish(FinishCause::Deadline);
+                    }
+                    stdin_task.abort();
+                    let _ = child.start_kill();
+                    return child.wait().await.map_err(Into::into);
+                }
+            }
+        }
+
+        let mut child = Some(child);
+        if is_top_level {
+            let mut stored_child = exec_ctx.process_handle.lock().await;
+            *stored_child = child.take();
+        }
+
+        if let RunResources::TopLevel {
+            permits,
+            modules_lock,
+        } = resources
+        {
+            exec_ctx
+                .all_permits
+                .store(Some(Box::new((permits, modules_lock))));
+        }
+
+        let out_limit = (capture == Capture::Bounded).then_some(OUTPUT_TAIL_LIMIT);
+        if let Some(stdout) = stdout {
+            tokio::spawn(pipe_read(
+                stdout,
+                exec_ctx.gep(|x| &x.stdout),
+                stdout_perm.expect("stdout permit must exist when stdout is piped"),
+                out_limit,
+            ));
+        }
+        if let Some(stderr) = stderr {
+            tokio::spawn(pipe_read(
+                stderr,
+                exec_ctx.gep(|x| &x.stderr),
+                stderr_perm.expect("stderr permit must exist when stderr is piped"),
+                out_limit,
+            ));
+        }
+
+        log_sink_guard.forget();
+        if is_top_level {
+            exec_ctx.publish_started();
+        }
+
         let deadline_duration = exec_ctx
             .strict_deadline
             .signed_duration_since(chrono::Utc::now())
             .to_std()
             .unwrap_or_default();
+        let mut child = if is_top_level {
+            let mut stored_child = exec_ctx.process_handle.lock().await;
+            stored_child
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("process handle missing"))?
+        } else {
+            child
+                .take()
+                .ok_or_else(|| anyhow::anyhow!("nested process handle missing"))?
+        };
+
+        let mut kill_sent = false;
         let stop = wait_for_process_stop(&exec_ctx, caller_stream.as_deref(), deadline_duration);
         tokio::pin!(stop);
-        tokio::select! {
-            result = &mut stdin_task => match result {
-                Ok(Ok(())) => {
-                    log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "execution data written");
-                }
-                Ok(Err(e)) => {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
-                    anyhow::bail!("failed to write execution data to child stdin: {e}");
-                }
-                Err(e) => {
-                    let _ = child.start_kill();
-                    let _ = child.wait().await;
-                    anyhow::bail!("stdin write task panicked: {e}");
-                }
-            },
-            status = child.wait() => {
-                stdin_task.abort();
-                return match status {
-                    Ok(status) => Ok(status),
+        let status = loop {
+            if kill_sent {
+                break child.wait().await?;
+            }
+            tokio::select! {
+                status = child.wait() => match status {
+                    Ok(status) => break status,
                     Err(e) => {
                         let _ = child.start_kill();
                         let _ = child.wait().await;
-                        Err(e.into())
+                        return Err(e.into());
                     }
-                };
-            }
-            reason = &mut stop => {
-                if reason == ProcessStop::Deadline {
-                    exec_ctx.request_finish(FinishCause::Deadline);
-                }
-                stdin_task.abort();
-                let _ = child.start_kill();
-                return child.wait().await.map_err(Into::into);
-            }
-        }
-    }
-
-    let mut child = Some(child);
-    if is_top_level {
-        let mut stored_child = exec_ctx.process_handle.lock().await;
-        *stored_child = child.take();
-    }
-
-    if let RunResources::TopLevel {
-        permits,
-        modules_lock,
-    } = resources
-    {
-        exec_ctx
-            .all_permits
-            .store(Some(Box::new((permits, modules_lock))));
-    }
-
-    let out_limit = (capture == Capture::Bounded).then_some(OUTPUT_TAIL_LIMIT);
-    if let Some(stdout) = stdout {
-        tokio::spawn(pipe_read(
-            stdout,
-            exec_ctx.gep(|x| &x.stdout),
-            stdout_perm.expect("stdout permit must exist when stdout is piped"),
-            out_limit,
-        ));
-    }
-    if let Some(stderr) = stderr {
-        tokio::spawn(pipe_read(
-            stderr,
-            exec_ctx.gep(|x| &x.stderr),
-            stderr_perm.expect("stderr permit must exist when stderr is piped"),
-            out_limit,
-        ));
-    }
-
-    log_sink_guard.forget();
-    if is_top_level {
-        exec_ctx.publish_started();
-    }
-
-    let deadline_duration = exec_ctx
-        .strict_deadline
-        .signed_duration_since(chrono::Utc::now())
-        .to_std()
-        .unwrap_or_default();
-    let mut child = if is_top_level {
-        let mut stored_child = exec_ctx.process_handle.lock().await;
-        stored_child
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("process handle missing"))?
-    } else {
-        child
-            .take()
-            .ok_or_else(|| anyhow::anyhow!("nested process handle missing"))?
-    };
-
-    let mut kill_sent = false;
-    let stop = wait_for_process_stop(&exec_ctx, caller_stream.as_deref(), deadline_duration);
-    tokio::pin!(stop);
-    let status = loop {
-        if kill_sent {
-            break child.wait().await?;
-        }
-        tokio::select! {
-            status = child.wait() => match status {
-                Ok(status) => break status,
-                Err(e) => {
+                },
+                reason = &mut stop => {
+                    if reason == ProcessStop::Deadline {
+                        exec_ctx.request_finish(FinishCause::Deadline);
+                    }
                     let _ = child.start_kill();
-                    let _ = child.wait().await;
-                    return Err(e.into());
+                    kill_sent = true;
                 }
-            },
-            reason = &mut stop => {
-                if reason == ProcessStop::Deadline {
-                    exec_ctx.request_finish(FinishCause::Deadline);
-                }
-                let _ = child.start_kill();
-                kill_sent = true;
             }
-        }
+        };
+        manager_stream_state.close();
+        log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, status = status; "genvm exited");
+        Ok(status)
     };
-    manager_stream_state.close();
-    log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, status = status; "genvm exited");
-    Ok(status)
+    collect_process_logs(process, log_reader, genvm_id).await
 }
 
 #[cfg(test)]

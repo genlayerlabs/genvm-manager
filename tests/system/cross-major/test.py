@@ -424,6 +424,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			calldata=gvm_calldata.encode({}),
 			code=code,
 			is_init=True,
+			timeout=10 * 60,
 		)
 		assert result.result_kind == host_fns.ResultCode.RETURN, result
 		assert len(result.execution_hash) == 32, result.execution_hash

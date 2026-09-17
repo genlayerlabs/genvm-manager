@@ -33,6 +33,16 @@ Breaking
 
 #. ZIP :term:`runner` loads charge per-entry metadata in addition to the raw
    archive size and base load cost (see :ref:`runner load charges <gvm-def-runner-load-charge>`)
+#. RAM overheads increase for
+   :ref:`runner loads <gvm-def-consts-value-memory-limiter-consts-runner-load-cost>`,
+   :ref:`emissions <gvm-def-consts-value-memory-limiter-consts-execution-emission-base-size>`,
+   :ref:`message-fee rotations <gvm-def-consts-value-memory-limiter-consts-message-fee-rotation-element-size>`
+   and :ref:`nondeterministic outputs <gvm-def-consts-value-memory-limiter-consts-nondet-output-base-size>`
+#. Each :term:`sub-VM` is limited to
+   :ref:`gvm-def-consts-value-top-limits-max-runners` loaded runners; exceeding
+   the cap exits with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`
+#. VFS paths are limited to
+   :ref:`gvm-def-consts-value-top-limits-vfs-path-len` UTF-8 octets
 #. ``LeaderPublicData`` uses calldata ``{"nd_outs": bytes[]}`` instead of an
    RLP list with a trailing ``padded`` sentinel. Its fee and output-cap
    accounting uses a conservative 64-byte frame plus a 64-byte header and

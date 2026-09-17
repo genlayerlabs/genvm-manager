@@ -823,7 +823,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 						leader_public_data=leader_public_data,
 						message_fee_allocation=message_fee_allocation,
 						unsafe_overrides=base_host.UnsafeOverrides(
-							reroute_to=single_conf.get('reroute_to', reroute_to)
+							reroute_to=single_conf.get('reroute_to', reroute_to),
+							allow_two_workers=single_conf.get('allow_two_workers'),
 						),
 						request_extra=request_extra,
 						# A case may state the major the host claims, for the

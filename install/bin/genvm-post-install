@@ -46,6 +46,25 @@ if has_help_arg:
 genvm_root_dir = Path(__file__).parent.parent
 
 
+def drop_requirement(lines: list[str], name: str) -> list[str]:
+	"""
+	Drop a pin together with the `--hash` lines it continues into; leaving those
+	behind would attach them to the next requirement."""
+	kept = []
+	dropping = False
+	for line in lines:
+		if dropping:
+			dropping = line.rstrip().endswith('\\')
+			continue
+		# Anchored to the pinned name, so a comment or another package that merely
+		# contains it is not dropped along with its hashes.
+		if line.split('==', 1)[0].strip() == name:
+			dropping = line.rstrip().endswith('\\')
+			continue
+		kept.append(line)
+	return kept
+
+
 def requirements_for(base: Path) -> Path:
 	"""
 	The requirements to install into the venv.
@@ -58,7 +77,7 @@ def requirements_for(base: Path) -> Path:
 	if not args.use_patchelf:
 		return base
 
-	kept = [line for line in base.read_text().splitlines() if 'lief' not in line]
+	kept = drop_requirement(base.read_text().splitlines(), 'lief')
 	filtered = genvm_root_dir.joinpath('data', 'venvs', 'requirements-patchelf.txt')
 	filtered.parent.mkdir(parents=True, exist_ok=True)
 	filtered.write_text('\n'.join(kept) + '\n')

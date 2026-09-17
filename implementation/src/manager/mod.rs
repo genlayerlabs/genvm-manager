@@ -35,6 +35,12 @@ pub struct Config {
     pub execution_retention: run::ManagerDuration,
     #[serde(default = "default_max_message_bytes")]
     pub max_message_bytes: usize,
+    #[serde(default = "default_allow_two_workers")]
+    pub allow_two_workers: bool,
+}
+
+fn default_allow_two_workers() -> bool {
+    true
 }
 
 /// Concurrency budget, denominated in gigabytes of RAM.

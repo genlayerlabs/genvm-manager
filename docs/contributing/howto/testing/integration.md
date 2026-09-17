@@ -68,8 +68,7 @@ against the leader's runtime hash
 dev mode, where every execution hash moves
 ([modify-runner.md](../extending/modify-runner.md)), not for a new case. A line
 can stop tracking sidecars altogether by returning `{'save-hashes': False}` from
-`integration()` in its `.genvm-tool.py`, as v0.3.x currently does while its
-hashes still move
+`integration()` in its `.genvm-tool.py`. Both active lines track sidecars
 
 Neither switch turns off the leader-vs-validator/sync comparison: with sidecars
 disabled a non-main mode is compared against the main mode's hash from the same
