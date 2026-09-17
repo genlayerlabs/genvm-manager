@@ -751,6 +751,127 @@ async fn terminal_event_is_published_once() {
     assert!(matches!(rx.has_changed(), Ok(false)));
 }
 
+#[tokio::test]
+async fn process_completion_waits_for_final_logs_on_success_and_error() {
+    use std::io::Write;
+    use std::os::unix::process::ExitStatusExt;
+
+    for failed in [false, true] {
+        let exec = fake_execution(GenVMId(1), None);
+        let (read_fd, write_fd) = create_log_pipe().unwrap();
+        let mut logger = LogAppenderToValue(exec.log_sink.clone());
+        let (release, ready) = tokio::sync::oneshot::channel();
+        let process = async move {
+            let mut writer = std::fs::File::from(write_fd);
+            writeln!(
+                writer,
+                r#"{{"level":"info","audience":"user","message":"final"}}"#
+            )?;
+            if failed {
+                anyhow::bail!("process failed");
+            }
+            Ok(std::process::ExitStatus::from_raw(0))
+        };
+        let logs = async {
+            ready.await.unwrap();
+            read_log_pipe(read_fd, &mut logger).await
+        };
+        let result = collect_process_logs(process, logs, exec.id);
+        tokio::pin!(result);
+
+        assert!(
+            futures_util::poll!(result.as_mut()).is_pending(),
+            "returned before the log reader completed (failed={failed})"
+        );
+        release.send(()).unwrap();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(5), result)
+            .await
+            .unwrap();
+        assert_eq!(result.is_err(), failed);
+        finish_execution(&exec, None, FinishCause::Exited).await;
+        let logs = &exec.result.get().unwrap().genvm_log;
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0]["message"], "final");
+    }
+}
+
+#[tokio::test]
+async fn spawn_failure_closes_the_log_pipe() {
+    let (read_fd, write_fd) = create_log_pipe().unwrap();
+    let process = async {
+        let mut child = tokio::process::Command::new("/dev/null/genvm").spawn()?;
+        drop(write_fd);
+        Ok(child.wait().await?)
+    };
+    let mut logger = LogAppenderToValue(Arc::new(LogSinkInner::new(false)));
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        collect_process_logs(process, read_log_pipe(read_fd, &mut logger), GenVMId(1)),
+    )
+    .await
+    .expect("log pipe remained open after spawn failure");
+    assert!(result.is_err(), "spawn unexpectedly succeeded");
+}
+
+#[tokio::test]
+async fn log_read_failure_preserves_process_status() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let status = std::process::ExitStatus::from_raw(7 << 8);
+    let result = collect_process_logs(
+        async { Ok(status) },
+        async { Err(std::io::Error::other("log read failed")) },
+        GenVMId(1),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result, status);
+}
+
+#[tokio::test]
+async fn only_the_intended_child_inherits_the_log_writer() {
+    let (read_fd, write_fd) = create_log_pipe().unwrap();
+    let mut unrelated = tokio::process::Command::new("bash")
+        .args(["-c", "read -r line"])
+        .stdin(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+
+    let mut command = tokio::process::Command::new("bash");
+    command.args([
+        "-c",
+        r#"printf '%s\n' '{"level":"info","message":"child"}' >&"${1#--log-fd=}""#,
+        "executor",
+    ]);
+    command.kill_on_drop(true);
+    configure_log_pipe(&mut command, &write_fd);
+    let process = async {
+        let mut child = command.spawn()?;
+        drop(write_fd);
+        Ok(child.wait().await?)
+    };
+    let sink = Arc::new(LogSinkInner::new(false));
+    let mut logger = LogAppenderToValue(sink.clone());
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        collect_process_logs(process, read_log_pipe(read_fd, &mut logger), GenVMId(1)),
+    )
+    .await;
+    let unrelated_running = unrelated.try_wait().unwrap().is_none();
+    unrelated.kill().await.unwrap();
+
+    let status = result.expect("unrelated child delayed log EOF").unwrap();
+    assert!(status.success(), "child failed: {status}");
+    assert!(
+        unrelated_running,
+        "unrelated child exited before the EOF check"
+    );
+    let logs = sink.drain();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0]["message"], "child");
+}
+
 #[test]
 fn under_or_at_limit_is_unchanged() {
     let mut s = String::from("hello");

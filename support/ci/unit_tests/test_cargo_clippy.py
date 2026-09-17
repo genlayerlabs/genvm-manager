@@ -63,13 +63,18 @@ def test_failure_without_a_patch_says_so(monkeypatch, clippy, capsys):
 	assert 'rewrote nothing' in capsys.readouterr().out
 
 
-def test_pre_existing_changes_are_disclaimed(monkeypatch, clippy, capsys):
+def test_pre_existing_changes_are_excluded_from_summary(monkeypatch, clippy, capsys):
 	clippy.codes = {'cargo/clippy': 1}
 	monkeypatch.setattr(ci_lib, 'output', lambda _command: 'src/lib.rs')
-	monkeypatch.setattr(ci_lib, 'github_step_summary', lambda _text: None)
+	summary = []
+	monkeypatch.setattr(ci_lib, 'github_step_summary', summary.append)
 
 	assert run() == 1
 	assert 'already dirty' in capsys.readouterr().out
+	assert len(summary) == 1
+	assert 'Patch omitted' in summary[0]
+	assert 'src/lib.rs' not in summary[0]
+	assert '```diff' not in summary[0]
 
 
 def test_summary_patch_is_cut_on_a_line_boundary(monkeypatch):
