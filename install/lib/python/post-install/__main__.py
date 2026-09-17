@@ -18,6 +18,15 @@ if target_os not in ('linux', 'macos'):
 	target_os = 'linux'  # default to linux
 
 
+target_arch = platform.machine()
+target_arch = {
+	'x86_64': 'amd64',
+	'aarch64': 'arm64',
+	'arm64': 'arm64',
+	'amd64': 'amd64',
+}.get(target_arch, 'amd64')
+
+
 def str_to_bool(value):
 	if value.lower() in ('yes', 'true', 't', 'y', '1'):
 		return True
@@ -39,6 +48,15 @@ parser.add_argument(
 	type=str,
 	default=target_os,
 	help='Target operating system (linux/macos)',
+)
+# Callers forwarding a cross-target install pass the whole platform, so the
+# architecture is still accepted; no step acts on it — only the OS decides what
+# is patched and what a binary is checked against.
+parser.add_argument(
+	'--arch',
+	type=str,
+	default=target_arch,
+	help='Target architecture (amd64/arm64)',
 )
 parser.add_argument(
 	'--error-on-missing-executor',
