@@ -948,7 +948,8 @@ components:
               nullable: true
               default: null
               description: |
-                Overrides the manager's `allow_two_workers` config for v0.3+.
+                Overrides the manager's `allow_two_workers` config. v0.2 warns
+                when false and keeps its existing scheduling.
                 Honored from `unsafe` up. Null keeps the configured value.
 
   responses:

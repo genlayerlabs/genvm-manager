@@ -1940,7 +1940,10 @@ fn strict_deadline_from_request(req: &Request) -> chrono::DateTime<chrono::Utc> 
         + chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::hours(24))
 }
 
-fn execution_data_from_request(req: &Request) -> genvm_modules_interfaces::ExecutionData {
+fn execution_data_from_request(
+    req: &Request,
+    config: &super::Config,
+) -> genvm_modules_interfaces::ExecutionData {
     let mut method_hosts = vec![0; host_fns::Methods::SIZE];
     method_hosts[host_fns::Methods::ConsumeResult as usize] = 1;
     method_hosts[host_fns::Methods::RunNested as usize] = 1;
@@ -1949,6 +1952,12 @@ fn execution_data_from_request(req: &Request) -> genvm_modules_interfaces::Execu
     }
 
     genvm_modules_interfaces::ExecutionData {
+        allow_two_workers: if req.debug_mode >= genvm_common::DebugMode::Unsafe {
+            req.unsafe_overrides.allow_two_workers
+        } else {
+            None
+        }
+        .unwrap_or(config.allow_two_workers),
         calldata: req.calldata.clone(),
         message: req.message.clone(),
         host_data: req.host_data.clone(),
@@ -2186,7 +2195,7 @@ impl Ctx {
             // routing as its parent.
             hook_cross_contract_calls: parent_req.hook_cross_contract_calls,
         };
-        let mut execution_data = execution_data_from_request(&req);
+        let mut execution_data = execution_data_from_request(&req, &full_ctx.config);
         execution_data.code = None;
         execution_data.leader_public_data = None;
         execution_data.record_actions.clear();
@@ -2271,7 +2280,7 @@ async fn supervise_genvm_inner(
     modules_lock: Box<dyn std::any::Any + Send + Sync>,
     permits: tokio::sync::OwnedSemaphorePermit,
 ) -> anyhow::Result<()> {
-    let execution_data = execution_data_from_request(&req);
+    let execution_data = execution_data_from_request(&req, &full_ctx.config);
     let result = run_genvm_process(
         full_ctx,
         exec_ctx.clone(),
@@ -2442,13 +2451,6 @@ async fn run_genvm_process(
     // Create log pipe and build command
     let (read_fd, write_fd) = create_log_pipe()?;
     let mut proc = build_genvm_command(command_path, &req, genvm_id, &write_fd);
-    let allow_two_workers = if req.debug_mode >= genvm_common::DebugMode::Unsafe {
-        req.unsafe_overrides.allow_two_workers
-    } else {
-        None
-    }
-    .unwrap_or(full_ctx.config.allow_two_workers);
-    proc.env("GENVM_ALLOW_TWO_WORKERS", allow_two_workers.to_string());
 
     // Setup manager host socketpair (host id=1 for consume_result, run_nested
     // and -- unless the request hooks them -- resolve_call_contract_executor)
