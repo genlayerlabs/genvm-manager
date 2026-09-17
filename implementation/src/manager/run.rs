@@ -957,6 +957,10 @@ pub struct UnsafeOverrides {
     #[serde(default)]
     #[calldata(default = default_initial_recursion)]
     pub initial_recursion: Option<u32>,
+    /// Override worker concurrency from `debug_mode >= Unsafe`.
+    #[serde(default)]
+    #[calldata(default = Option::default)]
+    pub allow_two_workers: Option<bool>,
 }
 
 #[serde_as]
@@ -2438,6 +2442,13 @@ async fn run_genvm_process(
     // Create log pipe and build command
     let (read_fd, write_fd) = create_log_pipe()?;
     let mut proc = build_genvm_command(command_path, &req, genvm_id, &write_fd);
+    let allow_two_workers = if req.debug_mode >= genvm_common::DebugMode::Unsafe {
+        req.unsafe_overrides.allow_two_workers
+    } else {
+        None
+    }
+    .unwrap_or(full_ctx.config.allow_two_workers);
+    proc.env("GENVM_ALLOW_TWO_WORKERS", allow_two_workers.to_string());
 
     // Setup manager host socketpair (host id=1 for consume_result, run_nested
     // and -- unless the request hooks them -- resolve_call_contract_executor)

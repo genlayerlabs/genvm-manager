@@ -943,6 +943,13 @@ components:
               description: |
                 Seeds the chain's recursion budget, replacing the executor's own
                 `VM_RECURSION`. Honored from `unsafe` up.
+            allow_two_workers:
+              type: boolean
+              nullable: true
+              default: null
+              description: |
+                Overrides the manager's `allow_two_workers` config for v0.3+.
+                Honored from `unsafe` up. Null keeps the configured value.
 
   responses:
     ErrorResponse:

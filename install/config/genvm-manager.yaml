@@ -7,6 +7,7 @@ log_disable: tracing*,polling*,tungstenite*,tokio_tungstenite*
 log_level: info
 
 manifest_path: ${exeDir}/../data/manifest.yaml
+allow_two_workers: true # overlap deterministic execution with nondeterministic validation
 permits: # 1 permit is 1 GiB of RAM
   total: null # if null, free memory times `per_gib`
   per_gib: 1 # permits per gibibyte of free memory, an integer or a ratio (1/4 = one permit per 4 GiB)
