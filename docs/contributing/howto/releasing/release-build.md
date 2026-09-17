@@ -37,8 +37,7 @@ All of them go onto a single **genvm-manager** release, tagged with `version`
 from `.genvm-monorepo-root` ([versioning.md](versioning.md)). They overlay onto
 one install root, so a full install is one platform asset plus
 `genvm-universal`. The platform asset already carries every active executor
-line; post-install's executor download is only a fallback for a root missing
-one ([versioning.md](versioning.md))
+line ([versioning.md](versioning.md))
 
 ## Verifying an Asset
 

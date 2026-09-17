@@ -126,6 +126,12 @@ Request payload: the same logical structure as the deprecated
     budget, replacing the executor's own ``VM_RECURSION``, so a boundary test
     need not spend one executor process per unit of budget. Honored from
     ``unsafe``.
+  - ``allow_two_workers`` (bool, optional) -- overrides the manager config of
+    the same name from ``unsafe``. The config defaults to true. In v0.3+, false
+    makes deterministic execution await each submitted nondeterministic
+    validation task before continuing; null keeps the configured value.
+    The manager passes this in the execution input. v0.2 warns when false
+    and keeps its existing scheduling. Nondeterministic calls remain allowed.
 
 Response::
 

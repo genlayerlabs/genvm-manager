@@ -15,6 +15,10 @@ fn default_none<T>() -> Option<T> {
     None
 }
 
+fn default_allow_two_workers() -> bool {
+    true
+}
+
 #[derive(
     Debug,
     Clone,
@@ -24,6 +28,9 @@ fn default_none<T>() -> Option<T> {
     genlayer_calldata::Decode,
 )]
 pub struct ExecutionData {
+    #[serde(default = "default_allow_two_workers")]
+    #[calldata(default = default_allow_two_workers)]
+    pub allow_two_workers: bool,
     pub calldata: Bytes,
     pub message: super::abi_stub::MessageData,
     pub host_data: String,

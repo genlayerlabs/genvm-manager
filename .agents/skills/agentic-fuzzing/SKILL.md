@@ -29,10 +29,9 @@ Sandbox escape and native UB are AFL's job, not this one
 
 ## Before you can find anything
 
-Nothing. The v0.3 line returns `save-hashes: False` from
-`executors/v0.3.x/.genvm-tool.py`, but that only stops the committed `.hash`
-sidecars from being tracked — the leader-vs-validator/sync comparison, which is
-what a severity-2 finding consists of, runs regardless. Leave the setting alone.
+Nothing. The v0.3 line tracks committed `.hash` sidecars. Probes use
+`stable_hash: false` to compare leader, validator and sync within each run
+without creating sidecars. Leave the line's `save-hashes` setting alone.
 
 (It used to be `ignore-hash: True` and it did switch off every comparison,
 including that one. That was a footgun and it is gone.)

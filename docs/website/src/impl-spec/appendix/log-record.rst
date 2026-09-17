@@ -91,3 +91,5 @@ than by age:
    ``user`` or ``operator`` record; ``introspector`` records stay discarded
 
 The marker counts toward the cap. ``unbounded`` capture keeps every record.
+The manager reads each executor's log pipe to EOF before collecting the
+execution result, including on early process exit

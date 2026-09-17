@@ -1,6 +1,5 @@
 import argparse
 import hashlib
-import io
 import json
 import logging
 import os
@@ -8,7 +7,6 @@ import platform
 import shlex
 import shutil
 import subprocess
-import tarfile
 import traceback
 import typing
 from pathlib import Path
@@ -51,6 +49,9 @@ parser.add_argument(
 	default=target_os,
 	help='Target operating system (linux/macos)',
 )
+# Callers forwarding a cross-target install pass the whole platform, so the
+# architecture is still accepted; no step acts on it — only the OS decides what
+# is patched and what a binary is checked against.
 parser.add_argument(
 	'--arch',
 	type=str,
@@ -83,14 +84,6 @@ parser.add_argument(
 	],
 )
 
-step_names = [
-	'executor-download',
-	'runners-download',
-	'bin-patch',
-	'bin-check',
-	'precompile',
-]
-
 parser.add_argument(
 	'--default-steps',
 	type=str_to_bool,
@@ -102,12 +95,6 @@ parser.add_argument(
 	type=str_to_bool_or_none,
 	default=None,
 	help='Default value for download steps (default: use --default-steps)',
-)
-parser.add_argument(
-	'--executor-download',
-	type=str_to_bool_or_none,
-	default=None,
-	help='Enable/disable executor download step (default: use --default-download)',
 )
 parser.add_argument(
 	'--runners-download',
@@ -140,8 +127,6 @@ args = parser.parse_args()
 if args.default_download is None:
 	args.default_download = args.default_steps
 
-if args.executor_download is None:
-	args.executor_download = args.default_download
 if args.runners_download is None:
 	args.runners_download = args.default_download
 if args.bin_patch is None:
@@ -452,6 +437,13 @@ def download_runners_from_json(
 			logger.warning(f'Executor path {file} does not exist, skipping')
 			return
 	logger.info(f'checking that all runners are present for {file}')
+	if not verify_hash:
+		logger.warning(
+			f'!!! downloading runners for {file} WITHOUT hash verification: '
+			'code fetched over the network is written to disk unchecked. It is '
+			'rejected only by the later check-install step, which --precompile=false '
+			'skips entirely'
+		)
 	all_runners = _load_registry(file)
 
 	for name, hashes in all_runners.items():
@@ -488,56 +480,6 @@ def download_runners_from_json(
 			cur_dst.write_bytes(data)
 
 
-def download_executor(executor_version: str):
-	"""
-	Fetch an executor line's tarball and unpack it at the install root.
-
-	A platform release asset already bundles every active line, so this only
-	runs for an install root that lacks one (a `manager-<platform>` tree
-	installed on its own). The tarball is laid out as
-	`executor/<version>/...`, i.e. relative to the install root, so it is
-	unpacked there.
-
-	The tarball must match the sha256 the manager pinned for this platform in
-	its manifest (`executor_versions.<version>.sha256.<platform>`): the download
-	is over plain HTTPS from a release page and is native code, so no hash means
-	no download.
-	"""
-	templates = manifest.get('executor_download_urls', [])
-	if not templates:
-		raise RuntimeError('manifest has no executor_download_urls')
-
-	platform = f'{args.arch}-{args.os}'
-	pinned = manifest['executor_versions'][executor_version].get('sha256') or {}
-	expected = pinned.get(platform)
-	if not isinstance(expected, str):
-		raise RuntimeError(
-			f'manifest pins no sha256 for executor {executor_version} on {platform}; refusing to download'
-		)
-
-	data = _download_template(
-		f'executor {executor_version}',
-		templates,
-		{
-			'version': executor_version,
-			'platform': platform,
-			'arch': args.arch,
-			'os': args.os,
-		},
-	)
-
-	actual = hashlib.sha256(data).hexdigest()
-	if actual != expected.lower():
-		raise RuntimeError(
-			f'sha256 mismatch for executor {executor_version} on {platform}: expected {expected}, got {actual}'
-		)
-
-	with tarfile.open(fileobj=io.BytesIO(data), mode='r:xz') as tar:
-		tar.extractall(genvm_root_dir, filter='data')
-
-	logger.info(f'Unpacked executor {executor_version} into {genvm_root_dir}')
-
-
 all_executor_versions = list(manifest.get('executor_versions', {}).keys())
 all_executor_versions.sort()
 
@@ -566,18 +508,6 @@ def process_executor_version(executor_version: str):
 
 	executor_root_dir = genvm_root_dir.joinpath('executor', executor_version)
 	executor_executable = executor_root_dir.joinpath('bin', 'genvm')
-
-	# A platform asset bundles every line, so this only fetches what a partial
-	# install lacks. A failure here is only fatal if a missing executor is
-	# (--error-on-missing-executor).
-	if args.executor_download and not executor_executable.exists():
-		logger.info(f'Executor {executor_version} is not installed, downloading it')
-		try:
-			download_executor(executor_version)
-		except Exception as e:
-			if args.error_on_missing_executor:
-				raise
-			logger.warning(f'Could not download executor {executor_version}: {e}')
 
 	# Refuse a wrong-OS executor before anything trusts it, regardless of which
 	# steps run (a missing file is a no-op here; missing-file policy is handled

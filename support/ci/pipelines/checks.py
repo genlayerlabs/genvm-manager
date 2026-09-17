@@ -345,10 +345,16 @@ class CargoClippy(ci_lib.Pipeline):
 			diff = _worktree_diff()
 			if diff.strip():
 				print(diff)
-				ci_lib.github_step_summary(
-					'### `cargo clippy` failed\n\n'
-					'Machine-applicable part of the fix:\n\n' + _summary_patch(diff)
-				)
+				if pre_existing:
+					ci_lib.github_step_summary(
+						'### `cargo clippy` failed\n\n'
+						'Patch omitted because the worktree was already dirty before the fix run.'
+					)
+				else:
+					ci_lib.github_step_summary(
+						'### `cargo clippy` failed\n\n'
+						'Machine-applicable part of the fix:\n\n' + _summary_patch(diff)
+					)
 			else:
 				print('`cargo clippy --fix` rewrote nothing; fix the diagnostics by hand')
 
