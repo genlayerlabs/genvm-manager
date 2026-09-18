@@ -61,7 +61,8 @@ the following data:
   the slot it points to (same 4-byte-length-prefixed layout). This lets a contract serve its
   code from an arbitrary slot, including one shared via a ``chain:<address>:<d|f>:<slot>`` runner id.
 - ``permissions``: (offset 37) A 32-byte (``u256``) little-endian permission bitfield read by
-  the executor at the start of every load. Bit ``n`` corresponds to the permission whose value
+  the executor at the start of every load but a deployment, which grants every permission in it
+  instead (see :ref:`gvm-perm-use-balance-for-message-fees`). Bit ``n`` corresponds to the permission whose value
   is ``n`` (currently only bit ``0``, ``can_use_balance_for_message_fees``). It is not reserved:
   contracts may set it (see ``Root.get_permission`` / ``Root.set_permission`` in the Python SDK).
 

@@ -140,3 +140,5 @@ flag has no effect on ``EmitExternalMessage``.
 Unlike the meta-properties above, this one is stored as a bit in the root slot's
 inline ``permissions`` bitfield and read before execution begins. The bit offset
 is the corresponding member of :ref:`gvm-def-enum-permissions`.
+
+A deployment is the exception: permission is granted unconditionally.
