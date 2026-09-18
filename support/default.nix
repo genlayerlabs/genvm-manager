@@ -145,9 +145,27 @@ rec {
     libraries = [ pkgs.python3Packages.ruamel-yaml ];
   } (builtins.readFile ./scripts/patch-web-config.py);
 
+  # nixpkgs pins lief 0.17.0, whose ELF Builder includes NOBITS (.bss/.tbss)
+  # sections in its file-layout calculation. On our large (~290 MB) musl PIE
+  # executor binaries that inflates the computed end-of-file, so `binary.write()`
+  # emits a corrupt section-header table (e_shnum unchanged but trailing entries
+  # garbage). patchelf then fails install_genvm.sh finalize with "data region
+  # extends past file end". Fixed upstream in lief 0.17.6 (commit bff40d6, skip
+  # NOBITS sections in layout + correct e_shstrndx). Pin 0.17.6 here until the
+  # nixpkgs pin catches up. See lief-project/LIEF#1315.
+  lief-fixed = pkgs.python3Packages.lief.overrideAttrs (old: {
+    version = "0.17.6";
+    src = pkgs.fetchFromGitHub {
+      owner = "lief-project";
+      repo = "LIEF";
+      tag = "0.17.6";
+      hash = "sha256-WcWKGIQIGngfzW+VnrZEnRPX2w4syNw+so2aqwSgecw=";
+    };
+  });
+
   patch-rpath = pkgs.writers.writePython3Bin "patch-rpath" {
     doCheck = false;
-    libraries = [ pkgs.python3Packages.lief ];
+    libraries = [ lief-fixed ];
     makeWrapperArgs = [
       "--prefix"
       "PATH"

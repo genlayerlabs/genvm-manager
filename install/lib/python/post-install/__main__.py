@@ -5,8 +5,10 @@ import logging
 import os
 import platform
 import shlex
+import shutil
 import subprocess
 import traceback
+import typing
 from pathlib import Path
 
 target_os = platform.system().lower()
@@ -47,6 +49,9 @@ parser.add_argument(
 	default=target_os,
 	help='Target operating system (linux/macos)',
 )
+# Callers forwarding a cross-target install pass the whole platform, so the
+# architecture is still accepted; no step acts on it — only the OS decides what
+# is patched and what a binary is checked against.
 parser.add_argument(
 	'--arch',
 	type=str,
@@ -58,6 +63,12 @@ parser.add_argument(
 	type=str_to_bool,
 	default=True,
 	help='Whether to error on missing executor',
+)
+parser.add_argument(
+	'--use-patchelf',
+	type=str_to_bool,
+	default=False,
+	help='Set the ELF interpreter with patchelf instead of lief',
 )
 parser.add_argument(
 	'--log-level',
@@ -72,13 +83,6 @@ parser.add_argument(
 		'CRITICAL',
 	],
 )
-
-step_names = [
-	'runners-download',
-	'bin-patch',
-	'bin-check',
-	'precompile',
-]
 
 parser.add_argument(
 	'--default-steps',
@@ -150,10 +154,13 @@ logging.info('Starting actual post-install script')
 # Interpreter patching rewrites the ELF interpreter (dynamic loader) to the
 # bundled one, whose path is only known at install time. It applies to ELF
 # binaries (Linux) only; on other targets the loader is fixed and rpath/needed
-# entries are already set correctly at build time, so lief is not needed.
+# entries are already set correctly at build time, so nothing is needed.
 patch_interpreter = args.bin_patch and args.os == 'linux'
 
-if patch_interpreter:
+# `--use-patchelf` shells out to patchelf instead, so lief — a heavy binary
+# wheel pulled in for this one job — is never imported (nor installed into the
+# venv; see the wrapper).
+if patch_interpreter and not args.use_patchelf:
 	import lief
 
 	lief.logging.set_level(lief.logging.LEVEL.ERROR)
@@ -208,12 +215,7 @@ def get_interpreter_path():
 	return interpreter_path
 
 
-def patch_executable(path: Path):
-	logger.info(f'Patching interpreter for {path}')
-	if not path.exists():
-		logger.warning(f'Path {path} does not exist, skipping patching')
-		return
-
+def _patch_executable_lief(path: Path):
 	binary = lief.parse(path)
 	if not binary:
 		logger.error(f'Failed to parse binary at {path}')
@@ -240,6 +242,105 @@ def patch_executable(path: Path):
 	logger.info(f'Successfully patched interpreter: {path}')
 
 
+def _patch_executable_patchelf(path: Path):
+	patchelf = shutil.which('patchelf')
+	if patchelf is None:
+		raise RuntimeError('--use-patchelf was given but patchelf is not on PATH')
+
+	if detect_executable_platform(path) != 'linux':
+		logger.info(f'{path} is not ELF, nothing to patch')
+		return
+
+	current = subprocess.run(
+		[patchelf, '--print-interpreter', str(path)],
+		capture_output=True,
+		text=True,
+	)
+	if current.returncode == 0:
+		current_interpreter = current.stdout.strip()
+		logger.info(f'Current interpreter: {current_interpreter}')
+		if current_interpreter and Path(current_interpreter).exists():
+			logger.info(
+				f'Interpreter {current_interpreter} exists, skipping interpreter patching'
+			)
+			return
+	else:
+		# A static binary has no interpreter to print; there is nothing to patch.
+		logger.info(f'{path} has no interpreter, nothing to patch')
+		return
+
+	interpreter = get_interpreter_path()
+	subprocess.run(
+		[patchelf, '--set-interpreter', str(interpreter), str(path)],
+		check=True,
+		text=True,
+	)
+	logger.info(f'Successfully patched interpreter: {path} -> {interpreter}')
+
+
+def patch_executable(path: Path):
+	logger.info(f'Patching interpreter for {path}')
+	if not path.exists():
+		logger.warning(f'Path {path} does not exist, skipping patching')
+		return
+
+	if args.use_patchelf:
+		_patch_executable_patchelf(path)
+	else:
+		_patch_executable_lief(path)
+
+
+# linux ships ELF, macos ships Mach-O; these are the only OSes we target.
+BinaryOS = typing.Literal['linux', 'macos']
+
+# Mach-O magics (thin 32/64-bit and universal/fat), in both stored byte orders.
+_MACHO_MAGICS = frozenset(
+	{
+		b'\xfe\xed\xfa\xce',
+		b'\xce\xfa\xed\xfe',
+		b'\xfe\xed\xfa\xcf',
+		b'\xcf\xfa\xed\xfe',
+		b'\xca\xfe\xba\xbe',
+		b'\xbe\xba\xfe\xca',
+		b'\xca\xfe\xba\xbf',
+		b'\xbf\xba\xfe\xca',
+	}
+)
+
+
+def detect_executable_platform(path: Path) -> BinaryOS | None:
+	"""
+	Sniff a binary's header to identify its target OS: ELF -> linux, Mach-O
+	(any variant/byte order) -> macos. Returns None for anything unrecognized
+	(wrapper scripts, truncated/empty files, unknown formats)."""
+	try:
+		with open(path, 'rb') as f:
+			magic = f.read(4)
+	except OSError:
+		return None
+	if magic == b'\x7fELF':
+		return 'linux'
+	if magic in _MACHO_MAGICS:
+		return 'macos'
+	return None
+
+
+def check_executable_platform(path: Path):
+	"""
+	Refuse a wrong-OS binary before we trust it. A bad release once shipped a
+	macOS (Mach-O) executor inside a linux tarball; the missing-only download
+	guard accepted it and it surfaced as an opaque `Exec format error` at
+	runtime. Here we error on a clear OS mismatch instead. Unrecognized formats
+	(None) are left alone rather than guessed at."""
+	detected = detect_executable_platform(path)
+	if detected is not None and detected != args.os:
+		logger.error(
+			f'{path} is a {detected} binary but target OS is {args.os}; '
+			'wrong-platform executor shipped'
+		)
+		raise RuntimeError(f'{path} is a {detected} binary but target OS is {args.os}')
+
+
 def run_check_command(command: list[str | Path]):
 	env = os.environ.copy()
 	env['LLVM_PROFILE_FILE'] = '/dev/null'
@@ -251,6 +352,7 @@ def run_check_command(command: list[str | Path]):
 
 
 modules_executable = genvm_root_dir.joinpath('bin', 'genvm-modules')
+check_executable_platform(modules_executable)
 if patch_interpreter:
 	patch_executable(modules_executable)
 
@@ -319,7 +421,13 @@ def _download_template(descr: str, templates: list[str], vars: dict[str, str]) -
 	raise RuntimeError(f'failed to download {descr}{vars} from all sources')
 
 
-def download_runners_from_json(file: str | Path):
+def download_runners_from_json(
+	file: str | Path, runners_dir: Path, extension: str, verify_hash: bool = True
+):
+	# `verify_hash` is disabled for the v0.2.x legacy line, whose registry hashes
+	# use Nix base32 rather than the Crockford scheme `runner_check_bytes`
+	# understands. Those runners are validated by the executor's own `check`
+	# command (invoked via `manager check-install`) instead.
 	file = Path(file)
 	if not file.exists():
 		if args.error_on_missing_executor:
@@ -329,14 +437,23 @@ def download_runners_from_json(file: str | Path):
 			logger.warning(f'Executor path {file} does not exist, skipping')
 			return
 	logger.info(f'checking that all runners are present for {file}')
+	if not verify_hash:
+		logger.warning(
+			f'!!! downloading runners for {file} WITHOUT hash verification: '
+			'code fetched over the network is written to disk unchecked. It is '
+			'rejected only by the later check-install step, which --precompile=false '
+			'skips entirely'
+		)
 	all_runners = _load_registry(file)
-	runners_dir = genvm_root_dir.joinpath('runners')
 
 	for name, hashes in all_runners.items():
 		for hash in hashes:
-			cur_dst = runners_dir.joinpath(name, hash[:2], hash[2:] + '.tar')
+			cur_dst = runners_dir.joinpath(name, hash[:2], hash[2:] + '.' + extension)
 
 			if cur_dst.exists():
+				if not verify_hash:
+					logger.debug(f'already exists {name}:{hash}, skipping')
+					continue
 				data = cur_dst.read_bytes()
 				if runner_check_bytes(data, hash):
 					logger.debug(f'already exists {name}:{hash}, skipping')
@@ -353,9 +470,10 @@ def download_runners_from_json(file: str | Path):
 					'hash': hash,
 					'hash_0_2': hash[:2],
 					'hash_2_': hash[2:],
+					'ext': extension,
 				},
 			)
-			if not runner_check_bytes(data, hash):
+			if verify_hash and not runner_check_bytes(data, hash):
 				raise ValueError(f'hash mismatch for {name}:{hash}')
 
 			cur_dst.parent.mkdir(parents=True, exist_ok=True)
@@ -391,6 +509,11 @@ def process_executor_version(executor_version: str):
 	executor_root_dir = genvm_root_dir.joinpath('executor', executor_version)
 	executor_executable = executor_root_dir.joinpath('bin', 'genvm')
 
+	# Refuse a wrong-OS executor before anything trusts it, regardless of which
+	# steps run (a missing file is a no-op here; missing-file policy is handled
+	# per-step below). Mirrors the unconditional modules_executable check.
+	check_executable_platform(executor_executable)
+
 	if patch_interpreter or args.bin_check:
 		if not executor_executable.exists():
 			if args.error_on_missing_executor:
@@ -405,16 +528,36 @@ def process_executor_version(executor_version: str):
 		run_check_command([executor_executable, '--version'])
 
 	if args.runners_download:
-		download_runners_from_json(executor_root_dir.joinpath('data', 'all.json'))
-
-	if args.precompile:
-		logger.info(f'Precompiling executor {executor_version}')
-		run_check_command([executor_executable, 'precompile'])
+		# The v0.2.x legacy line keeps its runners private under the executor
+		# root (executor/<version>/legacy-runners, see its genvm.yaml); every
+		# other line shares the manager-root runners/ dir. v0.2.x also uses a
+		# Nix-base32 registry hash this installer can't reproduce, so hash
+		# verification is left to that executor's `check` command, and it packages
+		# its runners as ustar rather than the zip every other line uses.
+		is_legacy = (major, minor) == (0, 2)
+		if is_legacy:
+			runners_dir = executor_root_dir.joinpath('legacy-runners')
+		else:
+			runners_dir = genvm_root_dir.joinpath('runners')
+		download_runners_from_json(
+			executor_root_dir.joinpath('data', 'all.json'),
+			runners_dir,
+			extension='tar' if is_legacy else 'zip',
+			verify_hash=not is_legacy,
+		)
 
 
 # The manifest is authoritative: only versions it lists are processed.
 for executor_version in all_executor_versions:
 	process_executor_version(executor_version)
+
+# Verify installed runners (present, correct hashes, latest ⊆ all) and, when
+# requested, precompile them. This is delegated to the manager's `check-install`
+# subcommand, which fans out to each active executor's own `check` command
+# instead of the executor being precompiled inline above.
+if args.precompile:
+	logger.info('Checking install and precompiling runners via manager')
+	run_check_command([modules_executable, 'manager', 'check-install', '--precompile'])
 
 # Warn about any executor directory present on disk that the manifest does not
 # list (e.g. a stray or locally-built version); it is left untouched.

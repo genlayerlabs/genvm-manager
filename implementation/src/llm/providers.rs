@@ -1,5 +1,4 @@
 use crate::{common::ModuleResult, scripting};
-use anyhow::Context as _;
 use base64::Engine;
 use genvm_common::*;
 
@@ -91,7 +90,7 @@ impl TokenUsage {
 /// clamping and logging avoids the silent wrap that could otherwise under-bill.
 fn narrow_token_count(v: u64) -> u32 {
     u32::try_from(v).unwrap_or_else(|_| {
-        log_error!(value = v; "provider reported token count exceeding u32; saturating to u32::MAX");
+        log_error!(@operator, value = v; "provider reported token count exceeding u32; saturating to u32::MAX");
         u32::MAX
     })
 }
@@ -145,8 +144,12 @@ pub trait Provider {
     ) -> ModuleResult<ProviderResponse<serde_json::Map<String, serde_json::Value>>> {
         let res = self.exec_prompt_json_as_text(ctx, prompt, model).await?;
         let json_str = sanitize_json_str(&res.result);
-        let parsed =
-            serde_json::from_str(&json_str).with_context(|| format!("parsing {json_str:?}"))?;
+        // Unparseable output still cost the operator; charge the usage with an
+        // empty object rather than dropping the tokens by erroring.
+        let parsed = serde_json::from_str(&json_str).unwrap_or_else(|e| {
+            log_warn!(@operator, json = json_str, error = e.to_string(); "unparseable json response, charging usage with empty object");
+            serde_json::Map::new()
+        });
 
         Ok(ProviderResponse::new(parsed, res.tokens))
     }
@@ -163,7 +166,7 @@ pub trait Provider {
         if let Some(val) = result_val {
             Ok(ProviderResponse::new(val, res.tokens))
         } else {
-            log_error!(result:? = res.result; "no result in reason, returning false");
+            log_error!(@operator, result:? = res.result; "no result in reason, returning false");
 
             Ok(ProviderResponse::new(false, res.tokens))
         }
@@ -341,7 +344,7 @@ impl Provider for OpenAICompatible {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", &format!("Bearer {}", &self.config.key))
+            .header("Authorization", &format!("Bearer {}", self.config.key))
             .body(request.clone());
         let res = scripting::send_request_get_lua_compatible_response_json(
             &ctx.metrics,
@@ -369,8 +372,10 @@ impl Provider for OpenAICompatible {
             return Ok(ProviderResponse::new("".into(), tokens));
         }
 
-        let response =
-            response.ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res.body))?;
+        let response = response.unwrap_or_else(|| {
+            log_warn!(@operator, body:serde = res.body; "openai: missing content, charging usage with empty response");
+            ""
+        });
 
         Ok(ProviderResponse::new(response.to_owned(), tokens))
     }
@@ -422,7 +427,7 @@ impl Provider for OpenAICompatible {
             .client
             .post(&url)
             .header("Content-Type", "application/json")
-            .header("Authorization", &format!("Bearer {}", &self.config.key))
+            .header("Authorization", &format!("Bearer {}", self.config.key))
             .body(request.clone());
         let res = scripting::send_request_get_lua_compatible_response_json(
             &ctx.metrics,
@@ -439,7 +444,10 @@ impl Provider for OpenAICompatible {
             .body
             .pointer("/choices/0/message/content")
             .and_then(|v| if v.is_null() { Some("") } else { v.as_str() })
-            .ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res.body))?;
+            .unwrap_or_else(|| {
+                log_warn!(@operator, body:serde = res.body; "openai: missing json content, charging usage with empty response");
+                ""
+            });
 
         Ok(ProviderResponse::new(sanitize_json_str(response), tokens))
     }
@@ -547,7 +555,10 @@ impl Provider for OLlama {
             .as_object()
             .and_then(|v| v.get("response"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res.body))?;
+            .unwrap_or_else(|| {
+                log_warn!(@operator, body:serde = res.body; "ollama: missing response, charging usage with empty response");
+                ""
+            });
         Ok(ProviderResponse::new(response.to_owned(), tokens))
     }
 
@@ -606,7 +617,10 @@ impl Provider for OLlama {
             .as_object()
             .and_then(|v| v.get("response"))
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res.body))?;
+            .unwrap_or_else(|| {
+                log_warn!(@operator, body:serde = res.body; "ollama: missing json response, charging usage with empty response");
+                ""
+            });
         Ok(ProviderResponse::new(sanitize_json_str(response), tokens))
     }
 }
@@ -699,8 +713,10 @@ impl Provider for Gemini {
             return Ok(ProviderResponse::new("".into(), tokens));
         }
 
-        let res =
-            res.ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res_json.body))?;
+        let res = res.unwrap_or_else(|| {
+            log_warn!(@operator, body:serde = res_json.body; "gemini: missing text, charging usage with empty response");
+            ""
+        });
         Ok(ProviderResponse::new(res.into(), tokens))
     }
 
@@ -761,8 +777,10 @@ impl Provider for Gemini {
             return Ok(ProviderResponse::new("{}".to_owned(), tokens));
         }
 
-        let res =
-            res.ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res_json.body))?;
+        let res = res.unwrap_or_else(|| {
+            log_warn!(@operator, body:serde = res_json.body; "gemini: missing json text, charging usage with empty response");
+            ""
+        });
 
         Ok(ProviderResponse::new(sanitize_json_str(res), tokens))
     }
@@ -872,7 +890,10 @@ impl Provider for Anthropic {
             .body
             .pointer("/content/0/text")
             .and_then(|x| x.as_str())
-            .ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res.body))?;
+            .unwrap_or_else(|| {
+                log_warn!(@operator, body:serde = res.body; "anthropic: missing text, charging usage with empty response");
+                ""
+            });
 
         Ok(ProviderResponse::new(String::from(text), tokens))
     }
@@ -945,9 +966,13 @@ impl Provider for Anthropic {
             .body
             .pointer("/content/0/input")
             .and_then(|x| x.as_object())
-            .ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res.body))?;
+            .cloned()
+            .unwrap_or_else(|| {
+                log_warn!(@operator, body:serde = res.body; "anthropic: missing json input, charging usage with empty object");
+                serde_json::Map::new()
+            });
 
-        Ok(ProviderResponse::new(val.clone(), tokens))
+        Ok(ProviderResponse::new(val, tokens))
     }
 
     async fn exec_prompt_bool_reason(
@@ -1015,7 +1040,10 @@ impl Provider for Anthropic {
             .body
             .pointer("/content/0/input/result")
             .and_then(|x| x.as_bool())
-            .ok_or_else(|| anyhow::anyhow!("can't get response field {}", &res.body))?;
+            .unwrap_or_else(|| {
+                log_error!(@operator, body:serde = res.body; "no result in reason, returning false");
+                false
+            });
 
         Ok(ProviderResponse::new(val, tokens))
     }

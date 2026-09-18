@@ -139,7 +139,7 @@ fn create_user_error_stream_handler() -> StreamHandler {
                     ])),
                 );
 
-                let message = genvm_common::calldata::encode_obj(&response);
+                let message = genlayer_calldata::encode_obj(&response);
 
                 if crate::common::write_message(&mut stream, &message)
                     .await

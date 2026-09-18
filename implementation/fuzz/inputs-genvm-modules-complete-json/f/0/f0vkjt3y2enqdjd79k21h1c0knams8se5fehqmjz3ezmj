@@ -1,0 +1,12 @@
+{
+    "fz\t\uabbbbboo": [
+        "bar",
+        "baz\n\\z",
+        123,
+        -123,
+        -1e10,
+        1e20,
+        null,
+        true,
+        f[
+        "bar

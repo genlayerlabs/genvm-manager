@@ -7,13 +7,35 @@ pub mod web;
 
 pub use scripting::filters;
 
+/// code point of the trailing `\uXXXX` escape, if the string ends in one
+fn trailing_unicode_escape(s: &str) -> Option<u32> {
+    let start = s.len().checked_sub(6)?;
+    let b = s.as_bytes();
+
+    if b[start] != b'\\' || b[start + 1] != b'u' {
+        return None;
+    }
+
+    let hex = &s[start + 2..];
+    if !hex.bytes().all(|c| c.is_ascii_hexdigit()) {
+        return None;
+    }
+
+    let slashes = s[..start].bytes().rev().take_while(|&c| c == b'\\').count();
+    if slashes % 2 == 1 {
+        return None;
+    }
+
+    u32::from_str_radix(hex, 16).ok()
+}
+
 pub fn complete_json(partial: &str) -> String {
     let mut result = partial.trim_end().to_string();
 
-    let mut stack = Vec::new();
+    // each frame is (closing char, whether the current object member already has a colon)
+    let mut stack: Vec<(char, bool)> = Vec::new();
     let mut in_string = false;
     let mut escape_next = false;
-    let mut has_colon = false;
 
     for ch in partial.chars() {
         if escape_next {
@@ -24,8 +46,8 @@ pub fn complete_json(partial: &str) -> String {
         match ch {
             '\\' if in_string => escape_next = true,
             '"' => in_string = !in_string,
-            '{' if !in_string => stack.push('}'),
-            '[' if !in_string => stack.push(']'),
+            '{' if !in_string => stack.push(('}', false)),
+            '[' if !in_string => stack.push((']', false)),
             '}' if !in_string => {
                 stack.pop();
             }
@@ -33,10 +55,14 @@ pub fn complete_json(partial: &str) -> String {
                 stack.pop();
             }
             ':' if !in_string => {
-                has_colon = true;
+                if let Some(frame) = stack.last_mut() {
+                    frame.1 = true;
+                }
             }
-            ',' if !in_string && stack.last() == Some(&'}') => {
-                has_colon = false;
+            ',' if !in_string => {
+                if let Some(frame @ ('}', _)) = stack.last_mut() {
+                    frame.1 = false;
+                }
             }
             _ => {}
         }
@@ -79,6 +105,19 @@ pub fn complete_json(partial: &str) -> String {
             }
         }
 
+        // a surrogate pair cut in half leaves a lone surrogate, which JSON rejects
+        while let Some(cp) = trailing_unicode_escape(&result) {
+            let paired = (0xdc00..0xe000).contains(&cp)
+                && trailing_unicode_escape(&result[..result.len() - 6])
+                    .is_some_and(|hi| (0xd800..0xdc00).contains(&hi));
+
+            if paired || !(0xd800..0xe000).contains(&cp) {
+                break;
+            }
+
+            result.truncate(result.len() - 6);
+        }
+
         result.push('"');
     }
 
@@ -89,15 +128,16 @@ pub fn complete_json(partial: &str) -> String {
         // nothing
     } else if result.ends_with(':') {
         result.push_str("null");
-    } else if result.ends_with('-') || result.ends_with('.') || result.ends_with('+') {
-        result.push('0');
-    } else if (result.ends_with('e') || result.ends_with('E'))
-        && result.chars().rev().nth(1).unwrap_or('a').is_ascii_digit()
+    } else if result.ends_with('-')
+        || result.ends_with('.')
+        || result.ends_with('+')
+        || ((result.ends_with('e') || result.ends_with('E'))
+            && result.chars().rev().nth(1).unwrap_or('a').is_ascii_digit())
     {
         result.push('0');
     } else if result.ends_with(',') {
         result.pop();
-    } else if stack.last() == Some(&'}') && !has_colon && !result.ends_with('{') {
+    } else if stack.last() == Some(&('}', false)) && !result.ends_with('{') {
         result.push_str(":null");
     } else {
         const CONSTS: &[&str] = &["true", "false", "null"];
@@ -115,7 +155,7 @@ pub fn complete_json(partial: &str) -> String {
         }
     }
 
-    while let Some(closing) = stack.pop() {
+    while let Some((closing, _)) = stack.pop() {
         result.push(closing);
     }
 

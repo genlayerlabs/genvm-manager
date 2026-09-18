@@ -1,3 +1,5 @@
+// genvm-tool-test-tags: feature-web-request-body, feature-web-request-status, needs-web
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 

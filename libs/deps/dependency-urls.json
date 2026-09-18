@@ -46,12 +46,12 @@
     "fetcher": "fetchzip"
   },
   {
-    "name": "rust-channel-stable-2026-03-05",
-    "original_url": "https://static.rust-lang.org/dist/2026-03-05/channel-rust-stable.toml",
+    "name": "rust-channel-stable-2026-09-03",
+    "original_url": "https://static.rust-lang.org/dist/2026-09-03/channel-rust-stable.toml",
     "alternative_urls": [
-      "https://storage.googleapis.com/genvm-artifacts/channel-rust-stable-2026-03-05.toml"
+      "https://storage.googleapis.com/genvm-artifacts/channel-rust-stable-2026-09-03.toml"
     ],
-    "hash": "sha256-qqF33vNuAdU5vua96VKVIwuc43j4EFeEXbjQ6+l4mO4=",
+    "hash": "sha256-p8h3Sl/YRByZfZTAKXdsvF6xEenXKrXSVvpphmZENH4=",
     "must_preload": false,
     "needed-for": [
       "x86_64-linux",
@@ -65,7 +65,7 @@
       "executor-arm64-macos"
     ],
     "fetcher": "fetchurl",
-    "upload_as": "channel-rust-stable-2026-03-05.toml"
+    "upload_as": "channel-rust-stable-2026-09-03.toml"
   },
   {
     "name": "binaryen-raw-128",
@@ -76,7 +76,8 @@
     "hash": "sha256-0AKDcwjrOLiC5roAsTb9dZqqrxDs2+E5e+2usQwrQgA=",
     "must_preload": false,
     "needed-for": [
-      "runners-all"
+      "runners-all",
+      "artifact-prepack-genvm-universal"
     ],
     "fetcher": "fetchzip"
   },
@@ -89,7 +90,8 @@
     "hash": "sha256-ZSI7b1wc1D3hqx3IqT8dlFVKldUFjQUZ7u48Cn8wbnE=",
     "must_preload": false,
     "needed-for": [
-      "runners-all"
+      "runners-all",
+      "artifact-prepack-genvm-universal"
     ],
     "fetcher": "fetchzip"
   },
@@ -103,7 +105,8 @@
     "hash": "sha256-acY8yFzIRYbrZ2CGODoxLnZuppsP6KZy19I9Yy77pfc=",
     "must_preload": true,
     "needed-for": [
-      "runners-all"
+      "runners-all",
+      "artifact-prepack-genvm-universal"
     ],
     "fetcher": "fetchzip"
   },
@@ -117,7 +120,8 @@
     "hash": "sha256-Uvi4JZPPERK3gym4yoaeTEJwKXF5brBAEN7GgF+iF6g=",
     "must_preload": false,
     "needed-for": [
-      "runners-all"
+      "runners-all",
+      "artifact-prepack-genvm-universal"
     ],
     "fetcher": "fetchzip"
   },
@@ -130,7 +134,8 @@
     "hash": "sha256-5kYA8yUGBeIA8eCRDM8CLWRsvKmNj5nWhl3+zl5RIhU=",
     "must_preload": false,
     "needed-for": [
-      "runners-all"
+      "runners-all",
+      "artifact-prepack-genvm-universal"
     ],
     "fetcher": "fetchzip"
   },
@@ -144,7 +149,8 @@
     "hash": "sha256-3ELGir/E3YS9qWEYQ8SGFrU0md71/pl2QOyUIiH55BQ=",
     "must_preload": false,
     "needed-for": [
-      "runners-all"
+      "runners-all",
+      "artifact-prepack-genvm-universal"
     ],
     "fetcher": "fetchzip"
   },
@@ -238,7 +244,8 @@
     "hash": "sha256-/cyLxhFsfBBQxn4NrhLdbgHjU3YUjYhPnvquWJodcO8=",
     "must_preload": false,
     "needed-for": [
-      "runners-all"
+      "runners-all",
+      "artifact-prepack-genvm-universal"
     ],
     "fetcher": "fetchzip"
   },

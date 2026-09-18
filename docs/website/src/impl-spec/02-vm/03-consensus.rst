@@ -13,40 +13,25 @@ Roles and the ``is_leader`` flag
 A GenVM run is either a *leader* run or a *validator* run, decided once when the
 node starts the run. The supervisor exposes this as
 ``Supervisor::is_leader()`` (``executor/src/rt/supervisor/mod.rs:209``); the flag is
-derived from whether the node has handed in a vector of leader non-deterministic
-results:
+derived from whether the node has handed in opaque leader public data:
 
-- Leader run: ``leader_nondet_results == None``. Every ``RunNondet`` call executes the
+- Leader run: ``leader_public_data == None``. Every ``RunNondet`` call executes the
   leader sub-program and the result is pushed into the supervisor's
   ``nondet_results`` vector, indexed by ``call_no``.
-- Validator run: ``leader_nondet_results == Some(vec)``. ``RunNondet`` retrieves the
-  leader's result at ``call_no`` from this vector and feeds it back to the contract
-  as the second argument of the non-det block. If the leader produced fewer entries
-  than the validator demands, the run aborts with
-  ``VmError::absent_leader_nondet_output``.
+- Validator run: ``leader_public_data == Some(bytes)``. The executor decodes the
+  bytes into the leader's results. ``RunNondet`` retrieves the result at ``call_no``
+  and feeds it back to the contract as the second argument of the non-det block. If
+  the leader produced fewer entries than the validator demands, the run aborts with
+  ``VmError::leader_fault().nondet_output().absent()``.
 
 ``call_no`` is a monotonically increasing counter incremented per ``RunNondet``
-invocation. The hard cap is ``public_abi::top_limits::NONDET_BLOCKS`` (``4096``);
+invocation. The hard cap is ``internal_constants::top_limits::NONDET_BLOCKS`` (``4096``);
 exceeding it produces ``VmError::oom().ram().limit()``. The counter is what binds
 a leader's i-th non-det result to the validator's i-th non-det check — the
 ordering of ``RunNondet`` calls in deterministic code MUST match between leader
 and validator, otherwise the contract is non-replayable.
 
-Leader Output Format
---------------------
-
-Each entry in the leader's ``nondet_results`` vector is a single ``ResultCode``
-byte (the ``public_abi::ResultCode`` enum: ``Return``, ``UserError``, ``VmError``)
-followed by an encoded payload:
-
-- ``Return`` — raw bytes returned by the non-det block.
-- ``UserError`` — either a calldata-encoded value (when the first four bytes are
-  zero, indicating a calldata prefix) or a UTF-8 string fallback.
-- ``VmError`` — UTF-8 error code from
-  :doc:`/spec/appendix/constants` ``vm_error``.
-
-The validator reconstructs an ``rt::vm::RunOk`` from these bytes
-(``genlayer_sdk.rs:1502``) and the contract observes the same value as the leader did.
+The leader data encoding is defined by :ref:`gvm-def-leader-output-format`.
 
 Validator Comparison
 --------------------

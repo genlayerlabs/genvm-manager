@@ -13,6 +13,7 @@ The specification has been split into multiple sections for better organization 
    :caption: Contents:
 
    glossary
+   changelog
    01-core-architecture/index
    02-execution-environment/index
    03-vm/index

@@ -1,9 +1,7 @@
 name: branch / post PR action panel
 
-# When a PR is opened against a dev branch (v<X>-dev) we:
-#   - make sure the action labels exist;
-#   - post the action panel (checklist comment) that replaces the old
-#     /genvm-* slash commands;
+# When a PR is opened against main or a dev branch (v<X>-dev) we:
+#   - post the action panel and document its companion slash commands;
 #   - auto-add `ci-safe` if the PR author has write access, so their PR can
 #     immediately use the panel. For everyone else a write-role maintainer
 #     adds `ci-safe` by hand once the PR is vetted.
@@ -14,8 +12,10 @@ name: branch / post PR action panel
 
 on:
   pull_request_target:
-    branches: ['v*-dev']
-    types: [opened]
+    branches: [main, 'v*-dev']
+    # `edited` catches retargets; `synchronize` migrates panels already posted
+    # by an older workflow revision without a repository-wide write sweep.
+    types: [opened, edited, synchronize]
 
 permissions:
   pull-requests: write
@@ -23,37 +23,64 @@ permissions:
 
 defaults:
   run:
-    shell: bash -x {0}
+    shell: bash -exo pipefail {0}
 
 jobs:
   post:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PR: ${{ github.event.pull_request.number }}
       AUTHOR: ${{ github.event.pull_request.user.login }}
     steps:
-      - name: Ensure action labels exist
+      - name: Post or refresh action panel
         run: |
-          gh label create rtm -R "$GITHUB_REPOSITORY" --color 0e8a16 --description "ready to merge" 2>/dev/null || true
-          gh label create run-full-tests -R "$GITHUB_REPOSITORY" --color fbca04 --description "run full GenVM CI on every push" 2>/dev/null || true
-          gh label create ci-safe -R "$GITHUB_REPOSITORY" --color 5319e7 --description "PR cleared to run CI / panel actions" 2>/dev/null || true
+          labels="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/labels" --jq '.[].name')"
+          force=false
+          if grep -qxF 'run-full-tests' <<<"$labels"; then
+            force=true
+          fi
 
-      - name: Post action panel
-        run: |
-          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$(cat <<'EOF'
+          body="$(cat <<'EOF'
           <!-- genvm-actions -->
           ### GenVM PR actions
 
           Tick a box to run it (the box unticks itself when handled). Actions only run while the PR has the **`ci-safe`** label.
 
-          - [ ] Force run full tests
-          - [ ] Rerun full tests
-          - [ ] Merge into dev
+          <!-- The `action:<id>` markers below are what the handler dispatches on; the wording beside them is free to change. -->
 
-          <sub>Full GenVM CI runs only when **`rtm`** or **`run-full-tests`** is set — "Force run full tests" is a sticky toggle for `run-full-tests`. Adding **`rtm`** marks the PR ready-to-merge and also runs full tests. **Merge** requires: `rtm`, green full tests, green E2E, and the branch 0 commits behind.</sub>
+
+          - [ ] Force run full tests <!-- action:force -->
+          - [ ] Provision executor PRs <!-- action:provision -->
+
+          <details><summary><b>Commands</b></summary>
+
+          - `/genvm-run-tests` — run full tests once for the current manager snapshot
+          - `/merge` — queue the exact manager snapshot through the App-owned E2E merge train
+          </details>
           EOF
           )"
+          if [ "$force" = true ]; then
+            body="${body/- \[ \] Force run full tests/- [x] Force run full tests}"
+          fi
+
+          panel_ids="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments?per_page=100" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- genvm-actions -->"))) | .id')"
+          panel_id="${panel_ids%%$'\n'*}"
+          if [ -z "$panel_id" ]; then
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body "$body"
+            exit 0
+          fi
+
+          while IFS= read -r panel_id; do
+            current="$(gh api "repos/$GITHUB_REPOSITORY/issues/comments/$panel_id" --jq '.body')"
+            if [ "$current" = "$body" ]; then
+              echo "action panel $panel_id is current; skipping"
+              continue
+            fi
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$panel_id" -f "body=$body"
+          done <<<"$panel_ids"
 
       - name: Auto-mark ci-safe for write-access authors
         run: |

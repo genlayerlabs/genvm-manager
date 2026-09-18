@@ -1,3 +1,5 @@
+// genvm-tool-test-tags: feature-web-request-body, needs-web
+
 use std::collections::BTreeMap;
 
 use genvm_common::*;
