@@ -99,16 +99,28 @@ fn build_config(
     sync::DArc<config::Config>,
     Arc<BTreeMap<String, Box<dyn providers::Provider + Send + Sync>>>,
 ) {
+    build_config_with_model_meta(backends, serde_json::Value::Null)
+}
+
+fn build_config_with_model_meta(
+    backends: &[(&FakeBackend, i64, bool)],
+    model_meta: serde_json::Value,
+) -> (
+    sync::DArc<config::Config>,
+    Arc<BTreeMap<String, Box<dyn providers::Provider + Send + Sync>>>,
+) {
     let mut cfg_backends = BTreeMap::new();
     let mut provider_map = BTreeMap::new();
 
     for (fake, priority, supports_json) in backends {
+        let mut model = model_cfg(*supports_json);
+        model.meta = model_meta.clone();
         let backend = config::BackendConfig {
             enabled: true,
             provider: config::Provider::OpenaiCompatible,
             key: "<empty>".to_owned(),
             script_config: config::ScriptBackendConfig {
-                models: BTreeMap::from([("model".to_owned(), model_cfg(*supports_json))]),
+                models: BTreeMap::from([("model".to_owned(), model)]),
                 meta: serde_json::json!({ "priority": priority }),
                 timeout: None,
             },
@@ -164,9 +176,32 @@ async fn run_prompt(
     providers: Arc<BTreeMap<String, Box<dyn providers::Provider + Send + Sync>>>,
     format: llm_iface::OutputFormat,
 ) -> anyhow::Result<String> {
+    run_priced_prompt(
+        config,
+        providers,
+        format,
+        None,
+        primitive_types::U256::zero(),
+    )
+    .await
+}
+
+async fn run_priced_prompt(
+    config: &sync::DArc<config::Config>,
+    providers: Arc<BTreeMap<String, Box<dyn providers::Provider + Send + Sync>>>,
+    format: llm_iface::OutputFormat,
+    time_unit_price: Option<&str>,
+    expected_charge: primitive_types::U256,
+) -> anyhow::Result<String> {
     let user_vm = create_vm(config).await.unwrap();
 
-    let hello = common::tests::get_hello();
+    let mut hello = common::tests::get_hello();
+    if let Some(price) = time_unit_price {
+        Arc::get_mut(&mut hello)
+            .unwrap()
+            .gas_data
+            .insert("genPerTimeUnit".to_owned(), price.to_owned());
+    }
     let metrics = sync::DArc::new(Metrics::default());
     let scripting_ctx = scripting::create_ctx_part(
         &hello,
@@ -210,12 +245,98 @@ async fn run_prompt(
         .call_fn(&user_vm.data.exec_prompt, (ctx_lua, payload, fuel))
         .await?;
     let table = res.as_table().unwrap();
+    assert_eq!(
+        scripting::rat::lua_rat_to_u256(table).unwrap(),
+        expected_charge
+    );
     let data: llm_iface::PromptAnswerData =
         user_vm.vm.from_value(table.get("data").unwrap()).unwrap();
     match data {
         llm_iface::PromptAnswerData::Text(text) => Ok(text.trim().to_lowercase()),
         _ => anyhow::bail!("unexpected non-text answer variant"),
     }
+}
+
+#[tokio::test]
+async fn token_charge_rounds_up_the_total_using_rational_prices() {
+    common::tests::setup();
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    let backend = spawn_fake("priced", vec![200], hits);
+    let (config, providers) = build_config(&[(&backend, 0, true)]);
+
+    for (price, charge) in [
+        ("0", 0u64),
+        ("1", 1),
+        ("4000", 2),
+        ("4001", 3),
+        ("8001/2", 3),
+        ("9007199254742001", 4503599627372),
+    ] {
+        let answer = run_priced_prompt(
+            &config,
+            providers.clone(),
+            llm_iface::OutputFormat::Text,
+            Some(price),
+            primitive_types::U256::from(charge),
+        )
+        .await
+        .unwrap();
+        assert_eq!(answer, "ok");
+    }
+}
+
+#[tokio::test]
+async fn model_meta_overrides_the_token_rate() {
+    common::tests::setup();
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    let backend = spawn_fake("priced", vec![200], hits);
+    for (rate, charge) in [("0", 0u64), ("1/2", 4)] {
+        let (config, providers) = build_config_with_model_meta(
+            &[(&backend, 0, true)],
+            serde_json::json!({ "time_units_per_1k_tokens": rate }),
+        );
+        let answer = run_priced_prompt(
+            &config,
+            providers,
+            llm_iface::OutputFormat::Text,
+            Some("4000"),
+            primitive_types::U256::from(charge),
+        )
+        .await
+        .unwrap();
+        assert_eq!(answer, "ok");
+    }
+}
+
+#[tokio::test]
+async fn invalid_token_rates_fail_before_calling_a_provider() {
+    common::tests::setup();
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    let backend = spawn_fake("priced", vec![200], hits.clone());
+    for rate in [
+        serde_json::json!("-1/4"),
+        serde_json::json!("invalid"),
+        serde_json::json!(0.25),
+        serde_json::json!(false),
+    ] {
+        let (config, providers) = build_config_with_model_meta(
+            &[(&backend, 0, true)],
+            serde_json::json!({ "time_units_per_1k_tokens": rate }),
+        );
+        let error = run_prompt(&config, providers, llm_iface::OutputFormat::Text)
+            .await
+            .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(
+            message.contains("time_units_per_1k_tokens")
+                || message.contains("failed to parse rational"),
+            "unexpected error: {message}"
+        );
+    }
+    assert!(
+        hits.lock().unwrap().is_empty(),
+        "invalid pricing must not call a provider"
+    );
 }
 
 // Higher priority is tried first; an overloaded provider falls through to the
