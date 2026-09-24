@@ -1013,7 +1013,7 @@ pub struct Request {
     #[serde(default)]
     #[calldata(default = default_gas_data)]
     pub gas_data: std::collections::BTreeMap<String, String>,
-    /// Message-fee allocation tree passed alongside the execution.
+    /// Flat allocations with opaque subtree payloads.
     #[serde(default)]
     #[calldata(default = default_message_fee_allocation)]
     pub message_fee_allocation: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
