@@ -286,11 +286,28 @@ after the exact key; executor-only open-bucket recipient wildcards are less spec
 than either. List order therefore cannot make a wildcard shadow an exact allocation.
 
 For internal messages, ``on`` is checked after the allocation key is resolved, so a
-phase mismatch on an exact allocation does not fall through to a wildcard. For
+phase mismatch on an exact allocation does not fall through to a wildcard. Chain
+keys are unique across phases; only synthetic recipient-wildcard entries may
+select different fee parameters by phase. For
 external messages, an exhausted exact allocation spills to the per-recipient
 ``call_key`` wildcard. If neither key has an allocation, the external message uses
 the legacy unallocated path and consumes only its receipt cost. Existing but exhausted
 candidates yield an allocation-budget error.
+
+Entry presence determines matching, independently of ``budget``. The host supplies
+the allowance available at execution start, optionally reduced by prior consumption.
+Zero means an exhausted allocation; ``null`` removes the per-allocation cap while
+keeping the execution's fee buckets. Local consumption is tracked separately.
+An exhausted internal exact key still wins and fails its budget check; it never
+falls through. An absent chain allocation (including a chain record whose original
+budget is zero) must be omitted, not represented by an exhausted entry.
+
+The host must preserve every existing pinned key, including exhausted keys, and
+must not add recipient wildcards to a pinned tree. An empty list restricts internal
+pool-funded emissions. Open-pool and view executions may supply synthetic recipient
+wildcards with concrete fee parameters and phase, and optionally uncapped budgets.
+The executor conservatively treats each emission as novel; remaining allowances
+alone do not identify previously delivered occurrences.
 
 Funding modes
 ~~~~~~~~~~~~~~
@@ -298,9 +315,9 @@ Funding modes
 An outgoing internal message is funded one of two ways:
 
 - **Allocation-matched (default).** The fee is matched against the allocation
-  tree as above. After the expression computes the primary reserve, the executor
-  adds the budgets of the matched node's direct children; deeper budgets are
-  already contained by their direct parent. A declared budget exceeding the
+  list as above. After the expression computes the primary reserve, the executor
+  adds the host-supplied ``children_budget``; deeper budgets are already
+  contained by their direct parent. A declared budget exceeding the
   matched node's remaining ``budget`` is rejected with an allocation-budget
   error; otherwise it consumes ``message_fee`` atomically with the
   ``message_receipt`` charge.
@@ -322,6 +339,25 @@ For either phase, an internal message therefore declares::
 For balance funding the sum is zero. The primary fee already covers the child's
 configured lifecycle, including appeals; the remainder becomes the child's
 message-fee bucket. External messages declare zero
+
+The v0.3 primary reserve includes successful-appellant profit for each configured
+appeal slot. The bond is the next normal round's time-unit cost, including its
+rotations, multiplied by the child's price cap. Its profit reserve is
+``bond + floor(bond / 2)``; the developer/DAO overlay applies only to time-unit
+work, never to this profit reserve
+
+The manager input ``message_fee_allocation`` contains only the allocations matched
+by this execution. Each carries a required ``children_budget`` and opaque
+``subtree`` bytes. The host sums the direct descendants' budgets and encodes
+the matched subtree with any proof required by the transaction's pinned
+storage mode. Both executors forward those bytes unchanged; v0.3 charges their
+full length against receipt gas, submitted-message bytes and memory. The subtree
+includes the matched root; it is not merely an encoding of its descendants
+
+``children_budget`` funds onward messages per emission; it is
+not the unspent allocation allowance or consumption from earlier generations.
+All v0.3 internal emissions reject zero time-unit, storage or receipt price caps
+with ``Inval`` before charging fees or appending an emission
 
 The parent allocation's aggregate capacity is a separate invariant. If
 ``L = appealRounds + 1`` novel executions may each emit a child carrying budget
