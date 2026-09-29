@@ -879,10 +879,37 @@ components:
           type: array
           items:
             type: object
+            required: [recipient, call_key, budget, on, fee_params, children_budget, subtree]
+            properties:
+              recipient:
+                nullable: true
+                description: Recipient address, or null for an open allocation.
+              call_key:
+                nullable: true
+                description: Call key bytes, or null for a wildcard.
+              budget:
+                nullable: true
+                description: Available allowance at execution start; zero is exhausted, null is uncapped. Does not affect key matching.
+              on:
+                type: string
+                enum: [decided, finalized]
+              fee_params:
+                type: object
+                description: Internal or External fee parameters.
+              children_budget:
+                description: Sum of direct descendant allocation budgets, funded per emitted child.
+              subtree:
+                description: Opaque bytes for the matched subtree, including any required Merkle proof.
           default: []
           description: |
-            Message-fee allocation tree. See `MessageAllocationNode` in
-            `crates/modules-interfaces/src/domain/fees/mod.rs` for the node shape.
+            Flat funding allocations. The node supplies the exact subtree transport
+            bytes for the transaction's pinned storage mode. GenVM forwards these bytes
+            unchanged and meters their length. External and open allocations without a
+            committed subtree use empty bytes. children_budget and subtree are required
+            on every entry, including allocations without descendants.
+            Include exhausted allocations with budget zero to preserve internal key
+            precedence; omit allocations absent on-chain. Recipient wildcards are
+            synthetic entries for open-pool or view execution, not chain allocations.
         record_actions:
           type: array
           items:

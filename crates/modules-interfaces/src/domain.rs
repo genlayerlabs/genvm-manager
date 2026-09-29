@@ -45,7 +45,7 @@ pub struct ExecutionData {
     pub bucket_totals: std::collections::BTreeMap<String, num_bigint::BigInt>,
     /// Host-provided `node` fee constants (moved off `host_data`).
     pub gas_data: std::collections::BTreeMap<String, String>,
-    /// Message-fee allocation tree passed alongside the execution.
+    /// Flat allocations with host-encoded subtree payloads.
     pub message_fee_allocation: Vec<fees::MessageAllocationNode>,
     /// Initial time-unit budget for this execution.
     pub initial_time_units_allocation: u32,

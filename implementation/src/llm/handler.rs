@@ -20,6 +20,10 @@ pub struct Inner {
     genvm_id: genvm_modules_interfaces::GenVMId,
 }
 
+#[cfg(test)]
+#[path = "handler_test.rs"]
+mod tests;
+
 type LlmSubContext = crate::manager::execution_context::LlmSubContext;
 
 pub struct Provider {
@@ -180,28 +184,31 @@ impl Inner {
         Ok(llm_iface::PromptAnswer { data, consumed_gen })
     }
 
+    fn is_budget_exhausted(err: &(dyn std::error::Error + 'static)) -> bool {
+        // `scripting::call_fn` unwraps top-level `ExternalError`/`WithContext` into an `Arc`
+        if let Some(ext) = err.downcast_ref::<Arc<dyn std::error::Error + Send + Sync>>() {
+            return Self::is_budget_exhausted(&**ext);
+        }
+        if let Some(cause) = err.downcast_ref::<Arc<mlua::Error>>() {
+            return Self::is_budget_exhausted(&**cause);
+        }
+        match err.downcast_ref::<mlua::Error>() {
+            // walks `CallbackError`, `BadArgument`, `WithContext` and `ExternalError` wrappers
+            Some(lua_err) => lua_err
+                .chain()
+                .any(|e| e.is::<crate::common::BudgetExhausted>()),
+            None => err.is::<crate::common::BudgetExhausted>(),
+        }
+    }
+
     fn try_catch_budget_exhausted(err: anyhow::Error) -> ModuleResult<llm_iface::PromptAnswer> {
-        if err
-            .downcast_ref::<crate::common::BudgetExhausted>()
-            .is_some()
-        {
-            return Ok(llm_iface::PromptAnswer {
-                data: llm_iface::PromptAnswerData::Text(String::new()),
-                consumed_gen: primitive_types::U256::MAX,
-            });
+        if !err.chain().any(Self::is_budget_exhausted) {
+            return Err(err);
         }
-        if let Some(mlua::Error::ExternalError(ext)) = err.downcast_ref::<mlua::Error>() {
-            if ext
-                .downcast_ref::<crate::common::BudgetExhausted>()
-                .is_some()
-            {
-                return Ok(llm_iface::PromptAnswer {
-                    data: llm_iface::PromptAnswerData::Text(String::new()),
-                    consumed_gen: primitive_types::U256::MAX,
-                });
-            }
-        }
-        Err(err)
+        Ok(llm_iface::PromptAnswer {
+            data: llm_iface::PromptAnswerData::Text(String::new()),
+            consumed_gen: primitive_types::U256::MAX,
+        })
     }
 
     async fn exec_prompt(

@@ -56,6 +56,8 @@ disagreement without running the comparison stage
    :ref:`gvm-def-str-trie-vm-error` path, including the canonical spelling of
    any parameter. Codes outside the trie yield
    :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`.
+#. A proposed :ref:`gvm-def-str-trie-value-vm-error-timeout` yields
+   :ref:`gvm-def-str-trie-value-vm-error-leader-fault-nondet-output-malformed`.
 
 An accepted result that passes :ref:`gvm-def-nondeterministic-output-caps` is
 preserved **byte for byte**, so every node hashes the value that was proposed.

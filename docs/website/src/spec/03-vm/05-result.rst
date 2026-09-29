@@ -248,3 +248,6 @@ parameter is the first 6 characters of the :ref:`gvm-def-gvm32` encoding of the
 otherwise have returned — the whole wire buffer as emitted, not a decoded
 payload or alternate representation. No non-deterministic disagreement is caused
 by this.
+
+This check also applies when startup fails before any non-deterministic block,
+including when initial fees cannot be paid. An existing fatal result is preserved.

@@ -274,11 +274,13 @@ M.exec_prompt_template_transform = function(args)
 	local vars = shallow_copy(args)
 	vars.template = nil
 
-	local as_user_text = my_template.user
-	for key, val in pairs(vars) do
-		local val_escaped = string.gsub(val, "%%", "%%%%")
-		as_user_text = string.gsub(as_user_text, "#{" .. key .. "}", val_escaped)
-	end
+	-- Substitute every placeholder in one pass. A replacement returned from
+	-- a function is not rescanned, so a value that itself contains `#{key}`
+	-- (a leader answer, for instance) is inserted literally instead of being
+	-- expanded by a later substitution. Unknown placeholders stay as they are.
+	local as_user_text = string.gsub(my_template.user, "#{([%w_]+)}", function(key)
+		return vars[key]
+	end)
 
 	local format = my_data.format
 

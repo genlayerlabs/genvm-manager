@@ -90,9 +90,8 @@ def _normalize_message_fee_allocation(
 	allocation = allocation.copy()
 	if isinstance(allocation['recipient'], str):
 		allocation['recipient'] = Address(allocation['recipient'])
-	allocation['children'] = [
-		_normalize_message_fee_allocation(child) for child in allocation['children']
-	]
+	if isinstance(allocation['subtree'], list):
+		allocation['subtree'] = bytes(allocation['subtree'])
 	return allocation
 
 
