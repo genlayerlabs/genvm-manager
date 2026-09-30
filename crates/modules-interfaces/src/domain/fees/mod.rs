@@ -77,7 +77,7 @@ pub struct MessageAllocationNode {
     pub recipient: Option<genlayer_calldata::Address>,
     /// `None` means any call key; the node converts the chain's wildcard sentinel.
     pub call_key: Option<crate::abi_stub::CallKey>,
-    /// Available allowance; zero is exhausted, `None` is uncapped.
+    /// Stored chain budget, or a synthetic wildcard's allowance; `None` is uncapped.
     pub budget: Option<U256>,
     pub on: On,
     pub fee_params: MessageAllocationNodeParams,

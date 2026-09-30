@@ -289,8 +289,8 @@ For internal messages, ``on`` is checked after the allocation key is resolved, s
 phase mismatch on an exact allocation does not fall through to a wildcard. Chain
 keys are unique across phases; only synthetic recipient-wildcard entries may
 select different fee parameters by phase. For
-external messages, an exhausted exact allocation spills to the per-recipient
-``call_key`` wildcard. If neither key has an allocation, the external message uses
+external messages, an exact allocation without room for the reservation spills to
+the per-recipient ``call_key`` wildcard. If neither key has a present allocation, the external message uses
 the legacy unallocated path and consumes only its receipt cost. Existing but exhausted
 candidates yield an allocation-budget error.
 
@@ -298,16 +298,19 @@ The default v0.3 fee expressions reject external reservations and receipts with
 ``fee below_minimum`` unless ``node.lockedReceiptGasPrice`` is positive, including
 external messages without a matching allocation
 
-Entry presence determines matching, independently of ``budget``. The host supplies
-the allowance available at execution start, optionally reduced by prior consumption.
-Zero means an exhausted allocation; ``null`` removes the per-allocation cap while
-keeping the execution's fee buckets. Local consumption is tracked separately.
-An exhausted internal exact key still wins and fails its budget check; it never
-falls through. An absent chain allocation (including a chain record whose original
-budget is zero) must be omitted, not represented by an exhausted entry.
+Chain entries, those with a concrete ``recipient``, carry the budget stored on
+chain. Consensus resolves only keys with a nonzero budget, so a chain entry whose
+``budget`` is zero is absent: the message falls through to the per-recipient
+``call_key`` wildcard, and with no wildcard left an internal message fails with
+``fee no_matching_allocation`` while an external one takes the unallocated path.
+Synthetic recipient wildcards match independently of ``budget``; zero there means
+an exhausted allocation. ``null`` removes the per-allocation cap while keeping the
+execution's fee buckets. Local consumption is tracked separately: an internal key
+exhausted by this execution's own emissions still wins and fails its budget check;
+it never falls through.
 
-The host must preserve every existing pinned key, including exhausted keys, and
-must not add recipient wildcards to a pinned tree. An empty list restricts internal
+The host must preserve every existing pinned key and must not add recipient
+wildcards to a pinned tree. An empty list restricts internal
 pool-funded emissions. Open-pool and view executions may supply synthetic recipient
 wildcards with concrete fee parameters and phase, and optionally uncapped budgets.
 The executor conservatively treats each emission as novel; remaining allowances

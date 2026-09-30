@@ -889,7 +889,7 @@ components:
                 description: Call key bytes, or null for a wildcard.
               budget:
                 nullable: true
-                description: Available allowance at execution start; zero is exhausted, null is uncapped. Does not affect key matching.
+                description: Stored chain budget, or the allowance of a synthetic recipient wildcard; null is uncapped. A zero-budget entry with a recipient is absent, as on chain.
               on:
                 type: string
                 enum: [decided, finalized]
@@ -907,8 +907,7 @@ components:
             unchanged and meters their length. External and open allocations without a
             committed subtree use empty bytes. children_budget and subtree are required
             on every entry, including allocations without descendants.
-            Include exhausted allocations with budget zero to preserve internal key
-            precedence; omit allocations absent on-chain. Recipient wildcards are
+            Omit allocations absent on-chain. Recipient wildcards are
             synthetic entries for open-pool or view execution, not chain allocations.
         record_actions:
           type: array
