@@ -54,6 +54,7 @@ fn fake_execution_with_host_id(
         log_sink: Arc::new(LogSinkInner::new(false)),
         consumed_result: tokio::sync::OnceCell::new(),
         process_handle: tokio::sync::Mutex::new(None),
+        spawned: AtomicBool::new(false),
         cancel_requested: AtomicBool::new(false),
         cancel_notify: tokio::sync::Notify::new(),
         finish_cause: std::sync::Mutex::new(None),
@@ -749,6 +750,44 @@ async fn terminal_event_is_published_once() {
         Snapshot::Event(Event::Finished { .. })
     ));
     assert!(matches!(rx.has_changed(), Ok(false)));
+}
+
+#[tokio::test]
+async fn a_failure_after_spawn_is_a_finished_not_a_failed_to_start() {
+    // The protocol distinguishes the two terminal events by whether a process
+    // was created, not by which arm of the stdin `select!` noticed the error.
+    // `report_run_failure` is what production calls for every error out of a
+    // run, so exercising it covers the classification itself.
+    let error = || anyhow::anyhow!("failed to write execution data to child stdin: EPIPE");
+
+    // Spawned: a process exists, so this is a `finished` with no exit code
+    // (the protocol allows a null `exit_code` when it was killed before the
+    // code was known). Reporting `failed_to_start` here told the host no
+    // process ever ran, which is false.
+    let spawned = fake_execution(GenVMId(1), None);
+    spawned.mark_spawned();
+    let mut rx = spawned.events.subscribe();
+    report_run_failure(&spawned, error()).await;
+    match rx.borrow_and_update().clone() {
+        Snapshot::Event(Event::Finished {
+            exit_code, cause, ..
+        }) => {
+            assert_eq!(exit_code, None);
+            assert_eq!(cause, FinishCause::Exited);
+        }
+        other => panic!("spawned run reported {other:?}, expected a finished event"),
+    }
+
+    // Control: the same error with no process is still a `failed_to_start`.
+    // Without this the test would also pass if the branch were removed and
+    // every failure became a `finished`.
+    let never_spawned = fake_execution(GenVMId(2), None);
+    let mut rx = never_spawned.events.subscribe();
+    report_run_failure(&never_spawned, error()).await;
+    assert!(matches!(
+        rx.borrow_and_update().clone(),
+        Snapshot::Event(Event::FailedToStart { .. })
+    ));
 }
 
 #[tokio::test]

@@ -305,6 +305,7 @@ struct SingleGenVMContext {
     consumed_result: tokio::sync::OnceCell<Vec<u8>>,
 
     process_handle: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    spawned: AtomicBool,
     cancel_requested: AtomicBool,
     cancel_notify: tokio::sync::Notify,
     finish_cause: std::sync::Mutex<Option<FinishCause>>,
@@ -329,6 +330,17 @@ impl SingleGenVMContext {
             .read()
             .map(|v| v.clone())
             .unwrap_or_else(|_| String::new())
+    }
+
+    /// Records that `proc.spawn()` returned, so a later failure is classified
+    /// by the protocol's own rule (a process was created) rather than by which
+    /// arm of a `select!` happened to win the race.
+    fn mark_spawned(&self) {
+        self.spawned.store(true, Ordering::SeqCst);
+    }
+
+    fn was_spawned(&self) -> bool {
+        self.spawned.load(Ordering::SeqCst)
     }
 
     fn request_finish(&self, cause: FinishCause) {
@@ -2091,6 +2103,7 @@ impl Ctx {
                 id: genvm_id,
                 host_genvm_id: req.host_genvm_id.clone(),
                 process_handle: tokio::sync::Mutex::new(None),
+                spawned: AtomicBool::new(false),
                 started_at: chrono::Utc::now(),
                 strict_deadline: strict_deadline_from_request(&req),
 
@@ -2269,8 +2282,32 @@ async fn supervise_genvm(
     if let Err(e) =
         supervise_genvm_inner(full_ctx, exec_ctx.clone(), req, modules_lock, permits).await
     {
-        fail_to_start(&exec_ctx, e);
+        report_run_failure(&exec_ctx, e).await;
     }
+}
+
+/// Publishes the terminal event for a run that ended in an error.
+///
+/// The protocol separates `failed_to_start` from `finished` by whether a
+/// process was created, not by which code path noticed the error
+/// (`docs/website/src/impl-spec/appendix/manager-socket.rst`). Once
+/// `proc.spawn()` has returned, the run is a `finished` however it failed, so
+/// the spawned flag decides and the error only decides which of the two to
+/// report. Before the flag existed, an `EPIPE` from the stdin writer and a
+/// completed `child.wait()` raced in the same `select!`, and the loser was
+/// reported as never having started even though a process existed.
+async fn report_run_failure(exec: &SingleGenVMContext, error: anyhow::Error) {
+    if !exec.was_spawned() {
+        fail_to_start(exec, error);
+        return;
+    }
+
+    // No exit status exists: the failure happened before `child.wait()` could
+    // return one, which the protocol allows (`exit_code` is null when the run
+    // was killed before its exit code was known). The error string stays in the
+    // log, since `finished` has no field to carry it.
+    log_warn_into!(@operator, &LoggerWithId, genvm_id:id = exec.id.0, error:ah = error; "executor was spawned but the run failed before its exit status was known");
+    let _ = finish_execution(exec, None, FinishCause::Exited).await;
 }
 
 async fn supervise_genvm_inner(
@@ -2494,6 +2531,11 @@ async fn run_genvm_process(
     let process = async {
         // Spawn child process, then drop child-side FDs
         let mut child = proc.spawn()?;
+        // From here a process exists. The protocol separates `started` from
+        // `failed_to_start` on exactly this fact, so record it before anything
+        // else can fail: a later error is a `finished`, not a
+        // `failed_to_start`, whichever arm of the stdin `select!` reports it.
+        exec_ctx.mark_spawned();
         drop(write_fd);
         log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, pid:? = child.id(); "genvm process started");
         std::mem::drop(module_child_fds);
