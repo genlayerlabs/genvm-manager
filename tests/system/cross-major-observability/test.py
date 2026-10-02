@@ -1,38 +1,22 @@
 """
 Cross-major CallContract observability and determinism integration tests.
 
-This case reuses the real-manager harness from ``tests/system/cross-major``
-without adding more concerns to that already-large case.
+It drives the manager with the shared harness in ``gvm_extra.cross_major``.
 """
 
 import functools
-import importlib.util
-import json
-import pickle
-import sys
-import typing
 from dataclasses import dataclass
 from pathlib import Path
 
-import genvm_tool.io as gvm_io
 import genvm_tool.tests
 import genvm_tool.tests.stage.collection
-from gvm_extra.mock_host import MockStorage
+import origin.calldata as gvm_calldata
+from gvm_extra import cross_major as shared
+from gvm_extra.cross_major import SENDER, contract_source
+from gvm_extra.cross_major import calldata as _calldata
+from gvm_extra.cross_major import leader_public_data as _leader_public_data
 from origin import host_fns, public_abi
 from origin.calldata import Address
-
-
-def _load_cross_major_harness():
-	path = Path(__file__).parents[1] / 'cross-major' / 'test.py'
-	spec = importlib.util.spec_from_file_location('cross_major_system_harness', path)
-	assert spec is not None and spec.loader is not None
-	module = importlib.util.module_from_spec(spec)
-	sys.modules[spec.name] = module
-	spec.loader.exec_module(module)
-	return module
-
-
-base = _load_cross_major_harness()
 
 ADDR_CALLER_V02 = Address('0x' + '41' * 20)
 ADDR_OBSERVER_V03 = Address('0x' + '42' * 20)
@@ -50,7 +34,7 @@ CROSS_MAJOR_RECURSION = 6
 
 
 _contract_source = functools.partial(
-	base._contract_source,
+	contract_source,
 	assets_dir=Path(__file__).resolve().parent / 'assets',
 )
 
@@ -76,35 +60,16 @@ FIXTURES = {
 
 
 @dataclass
-class ObservabilityCase(genvm_tool.tests.test.Case):
-	description: genvm_tool.tests.test.Description
-	shared: genvm_tool.tests.SharedContext
-	manager_service: genvm_tool.tests.stage.collection.Service
-	method: str
-	fixtures: tuple[str, ...]
-	arguments: tuple[typing.Any, ...] = ()
-
+class ObservabilityCase(shared.CrossMajorCase):
 	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
 		return [ObservabilityStep(self)]
 
 
-class ObservabilityStep(base.CrossMajorStep):
+# This case owns its fixtures, addresses and assertions; the host plumbing and
+# the call encoding come from `gvm_extra.cross_major`.
+class ObservabilityStep(shared.CrossMajorStep):
 	async def _run_all(self):
-		root = self.case.shared.root_dir
-		build_info = json.loads((root / 'build' / 'info.json').read_text())
-		self.build_dir = Path(build_info['build_dir'])
-		self.versions = {
-			2: build_info['executor_versions']['v0.2'],
-			3: build_info['executor_versions']['v0.3'],
-		}
-		work_dir = self.case.shared.case_dir_for(self.case.description.name)
-		self.storage_path = work_dir / 'storage.pickle'
-		work_dir.mkdir(parents=True, exist_ok=True)
-		await gvm_io.write_file_bytes(self.storage_path, pickle.dumps(MockStorage()))
-
-		manager = self.case.manager_service.handle
-		assert manager is not None
-		self.manager = manager
+		await self._setup(host_data_tx_id='cross-major-observe')
 
 		self.phase = 'deploy observability fixtures'
 		for line, address, code in (FIXTURES[name] for name in self.case.fixtures):
@@ -112,76 +77,6 @@ class ObservabilityStep(base.CrossMajorStep):
 
 		self.phase = self.case.method
 		await getattr(self, self.case.method)(*self.case.arguments)
-
-	async def _execute(
-		self,
-		*,
-		permissions: str = 'wscn',
-		**kwargs,
-	):
-		name = typing.cast(str, kwargs['name'])
-		address = typing.cast(Address, kwargs['address'])
-		resolve_hook = kwargs.get('resolve_hook')
-		read_log = kwargs.get('read_log')
-		host_fuel = kwargs.get('host_fuel')
-		host = await self._new_host(
-			name,
-			address,
-			resolve_hook,
-			read_log=read_log,
-			host_fuel=host_fuel,
-		)
-		ctx = host.ctx
-		with host as mock_host:
-			try:
-				async with base.base_host.ManagerClient(self.manager.uri) as manager_client:
-					result = await base.base_host.run_genvm(
-						mock_host,
-						manager_uri=self.manager.uri,
-						manager_client=manager_client,
-						ctx=ctx,
-						is_sync=kwargs.get('is_sync', True),
-						leader_public_data=kwargs.get('leader_public_data'),
-						message=base._message(
-							address, is_init=typing.cast(bool, kwargs['is_init'])
-						),
-						host_data='{"node_address":"test","tx_id":"cross-major-observe"}',
-						host='unix://' + mock_host.path,
-						code=base.resolve_runners(
-							typing.cast('bytes | None', kwargs.get('code')),
-							self.case.shared.root_dir,
-						),
-						calldata=typing.cast(bytes, kwargs['calldata']),
-						timeout=kwargs.get('timeout', 30),
-						debug_mode='unsafe',
-						unsafe_overrides=base.base_host.UnsafeOverrides(
-							reroute_to=self.versions[typing.cast(int, kwargs['line'])],
-							initial_recursion=kwargs.get('debug_initial_recursion'),
-						),
-						request_extra={
-							'permissions': permissions,
-							'no_modules': True,
-							'hook_cross_contract_calls': kwargs.get(
-								'hook_cross_contract_calls', True
-							),
-						},
-						bucket_totals=base.base_host.default_bucket_totals(
-							typing.cast(int, kwargs['line'])
-						),
-					)
-				if (
-					kwargs.get('apply_changes', True)
-					and result.result_kind == host_fns.ResultCode.RETURN
-				):
-					assert mock_host.storage is not None
-					base._apply_storage_deltas(
-						mock_host.storage,
-						address,
-						result.result_storage_deltas,
-					)
-				return result
-			finally:
-				await host.stop_connections()
 
 	async def _lvs_extended(self, *, name: str, **kwargs):
 		async def one(suffix: str, **mode):
@@ -248,13 +143,13 @@ class ObservabilityStep(base.CrossMajorStep):
 			name='validator-mode-is-real',
 			line=3,
 			address=ADDR_CHAIN_V03,
-			calldata=base._calldata('hop', 1, ADDR_CHAIN_V02),
+			calldata=_calldata('hop', 1, ADDR_CHAIN_V02),
 			code=None,
 			is_init=False,
 			resolve_hook=self._route_chain,
 			apply_changes=False,
 			is_sync=False,
-			leader_public_data=base._leader_public_data(base.gvm_calldata.encode({})),
+			leader_public_data=_leader_public_data(gvm_calldata.encode({})),
 		)
 		assert bogus.result_kind == host_fns.ResultCode.VM_ERROR, bogus
 
@@ -269,14 +164,14 @@ class ObservabilityStep(base.CrossMajorStep):
 			name='context',
 			line=2,
 			address=ADDR_CALLER_V02,
-			calldata=base._calldata('context', ADDR_OBSERVER_V03),
+			calldata=_calldata('context', ADDR_OBSERVER_V03),
 			resolve_hook=resolve,
 		)
 		expected = {
 			'contract': ADDR_OBSERVER_V03.as_hex,
-			'sender': base.SENDER.as_hex,
-			'origin': base.SENDER.as_hex,
-			'signer': base.SENDER.as_hex,
+			'sender': SENDER.as_hex,
+			'origin': SENDER.as_hex,
+			'signer': SENDER.as_hex,
 			'stack': [ADDR_CALLER_V02.as_hex],
 			'value': 0,
 			'is_init': False,
@@ -292,7 +187,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name='permissions',
 			line=2,
 			address=ADDR_CALLER_V02,
-			calldata=base._calldata('permissions', ADDR_OBSERVER_V03, ADDR_HELPER_V03),
+			calldata=_calldata('permissions', ADDR_OBSERVER_V03, ADDR_HELPER_V03),
 			resolve_hook=self._route_v03,
 			permissions='wscnu',
 		)
@@ -311,7 +206,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name='debug-alias-top-level',
 			line=3,
 			address=ADDR_OBSERVER_V03,
-			calldata=base._calldata('debug_alias'),
+			calldata=_calldata('debug_alias'),
 			code=None,
 			is_init=False,
 			resolve_hook=self._route_v03,
@@ -331,7 +226,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name='debug-alias-nested',
 			line=2,
 			address=ADDR_CALLER_V02,
-			calldata=base._calldata('debug_alias', ADDR_OBSERVER_V03),
+			calldata=_calldata('debug_alias', ADDR_OBSERVER_V03),
 			resolve_hook=self._route_v03,
 		)
 		for result in (leader, validator, sync):
@@ -352,7 +247,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name=f'storage-{permissions}',
 			line=2,
 			address=ADDR_CALLER_V02,
-			calldata=base._calldata('read', ADDR_OBSERVER_V03),
+			calldata=_calldata('read', ADDR_OBSERVER_V03),
 			resolve_hook=self._route_v03,
 			permissions=permissions,
 			read_log=reads,
@@ -369,7 +264,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name=f'self-recursion-{budget}',
 			line=3,
 			address=ADDR_SELF_V03,
-			calldata=base._calldata('observe_recursion', 4),
+			calldata=_calldata('observe_recursion', 4),
 			resolve_hook=self._route_v03,
 			debug_initial_recursion=budget,
 		)
@@ -403,7 +298,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name=f'deep-{depth}',
 			line=3,
 			address=ADDR_CHAIN_V03,
-			calldata=base._calldata('hop', depth, ADDR_CHAIN_V02),
+			calldata=_calldata('hop', depth, ADDR_CHAIN_V02),
 			resolve_hook=self._route_chain,
 		)
 		if depth > CROSS_MAJOR_RECURSION:
@@ -426,7 +321,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name=f'error-{label}',
 			line=2,
 			address=ADDR_CALLER_V02,
-			calldata=base._calldata('answer', target),
+			calldata=_calldata('answer', target),
 			resolve_hook=lambda address, state, major: (
 				self._route(3) if address == target else self._route_v03(address, state, major)
 			),
@@ -447,7 +342,7 @@ class ObservabilityStep(base.CrossMajorStep):
 		await self._assert_error('undeployed', ABSENT)
 
 	async def _assert_non_contract_error(self):
-		await self._assert_error('non-contract', base.SENDER)
+		await self._assert_error('non-contract', SENDER)
 
 	async def _assert_trap_error(self):
 		await self._assert_error('trap', ADDR_TRAP_V03)
@@ -460,7 +355,7 @@ class ObservabilityStep(base.CrossMajorStep):
 			name=f'fuel-{fuel}',
 			line=2,
 			address=ADDR_CALLER_V02,
-			calldata=base._calldata('read', ADDR_OBSERVER_V03),
+			calldata=_calldata('read', ADDR_OBSERVER_V03),
 			resolve_hook=self._route_v03,
 			host_fuel=fuel,
 		)
