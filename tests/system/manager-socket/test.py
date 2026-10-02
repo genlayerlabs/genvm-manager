@@ -402,6 +402,46 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					aiohttp.WSCloseCode.MESSAGE_TOO_BIG,
 				), close_code
 
+	async def _run_returns_id_before_semantic_rejection(self):
+		"""
+		Both semantic rejections the socket used to answer synchronously must now
+		come back as a terminal event, after the genvm_id has been returned.
+		"""
+		async with await self._manager('async-validation') as manager:
+			host_path = manager.work_dir / 'unused-host.sock'
+
+			# `host_hello_data[1]` is manager-owned, so a non-empty slot is a
+			# semantic rejection rather than a malformed frame.
+			async with ManagerWsClient(manager.uri) as client:
+				await _read_hello(client)
+				req = _run_request(self.case.shared.root_dir, host_path)
+				req['run']['host_hello_data'] = [b'', b'injected']
+				await client.send(Methods.RUN, 10, req)
+				method, request_id, payload = await client.read_frame()
+				assert (method, request_id) == (Methods.RUN, 10)
+				genvm_id = payload['genvm_id']
+				variant, event = await _wait_terminal(client, timeout=5)
+				assert variant == 'failed_to_start', variant
+				assert event['genvm_id'] == genvm_id
+				assert 'host index 1' in event['error'], event
+
+			# A request needing modules with the modules stopped is the other
+			# class: it used to answer with an error and no genvm_id.
+			async with ManagerWsClient(manager.uri) as client:
+				await _read_hello(client)
+				req = _run_request(self.case.shared.root_dir, host_path)
+				req['run']['no_modules'] = False
+				req['run']['is_sync'] = False
+				req['run']['permissions'] = 'n'
+				await client.send(Methods.RUN, 20, req)
+				method, request_id, payload = await client.read_frame()
+				assert (method, request_id) == (Methods.RUN, 20)
+				genvm_id = payload['genvm_id']
+				variant, event = await _wait_terminal(client, timeout=5)
+				assert variant == 'failed_to_start', variant
+				assert event['genvm_id'] == genvm_id
+				assert 'modules are required' in event['error'], event
+
 	async def _startup_failure_events_and_permits(self):
 		async with await self._manager('startup-failures') as manager:
 			async with ManagerWsClient(manager.uri) as client:
@@ -954,6 +994,13 @@ def collect(
 		(
 			'startup-failures',
 			'_startup_failure_events_and_permits',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'async-validation',
+			'_run_returns_id_before_semantic_rejection',
 			{},
 			None,
 			genvm.ManagerService,

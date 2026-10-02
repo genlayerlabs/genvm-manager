@@ -491,35 +491,13 @@ where
                 return Ok(());
             }
         };
-        if req
-            .host_hello_data
-            .get(1)
-            .is_some_and(|data| !data.is_empty())
-        {
-            self.writer
-                .error(
-                    request_id,
-                    Errors::MalformedFrame,
-                    "host_hello_data for manager-owned host index 1 is not allowed",
-                )
-                .await?;
-            return Ok(());
-        }
-
+        // `host_hello_data[1]` and a modules-stopped request are rejected by
+        // supervision (`run_genvm_process`), not here: the protocol returns the
+        // genvm_id immediately and reports those failures as a terminal event.
+        // Only the module locks are taken on this path, to pin the handlers
+        // before the run spawns.
         let modules_lock = if req.needs_modules() {
-            match super::modules::Ctx::get_module_locks(self.ctx.gep(|x| &x.mod_ctx)).await {
-                Some(lock) => Some(lock),
-                None => {
-                    self.writer
-                        .error(
-                            request_id,
-                            Errors::Internal,
-                            "modules are required but not running",
-                        )
-                        .await?;
-                    return Ok(());
-                }
-            }
+            super::modules::Ctx::get_module_locks(self.ctx.gep(|x| &x.mod_ctx)).await
         } else {
             None
         };

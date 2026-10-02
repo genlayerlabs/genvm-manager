@@ -142,6 +142,13 @@ and process spawn continue asynchronously and report through ``event``
 notifications. The requesting connection is subscribed to the run's events
 automatically.
 
+Only decoding is synchronous, because the request has to be read before an id
+can be attached to it: calldata that fails to decode, or a payload shape that
+names no ``run``, is answered with ``error``. Everything decided from the
+decoded request is asynchronous and arrives as a terminal event. A non-empty
+``host_hello_data[1]``, which is manager-owned, and a request that needs
+modules while they are stopped, both report ``failed_to_start`` this way.
+
 ``attach``
 ----------
 
