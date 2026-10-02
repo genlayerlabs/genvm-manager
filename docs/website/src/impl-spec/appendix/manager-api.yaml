@@ -889,7 +889,7 @@ components:
                 description: Call key bytes, or null for a wildcard.
               budget:
                 nullable: true
-                description: Stored chain budget, or the allowance of a synthetic recipient wildcard; null is uncapped. A zero-budget entry with a recipient is absent, as on chain.
+                description: Stored chain budget, or the allowance of a synthetic recipient wildcard; null is uncapped. A zero-budget entry with a recipient still matches internal messages and is absent for external ones, as on chain.
               on:
                 type: string
                 enum: [decided, finalized]
