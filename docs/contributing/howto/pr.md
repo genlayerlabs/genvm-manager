@@ -30,6 +30,21 @@ reading the diff
 With `ci-safe` and write access, `/genvm-run-tests` links one run and reacts
 👀 → 🚀/😕 without changing the sticky `run-full-tests` label
 
+## Fast-Forward
+
+`/genvm-fast-forward` lands a PR without the App: it moves the base branch to
+the PR head with a non-force push, so the PR's commits land as they are. It
+refuses, listing every unmet gate, unless:
+
+1. The commenter is an admin, or a writer and the PR head carries an approval
+   from a writer who is neither the author nor the commenter, with no writer's
+   change request
+2. The base is `v<X>-dev`, or `v<X>` for an admin; the PR is not from a fork
+3. `E2E Tests` and every check the base requires succeeded on the head
+4. The head is strictly ahead of the base and has no merge commits
+
+The push then syncs executor branches as any manager push does
+
 ## Gates
 
 `queue.yaml` always runs the pre-commit hooks. On a `pull_request` event it also
@@ -50,7 +65,8 @@ rerun manually against the live manager branch
 
 ## Authority
 
-Needs a maintainer: merging, `--admin`, cross-repo E2E runs, and anything
+Needs a maintainer: merging (a writer may `/genvm-fast-forward` an approved
+PR), `--admin`, cross-repo E2E runs, and anything
 irreversible outside the PR — releases, deploys, messages to other teams. Never
 force-push a shared branch (`v<X>`, `v<X>-dev`); branch protection refuses it
 anyway. Force-pushing your own PR branch is routine and needs no one, and so

@@ -8,6 +8,7 @@ from pipelines import build, checks, docs, release, tests
 from tools import (
 	branches,
 	deploy_docs,
+	fast_forward_command,
 	full_tests_command,
 	make_release_notes,
 	open_executor_prs,
@@ -30,6 +31,7 @@ TOOLS: list[ci_lib.Tool] = [
 	*versions.COMMANDS,
 	*branches.COMMANDS,
 	*deploy_docs.COMMANDS,
+	*fast_forward_command.COMMANDS,
 	*full_tests_command.COMMANDS,
 	*pr_branches.COMMANDS,
 	*make_release_notes.COMMANDS,
