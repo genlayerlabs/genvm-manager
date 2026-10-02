@@ -300,15 +300,15 @@ external messages without a matching allocation
 
 Chain entries, those with a concrete ``recipient``, carry the budget stored on
 chain. For internal messages, presence alone resolves a key: an entry whose
-``budget`` is zero still shadows broader keys and fails emission with
-``out_of message_fee allocation_budget internal``, as does a key exhausted by this
-execution's own emissions; neither falls through. For external messages,
-consensus resolves only chain keys with a nonzero budget, so a zero-budget entry is
-absent: the message falls through to the per-recipient ``call_key`` wildcard, and
-with no wildcard left takes the unallocated path. Synthetic recipient wildcards
-match independently of ``budget``; zero there means an exhausted allocation.
-``null`` removes the per-allocation cap while keeping the execution's fee buckets.
-Local consumption is tracked separately.
+``budget`` is zero still shadows broader keys and, when its phase matches, fails
+emission with ``out_of message_fee allocation_budget internal``, as does a key
+exhausted by this execution's own emissions, tracked separately; neither falls
+through. For external messages, consensus resolves only chain keys with a nonzero
+budget, so a zero-budget entry is absent: the message falls through to the
+per-recipient ``call_key`` wildcard, and with no wildcard left takes the
+unallocated path. Synthetic recipient wildcards match independently of ``budget``;
+zero there means an exhausted allocation. ``null`` removes the per-allocation cap
+while keeping the execution's fee buckets.
 
 The host must preserve every existing pinned key and must not add recipient
 wildcards to a pinned tree. An empty list restricts internal
