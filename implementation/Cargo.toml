@@ -37,13 +37,18 @@ clap = { version = "4.5.35", features = ["derive"] }
 crossbeam = "0.8.4"
 futures-util = "0.3.31"
 hex = "0.4.3"
-image = { version = "0.25.8", features = ["png", "jpeg", "webp"] }
+image = { version = "0.25.8", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+] }
 libc = "0.2"
 num-bigint = { version = "0.4.6", features = ["serde"] }
 num-integer = { version = "0.1.46" }
 num-rational = { version = "0.4.2" }
 num-traits = { version = "0.2.19" }
 papaya = "0.2.3"
+png = { version = "0.18.1", default-features = false }
 primitive-types = { version = "0.13", features = ["impl-serde"] }
 rand = { version = "0.9.1", features = ["std_rng"] }
 regex = "1.11.1"
