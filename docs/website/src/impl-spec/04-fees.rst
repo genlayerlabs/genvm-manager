@@ -345,7 +345,8 @@ For either phase, an internal message therefore declares::
 
 For balance funding the sum is zero. The primary fee already covers the child's
 configured lifecycle, including appeals; the remainder becomes the child's
-message-fee bucket. External messages declare zero
+message-fee bucket. An internal message whose declared amount is zero is rejected
+with ``fee below_minimum`` on both funding paths. External messages declare zero
 
 The v0.3 primary reserve includes successful-appellant profit for each configured
 appeal slot. The bond is the next normal round's time-unit cost, including its
