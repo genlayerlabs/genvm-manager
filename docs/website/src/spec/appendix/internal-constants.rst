@@ -134,6 +134,13 @@ web_render_min_space
 
 Value: ``134217728``
 
+.. _gvm-def-consts-value-top-limits-exec-prompt-min-space:
+
+exec_prompt_min_space
+~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``134217728``
+
 .. _gvm-def-consts-value-top-limits-max-fds:
 
 max_fds

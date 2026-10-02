@@ -115,7 +115,21 @@ impl crate::common::MessageHandler<llm_iface::Message, llm_iface::PromptAnswer> 
                         .into());
                     }
 
-                    if prompt::ImageType::sniff(img.as_ref()).is_none() {
+                    let decodes = match prompt::ImageType::sniff(img.as_ref()) {
+                        None => false,
+                        Some(kind) => {
+                            let img = img.clone();
+                            // a decoder panic is the image's fault, not the manager's
+                            match tokio::task::spawn_blocking(move || kind.decodes(&img)).await {
+                                Ok(decodes) => decodes,
+                                Err(error) => {
+                                    log_warn_into!(@user,&LoggerWithId, genvm_id:id = self.0.genvm_id.0, error:err = error; "image decoder failed");
+                                    false
+                                }
+                            }
+                        }
+                    };
+                    if !decodes {
                         return Err(ModuleError {
                             causes: vec!["INVALID_IMAGE".into()],
                             fatal: false,
