@@ -11,6 +11,5 @@ For tutorials and getting started guides, see the
    :maxdepth: 2
 
    overview/index
-   python-sdk/index
    spec/index
    impl-spec/index

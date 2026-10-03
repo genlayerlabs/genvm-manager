@@ -1,0 +1,134 @@
+name: GenVM postmortem
+description: >-
+  Report runner state after a cell's steps have run: disk, inodes, space by
+  path, memory, surviving processes, kernel OOM/IO errors, and nix substituter
+  config. Diagnoses failures that leave no trace in the failing step's own
+  output — disk/inode exhaustion, the OOM killer, and substituter errors all
+  surface as an unrelated-looking non-zero exit.
+
+  A composite action, not an `incl_*` reusable workflow, because a reusable
+  workflow is a separate job on a fresh runner: it would report a pristine
+  machine instead of the one that just failed.
+
+  Callers gate on `failure()` — a cancel's grace window is too short to spend
+  here — and add `continue-on-error: true`. Linux-only, matching every cell
+  that calls it. Keep double-brace expression syntax out of this file entirely:
+  the runner templates the whole manifest, description included, and rejects
+  workflow-only functions such as `failure()` there.
+runs:
+  using: composite
+  steps:
+    # Never fails the job: `set +e` keeps one probe's failure from skipping the
+    # rest, and the trailing `exit 0` swallows the last probe's status.
+    - shell: bash
+      run: |
+        set +e
+
+        # /dev/shm, not /tmp: scratch must not live on the filesystem being
+        # diagnosed, or inode/space exhaustion silently blanks every probe
+        # that redirects through it.
+        scratch="$(mktemp -d -p /dev/shm 2>/dev/null || mktemp -d)"
+        if [ -z "${scratch}" ] || [ ! -d "${scratch}" ]; then
+          echo "::warning::postmortem: no writable scratch dir; probes degraded"
+          scratch=""
+        fi
+
+        echo "::group::disk free (df -h)"
+        df -h
+        echo "::endgroup::"
+
+        echo "::group::inodes (df -i)"
+        df -i
+        echo "::endgroup::"
+
+        # /nix/store is deliberately absent: `du -s` emits a total only once an
+        # argument completes, so a store walk would eat the whole budget and
+        # starve every path after it. `df` above already covers that
+        # filesystem. `-k 10` because `du` wedged in D-state on a failing disk
+        # ignores SIGTERM, and this step is built for failing disks.
+        echo "::group::space by path (du, 60s budget)"
+        timeout -k 10 60 du -shx \
+          "${GITHUB_WORKSPACE}" \
+          "${RUNNER_TEMP}" \
+          "${HOME}/.cargo" \
+          "${HOME}/.rustup" \
+          >"${scratch:-/dev/null}/du" 2>/dev/null
+        du_rc=$?
+        [ "${du_rc}" -eq 124 ] && echo "(du timed out; totals below are partial)"
+        if [ -s "${scratch:-/nonexistent}/du" ]; then
+          sort -h "${scratch}/du"
+        else
+          echo "(du produced nothing; rc=${du_rc})"
+        fi
+        echo "::endgroup::"
+
+        # free/ps run after the failing step exited, so an OOM-killed hog is
+        # already gone and these render a healthy box. They catch leftover
+        # daemons and give a baseline; `dmesg` below is what sees the kill.
+        echo "::group::memory (post-step; see dmesg for OOM)"
+        free -h
+        swapon --show
+        echo "::endgroup::"
+
+        echo "::group::load"
+        uptime
+        nproc
+        echo "::endgroup::"
+
+        echo "::group::surviving processes by memory (post-step)"
+        # `-rss`, not `-%rss` — procps rejects the latter as an unknown sort
+        # specifier and prints only a usage message.
+        ps -eo pid,ppid,rss,pcpu,etime,comm --sort=-rss 2>/dev/null | head -n 15
+        echo "::endgroup::"
+
+        # The OOM killer reports here and nowhere else: a build that "fails"
+        # with a bare signal 9 and no diagnostic is almost always this.
+        # `sudo -n` so a runner without passwordless sudo fails fast instead of
+        # blocking on a password prompt.
+        echo "::group::kernel log (OOM / IO errors)"
+        if [ -z "${scratch}" ]; then
+          echo "(skipped: no scratch dir)"
+        elif ! sudo -n dmesg -T >"${scratch}/dmesg" 2>"${scratch}/dmesg.err"; then
+          # Distinguished, because "dmesg refused" and "the disk we are
+          # diagnosing ate the redirect" want opposite next steps.
+          echo "(dmesg unavailable: $(tr -d '\n' <"${scratch}/dmesg.err"))"
+        else
+          # Match into a file, then test it: `grep | tail` reports tail's
+          # status, so a no-match branch behind it could never fire.
+          grep -iE 'oom|killed process|out of memory|i/o error|ext4-fs error' \
+            "${scratch}/dmesg" >"${scratch}/oom"
+          if [ -s "${scratch}/oom" ]; then
+            tail -n 30 "${scratch}/oom"
+          else
+            echo "(nothing matched)"
+          fi
+          echo "::endgroup::"
+
+          echo "::group::kernel log (tail)"
+          tail -n 40 "${scratch}/dmesg"
+        fi
+        echo "::endgroup::"
+
+        # Aimed at substituter failures (a truncated NAR fails the job with no
+        # hint of which cache served it): the effective substituter list and
+        # retry knobs are what identify the culprit afterwards. Store *content*
+        # is not probed — nix builds under TMPDIR, not in the store, so a
+        # failed build leaves nothing there to find.
+        echo "::group::nix"
+        if command -v nix >/dev/null 2>&1; then
+          nix --version
+          nix config show 2>/dev/null \
+            | grep -E '^(substituters|extra-substituters|fallback|download-attempts|connect-timeout|stalled-download-timeout) '
+          if [ -d /nix/store ]; then
+            find /nix/store -maxdepth 1 -mindepth 1 -printf . 2>/dev/null \
+              | wc -c | sed 's/^/store entries: /'
+          else
+            echo "store entries: (no /nix/store)"
+          fi
+        else
+          echo "(no nix on PATH)"
+        fi
+        echo "::endgroup::"
+
+        [ -n "${scratch}" ] && rm -rf "${scratch}"
+        exit 0

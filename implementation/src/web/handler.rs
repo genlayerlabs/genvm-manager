@@ -59,6 +59,7 @@ impl common::MessageHandler<web_iface::Message, RenderAnswer> for Handler {
                 let mut wait_after_loaded = payload.wait_after_loaded.as_secs_f64();
                 if wait_after_loaded > max_wait {
                     log_warn!(
+                        @user,
                         requested = wait_after_loaded,
                         max = max_wait;
                         "wait_after_loaded clamped to maximum"
@@ -120,7 +121,7 @@ impl common::MessageHandlerProvider<genvm_modules_interfaces::web::Message, Rend
     ) -> anyhow::Result<
         impl common::MessageHandler<genvm_modules_interfaces::web::Message, RenderAnswer>,
     > {
-        let user_vm = self.vm_pool.get().await;
+        let user_vm = self.vm_pool.get().await?;
 
         let (handler_ctx, ctx_val) = user_vm.create_ctx(&ctx)?;
 

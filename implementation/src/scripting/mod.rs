@@ -162,7 +162,8 @@ impl<T, R, E> UserVM<T, R, E> {
             | StdLib::IO
             | StdLib::STRING
             | StdLib::MATH
-            | StdLib::PACKAGE;
+            | StdLib::PACKAGE
+            | StdLib::OS;
 
         let vm = mlua::Lua::new_with(lua_libs, mlua::LuaOptions::default())?;
 
@@ -223,7 +224,7 @@ where
     P: AsRef<std::path::Path> + Into<String> + std::fmt::Debug,
 {
     let script_contents = std::fs::read_to_string(&path)
-        .with_context(|| format!("reading script from {:?}", &path))?;
+        .with_context(|| format!("reading script from {:?}", path))?;
     let chunk = vm.load(script_contents);
 
     let mut name = String::from("@");

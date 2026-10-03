@@ -158,12 +158,19 @@ class _CountDownLatch:
 		await self._event.wait()
 
 
+# Spawning a service is not yet covered by a Handle's own budget, and the work
+# behind it (`docker run`, say) can wedge before there is anything to time out.
+SPAWN_TIMEOUT = 300.0
+
+
 async def _start_service(ctx: _ExecutionContext, service: Service) -> None:
 	"""Start a service and track its handle."""
 	ctx.shared.logger.info('Starting service', service_name=service.name)
 	try:
-		handle = await service.manager.start()
+		async with asyncio.timeout(SPAWN_TIMEOUT):
+			handle = await service.manager.start()
 		await handle.await_startup()
+		service.handle = handle
 		ctx.running_services[service.name] = handle
 		ctx.shared.logger.info('Service started', service_name=service.name)
 	except Exception as e:
@@ -178,10 +185,11 @@ async def _start_service(ctx: _ExecutionContext, service: Service) -> None:
 async def _stop_service(ctx: _ExecutionContext, service: Service) -> None:
 	"""Stop a running service."""
 	handle = ctx.running_services.pop(service.name, None)
+	service.handle = None
 	if handle is not None:
 		ctx.shared.logger.info('Stopping service', service_name=service.name)
 		try:
-			await handle.interrupt()
+			await handle.shutdown()
 			ctx.shared.logger.info('Service stopped', service_name=service.name)
 		except Exception as e:
 			ctx.shared.logger.error(
@@ -199,7 +207,7 @@ async def _stop_all_services(ctx: _ExecutionContext) -> None:
 		if handle is not None:
 			ctx.shared.logger.info('Stopping service (cleanup)', service_name=name)
 			try:
-				await handle.interrupt()
+				await handle.shutdown()
 			except Exception as e:
 				ctx.shared.logger.error(
 					'Failed to stop service during cleanup',
@@ -250,9 +258,12 @@ async def _run_case(
 						)
 				return
 
-		permits = 1
-		if case.description.console_pool:
-			permits = ctx.semaphore.max_value
+		permits = min(
+			ctx.semaphore.max_value,
+			ctx.semaphore.max_value
+			if case.description.console_pool
+			else max(1, case.description.permits),
+		)
 		await ctx.semaphore.acquire(permits)
 		try:
 			if ctx.should_stop.is_set():
@@ -380,10 +391,17 @@ async def _run_case_locked(ctx: _ExecutionContext, case: genvm_tool.tests.test.C
 		# Mirror the full result (with context) into the per-test log file
 		if file_fmt is not None:
 			sign = 'PASS' if success else 'FAIL'
+			retract_without_ci_flag = [] if ctx.shared.ci else ['raw_result']
+			retracted = {}
+			for k in retract_without_ci_flag:
+				if k in context:
+					retracted[k] = context.pop(k)
 			file_fmt.put(
 				f'{sign} {case.description.name} in {elapsed:.3f}s',
 				**context,
 			)
+			for k, v in retracted.items():
+				context[k] = v
 		if log_file is not None:
 			log_file.close()
 

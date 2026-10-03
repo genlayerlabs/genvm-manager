@@ -1,6 +1,6 @@
 local addOutPaths(entry, data) =
 	local parentPath = data.parentPath;
-	local treePath = if parentPath == null then std.toString(data.i) else parentPath + '_' + std.toString(data.i);
+	local treePath = (if parentPath == null then "" else parentPath + "_") + data.slug;
 	local suff = '.' + treePath;
 	{
 		entry:
@@ -30,16 +30,21 @@ local expandModes(entry, parentMainTreePath) =
 		entries: [
 			local result_path = '${tmpDir}/' + entry.tree_path + m + '/result.pickle';
 			local isLeader = m == 'l';
-			local expected_hash_path =
-				if is_stable_hash
-				then '${jsonnetDir}/${fileBaseName}.' + entry.tree_path + '.hash'
-				else if isLeader
+			// This run's own main-mode artifact: what a non-main mode is
+			// compared against when there is no golden to compare to.
+			local runtime_hash_path =
+				if isLeader
 				then null
 				else if hasLeaderMode
 				then '${tmpDir}/' + entry.tree_path + 'l/hash'
 				else if hasValidatorMode
 				then '${tmpDir}/' + entry.tree_path + 'v/hash'
 				else null
+				;
+			local expected_hash_path =
+				if is_stable_hash
+				then '${jsonnetDir}/${fileBaseName}.' + entry.tree_path + '.hash'
+				else runtime_hash_path
 				;
 			local base =
 				if isLeader
@@ -49,6 +54,12 @@ local expandModes(entry, parentMainTreePath) =
 				mode: m,
 				result_path: result_path,
 				expected_hash_path: expected_hash_path,
+				// Whether that path is a committed golden sidecar, and where to
+				// fall back when a line does not track goldens. A line may stop
+				// pinning hashes across commits; it may not stop comparing the
+				// modes of one run against each other.
+				expected_hash_is_golden: is_stable_hash,
+				runtime_hash_path: runtime_hash_path,
 				tree_path: entry.tree_path + m,
 				depends_on: if m == mainMode then parentMainTreePath else mainTreePath,
 			} +
@@ -63,7 +74,7 @@ local expandModes(entry, parentMainTreePath) =
 local recurse(entries, data) =
 	std.flatMap(function(i)
 		local res = std.foldl((function(acc, nxt) nxt(acc.entry, acc.data)), [addOutPaths], {
-			data: data {i: i},
+			data: data { slug: if std.objectHas(entries[i], 'slug') then entries[i].slug else std.toString(i) },
 			entry: entries[i],
 		});
 

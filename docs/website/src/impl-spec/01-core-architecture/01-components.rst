@@ -116,7 +116,7 @@ software floating point implementation for deterministic mode
 - Curated standard library for deterministic execution
 - Support for some necessary libraries (NumPy, PIL)
 
-GenVM requires some built-in runners to be accessible by contracts. They are identified by hashes of their ``tar`` contents
+GenVM requires some built-in runners to be accessible by contracts. They are identified by hashes of their ``zip`` contents
 
 :term:`Host` Interface
 ~~~~~~~~~~~~~~~~~~~~~~

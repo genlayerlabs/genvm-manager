@@ -6,8 +6,9 @@ import sys
 from pathlib import Path
 
 import genvm_tool.tests
+import genvm_tool_plugins.afl as afl
+import genvm_tool_plugins.source_tags as source_tags
 import tomllib
-from genvm_tool.tests.test import CONST_PASSED
 
 local_ctx = genvm_tool.tests.stage.configuration.current_context()
 
@@ -18,6 +19,23 @@ build_info = json.loads(
 BUILD_DIR = Path(build_info['build_dir'])
 TARGET_DIR = Path(build_info['rust_target_dir'])
 COVERAGE_DIR = Path(build_info['coverage_dir'])
+
+if 'rust_target_dirs' not in build_info or 'rust_target' not in build_info:
+	raise RuntimeError(
+		'build/info.json predates per-line cargo target dirs, re-run `genvm-tool configure`'
+	)
+
+# Line checkout -> its own cargo target dir; see `rust_target_dirs_info`. Falling
+# back to the shared dir on a stale info.json would resurrect the cross-line
+# artifact clobbering this exists to prevent, hence the hard error above.
+_LINE_TARGET_DIRS = {
+	Path(mount): Path(target_dir)
+	for mount, target_dir in build_info['rust_target_dirs'].items()
+}
+
+# Passed to every cargo invocation, matching the ninja build: without it cargo
+# builds a separate host unit graph and shares nothing with what ninja compiled.
+RUST_TARGET = build_info['rust_target']
 
 # Add --coverage flag to run parser
 local_ctx.run_parser.add_argument(
@@ -57,10 +75,6 @@ def _get_default_env() -> dict[str, str]:
 		env['LLVM_PROFILE_FILE'] = str(COVERAGE_DIR / 'cov-%p-%16m.profraw')
 	else:
 		env['LLVM_PROFILE_FILE'] = '/dev/null'
-
-	env['AFL_FUZZER_LOOPCOUNT'] = '20'  # without it no coverage will be written!
-	env['AFL_NO_CFG_FUZZING'] = '1'
-	env['AFL_BENCH_UNTIL_CRASH'] = '1'
 
 	return env
 
@@ -197,12 +211,29 @@ if _is_coverage_enabled():
 	_profile_objects.append(BUILD_DIR / 'out' / 'bin' / 'genvm-modules')
 
 
+def _target_dir(rust_root_dir: Path) -> Path:
+	"""Target dir for a crate: its line's, or the shared one if it is in no line."""
+	rel = rust_root_dir.relative_to(local_ctx.shared.root_dir)
+	for mount, target_dir in _LINE_TARGET_DIRS.items():
+		if rel.is_relative_to(mount):
+			return target_dir
+	return TARGET_DIR
+
+
+def _artifact_dir(target_dir: Path) -> Path:
+	"""Where `--target` puts built artifacts, as opposed to host build scripts."""
+	return target_dir / RUST_TARGET / 'debug'
+
+
 def _load_cargo_config(
-	rust_root_dir: Path, flags_key: str = 'cargo_test_flags'
-) -> tuple[dict, dict[str, str], list[str]]:
-	"""Load .ya-test-config.json and return (config, env, extra_flags)."""
+	ctx: genvm_tool.tests.stage.collection.Context,
+	rust_root_dir: Path,
+	flags_key: str = 'cargo_test_flags',
+) -> tuple[dict, dict[str, str], list[str], dict[str, list[str]]]:
+	"""Load .ya-test-config.json and return config, env, flags and case tags."""
 	test_env = _get_default_env()
 	extra_flags: list[str] = []
+	case_tags: dict[str, list[str]] = {}
 
 	extra_config = rust_root_dir.joinpath('.ya-test-config.json')
 	extra_conf: dict = {}
@@ -212,8 +243,21 @@ def _load_cargo_config(
 		for name in extra_conf.get('keep_env', []):
 			if name in os.environ:
 				test_env[name] = os.environ[name]
+		raw_case_tags = extra_conf.get('tags', {})
+		if not isinstance(raw_case_tags, dict):
+			raise ValueError(f'{extra_config}: tags must be an object')
+		for case_name, raw_tags in raw_case_tags.items():
+			if case_name != 'lib' and not case_name.startswith('bin/'):
+				raise ValueError(f'{extra_config}: invalid tag target {case_name!r}')
+			if not isinstance(raw_tags, list) or not all(
+				isinstance(tag, str) for tag in raw_tags
+			):
+				raise ValueError(
+					f'{extra_config}: tags for {case_name!r} must be a list of strings'
+				)
+			case_tags[case_name] = source_tags.validate_declared(ctx, extra_config, raw_tags)
 
-	return extra_conf, test_env, extra_flags
+	return extra_conf, test_env, extra_flags, case_tags
 
 
 def _add_cargo_case(
@@ -243,7 +287,8 @@ def _add_cargo_case(
 
 
 def _is_skipped(skip_conf, key: str, name: str | None = None) -> bool:
-	"""Check if a test category or specific name is skipped.
+	"""
+	Check if a test category or specific name is skipped.
 
 	skip_conf[key] can be:
 		- true: skip all
@@ -262,25 +307,45 @@ def cargo_test(
 	*,
 	rust_root_dir: Path,
 ):
-	extra_conf, test_env, extra_flags = _load_cargo_config(rust_root_dir)
+	extra_conf, test_env, extra_flags, case_tags = _load_cargo_config(ctx, rust_root_dir)
 	skip_conf = extra_conf.get('skip', {})
 
 	rel_dir = rust_root_dir.relative_to(local_ctx.shared.root_dir)
 
 	cargo_toml = tomllib.loads(rust_root_dir.joinpath('Cargo.toml').read_text())
+	has_lib = 'lib' in cargo_toml or rust_root_dir.joinpath('src', 'lib.rs').exists()
+	bins: list[dict] = list(cargo_toml.get('bin', []))
+	if rust_root_dir.joinpath('src', 'main.rs').exists():
+		pkg_name = cargo_toml.get('package', {}).get('name', rust_root_dir.name)
+		if not any(binary.get('name') == pkg_name for binary in bins):
+			bins.append({'name': pkg_name, 'path': 'src/main.rs'})
+	known_tag_targets = {'lib'} if has_lib else set()
+	known_tag_targets.update(f'bin/{binary["name"]}' for binary in bins)
+	unknown_tag_targets = set(case_tags) - known_tag_targets
+	if unknown_tag_targets:
+		extra_config = rust_root_dir / '.ya-test-config.json'
+		raise ValueError(
+			f'{extra_config}: tags declared for unknown Cargo cases: '
+			f'{", ".join(sorted(unknown_tag_targets))}'
+		)
+
+	target_dir = _target_dir(rust_root_dir)
 
 	# Track deps directory for coverage
 	if _is_coverage_enabled():
-		deps_dir = TARGET_DIR / 'debug' / 'deps'
+		deps_dir = _artifact_dir(target_dir) / 'deps'
 		if deps_dir not in _profile_objects:
 			_profile_objects.append(deps_dir)
 
 	base_cmd = [
 		'cargo',
 		'test',
+		'--message-format=short',
 		'--color=always',
+		'--target',
+		RUST_TARGET,
 		'--target-dir',
-		str(TARGET_DIR),
+		str(target_dir),
 	] + extra_flags
 
 	# 1. Examples - verify compilation
@@ -299,15 +364,18 @@ def cargo_test(
 					'cargo',
 					'check',
 					'--color=always',
+					'--target',
+					RUST_TARGET,
 					'--target-dir',
-					str(TARGET_DIR),
+					str(target_dir),
 					'--example',
 					ex_name,
 				]
 				+ extra_flags,
 				rust_root_dir=rust_root_dir,
 				test_env=test_env,
-				tags=['rust', 'example'],
+				tags=['rust', 'example']
+				+ source_tags.from_source(ctx, rust_root_dir / ex_path),
 			)
 
 	# 2. Test files in tests/
@@ -323,11 +391,10 @@ def cargo_test(
 				command=base_cmd + ['--test', test_name],
 				rust_root_dir=rust_root_dir,
 				test_env=test_env,
-				tags=['rust', 'unit'],
+				tags=['rust', 'unit'] + source_tags.from_source(ctx, test_file),
 			)
 
 	# 3. --lib test
-	has_lib = 'lib' in cargo_toml or rust_root_dir.joinpath('src', 'lib.rs').exists()
 	if has_lib and not _is_skipped(skip_conf, 'lib'):
 		_add_cargo_case(
 			ctx,
@@ -335,19 +402,11 @@ def cargo_test(
 			command=base_cmd + ['--lib'],
 			rust_root_dir=rust_root_dir,
 			test_env=test_env,
-			tags=['rust', 'unit'],
+			tags=['rust', 'unit'] + case_tags.get('lib', []),
 		)
 
 	# 4. --bin tests for every binary
 	if not _is_skipped(skip_conf, 'bins'):
-		bins: list[dict] = list(cargo_toml.get('bin', []))
-
-		# Implicit binary from src/main.rs
-		if rust_root_dir.joinpath('src', 'main.rs').exists():
-			pkg_name = cargo_toml.get('package', {}).get('name', rust_root_dir.name)
-			if not any(b.get('name') == pkg_name for b in bins):
-				bins.append({'name': pkg_name, 'path': 'src/main.rs'})
-
 		for bin_entry in bins:
 			bin_name = bin_entry['name']
 			if _is_skipped(skip_conf, 'bins', bin_name):
@@ -358,7 +417,7 @@ def cargo_test(
 				command=base_cmd + ['--bin', bin_name],
 				rust_root_dir=rust_root_dir,
 				test_env=test_env,
-				tags=['rust', 'unit'],
+				tags=['rust', 'unit'] + case_tags.get(f'bin/{bin_name}', []),
 			)
 
 
@@ -369,35 +428,125 @@ def cargo_fuzz(
 	rust_root_dir: Path,
 	name: str,
 ):
-	desc = desc.with_tags(['rust', 'fuzz'])._replace(
-		console_pool=True,
+	desc = desc.with_tags(
+		['rust', 'fuzz', 'needs-fuzz']
+		+ source_tags.from_source(ctx, rust_root_dir / 'fuzz' / f'{name}.rs')
+	)._replace(
+		**afl.pool_usage(ctx),
 	)
 
-	_extra_conf, test_env, extra_flags = _load_cargo_config(
-		rust_root_dir, 'cargo_afl_build_flags'
+	_extra_conf, test_env, extra_flags, _case_tags = _load_cargo_config(
+		ctx, rust_root_dir, 'cargo_afl_build_flags'
 	)
+
+	target_dir = _target_dir(rust_root_dir)
+
+	# Fake entropy, so that a saved crash replays: `std`'s randomness seeds
+	# tokio's scheduler and every `HashMap`. `test_env` is a fresh copy, keeping
+	# this out of `cargo test`; the shim reaches the target through AFL, which
+	# turns `AFL_PRELOAD` into an `LD_PRELOAD` for the child only.
+	preload_manifest = (
+		local_ctx.shared.root_dir / 'crates' / 'fuzzing' / 'preload' / 'Cargo.toml'
+	)
+	test_env['AFL_PRELOAD'] = str(_artifact_dir(target_dir) / 'libgenvm_fuzz_preload.so')
+	# A target with a mutator crate next to it takes its input as a serialized
+	# value, and the crate mutates that value structurally instead of editing
+	# its bytes.
+	#
+	# AFL's own mutations are deliberately left on. `AFL_CUSTOM_MUTATOR_ONLY`
+	# looks right — a havoc'd buffer usually fails to decode, and the target
+	# rejects it — but it measures worse: on `genvm-common-encode` over 15s,
+	# 20.55% coverage with `_ONLY` against 27.48% without, and 24.07% for the
+	# `arbitrary` generator this replaced. A rejected input costs one cheap
+	# execution, while the ones that do decode reach values the structural
+	# mutator does not propose. Set `GENVM_FUZZ_MUTATOR_ONLY=1` to compare.
+	mutator_manifest = rust_root_dir / 'fuzz' / 'mutators' / name / 'Cargo.toml'
+	if mutator_manifest.is_file():
+		library = f'libfuzz_mutator_{name.replace("-", "_")}.so'
+		test_env['AFL_CUSTOM_MUTATOR_LIBRARY'] = str(_artifact_dir(target_dir) / library)
+		if os.environ.get('GENVM_FUZZ_MUTATOR_ONLY') == '1':
+			test_env['AFL_CUSTOM_MUTATOR_ONLY'] = '1'
+	else:
+		mutator_manifest = None
+
+	out_dir = afl.output_dir(local_ctx.shared, rust_root_dir, name)
+
+	fuzz_binary = _artifact_dir(target_dir) / 'examples' / f'fuzz-{name}'
 
 	# Track fuzz binary for coverage
 	if _is_coverage_enabled():
-		fuzz_binary = TARGET_DIR / 'debug' / 'examples' / f'fuzz-{name}'
 		if fuzz_binary not in _profile_objects:
 			_profile_objects.append(fuzz_binary)
+
+	inputs_dir = rust_root_dir / 'fuzz' / f'inputs-{name}'
+	fuzz_env = afl.environment(test_env)
+	# Drops one "attempting dry run" line per corpus entry; seeds are calibrated
+	# lazily instead, so broken ones surface when they are first fuzzed. Rust
+	# only: python-afl's forkserver does not survive skipping the dry run
+	fuzz_env['AFL_NO_STARTUP_CALIBRATION'] = '1'
+	# `fuzz_env` is the whole environment of this case, secondaries included, so
+	# what the builds below need lives in it too
+	fuzz_env['CARGO'] = 'cargo'
 
 	steps: list[genvm_tool.tests.exec.step.Step] = []
 	steps.extend(
 		[
 			genvm_tool.tests.exec.step.SetCwd(path=rust_root_dir),
 		]
-		+ [genvm_tool.tests.exec.step.SetEnv(key=k, value=v) for k, v in test_env.items()]
-		+ [genvm_tool.tests.exec.step.SetEnv(key='CARGO', value='cargo')]
+		# The builds below need the AFL env too: without `AFL_NO_CFG_FUZZING` the
+		# example is built with `--cfg fuzzing`, which pulls `libfuzzer-sys` in
+		# through a dependency and collides with AFL's own coverage runtime
+		+ [genvm_tool.tests.exec.step.SetEnv(key=k, value=v) for k, v in fuzz_env.items()]
+		+ [
+			genvm_tool.tests.exec.step.Run(
+				args=[
+					'cargo',
+					'build',
+					'--manifest-path',
+					str(preload_manifest),
+					'--target',
+					RUST_TARGET,
+					'--target-dir',
+					target_dir,
+					'--color=always',
+				],
+				mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE,
+			),
+			genvm_tool.tests.test.CommandToResultStep(),
+			genvm_tool.tests.test.ResultStopIfErrorStep(),
+		]
+		+ (
+			[]
+			if mutator_manifest is None
+			else [
+				genvm_tool.tests.exec.step.Run(
+					args=[
+						'cargo',
+						'build',
+						'--manifest-path',
+						str(mutator_manifest),
+						'--target',
+						RUST_TARGET,
+						'--target-dir',
+						target_dir,
+						'--color=always',
+					],
+					mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE,
+				),
+				genvm_tool.tests.test.CommandToResultStep(),
+				genvm_tool.tests.test.ResultStopIfErrorStep(),
+			]
+		)
 		+ [
 			genvm_tool.tests.exec.step.Run(
 				args=[
 					'cargo-afl',
 					'afl',
 					'build',
+					'--target',
+					RUST_TARGET,
 					'--target-dir',
-					TARGET_DIR,
+					target_dir,
 					'--example',
 					f'fuzz-{name}',
 					'--color=always',
@@ -407,88 +556,48 @@ def cargo_fuzz(
 			),
 			genvm_tool.tests.test.CommandToResultStep(),
 			genvm_tool.tests.test.ResultStopIfErrorStep(),
-			genvm_tool.tests.exec.step.MkDir(
-				path=local_ctx.shared.artifacts_dir / 'fuzz' / name
-			),
-			genvm_tool.tests.exec.step.Run(
-				args=[
-					'cargo-afl',
-					'afl',
-					'fuzz',
-					'-c',
-					'-',
-					'-M',
-					'main',
-					'-i',
-					f'./fuzz/inputs-{name}',
-					'-o',
-					f'{local_ctx.shared.artifacts_dir}/fuzz/{name}',
-					'-V',
-					str(getattr(ctx.configuration.args, 'fuzz_timeout', 30)),
-					'-t',
-					'5000',
-					f'{TARGET_DIR}/debug/examples/fuzz-{name}',
-				],
-				mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE_TTY,
-			),
-			genvm_tool.tests.test.CommandToResultStep(),
-			genvm_tool.tests.test.ResultStopIfErrorStep(),
 		]
 	)
-
-	if getattr(ctx.configuration.args, 'fuzz_update_corpus', False):
-		opt_dir = local_ctx.shared.artifacts_dir.joinpath('fuzz/', f'{name}-opt')
-
-		async def remove_opt_dir(_):
-			if opt_dir.exists():
-				shutil.rmtree(opt_dir, ignore_errors=True)
-			opt_dir.mkdir(parents=True, exist_ok=True)
-
-		inputs_dir = rust_root_dir.joinpath('fuzz', f'inputs-{name}')
-
-		async def remove_inputs_dir(_):
-			if inputs_dir.exists():
-				shutil.rmtree(inputs_dir, ignore_errors=True)
-			inputs_dir.mkdir(parents=True, exist_ok=True)
-
-		steps.append(genvm_tool.tests.exec.step.PythonFunction(remove_opt_dir))
-		steps.append(
-			genvm_tool.tests.exec.step.Run(
-				args=[
-					'cargo-afl',
-					'afl',
-					'cmin',
-					'-T',
-					'all',
-					'-o',
-					f'{local_ctx.shared.artifacts_dir}/fuzz/{name}-opt',
-					'-i',
-					f'{local_ctx.shared.artifacts_dir}/fuzz/{name}',
-					'--',
-					f'{TARGET_DIR}/debug/examples/fuzz-{name}',
-				],
-				mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE,
-			)
+	steps.extend(
+		afl.fleet_steps(
+			ctx,
+			cwd=rust_root_dir,
+			env=fuzz_env,
+			inputs_dir=inputs_dir,
+			out_dir=out_dir,
+			launcher=['cargo-afl', 'afl', 'fuzz'],
+			target=[fuzz_binary],
+			status_command=['cargo-afl', 'afl', 'whatsup', '-s', out_dir],
+			# A persistent-mode target expects a forkserver, so replaying an input
+			# means going through AFL rather than piping it into the binary. The
+			# preload has to come along, or the replay reseeds itself
+			replay=(
+				f'AFL_PRELOAD={fuzz_env["AFL_PRELOAD"]} '
+				f'cargo-afl afl showmap -o /dev/null -- {fuzz_binary} <'
+			),
 		)
-		steps.extend(
-			[
-				genvm_tool.tests.test.CommandToResultStep(),
-				genvm_tool.tests.test.ResultStopIfErrorStep(),
-				genvm_tool.tests.exec.step.PythonFunction(remove_inputs_dir),
-			]
+	)
+
+	steps.extend(
+		afl.corpus_update_steps(
+			ctx,
+			inputs_dir=inputs_dir,
+			out_dir=out_dir,
+			cmin_command=lambda queue_dir, opt_dir: [
+				'cargo-afl',
+				'afl',
+				'cmin',
+				'-T',
+				'all',
+				'-o',
+				opt_dir,
+				'-i',
+				queue_dir,
+				'--',
+				fuzz_binary,
+			],
 		)
-		steps.append(
-			genvm_tool.tests.exec.step.Run(
-				args=[
-					sys.executable,
-					f'{local_ctx.shared.root_dir}/runners/genlayer-py-std/fuzz/resave.py',
-					opt_dir,
-					inputs_dir,
-				],
-				mode=genvm_tool.tests.exec.command.RunMode.INTERACTIVE,
-			)
-		)
-		steps.append(CONST_PASSED)
+	)
 
 	case = genvm_tool.tests.test.StepsCase(
 		description=desc,

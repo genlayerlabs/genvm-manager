@@ -18,8 +18,9 @@ There are two independent notions of "version" in play:
 Detection from contract bytes
 -----------------------------
 
-``executor/src/runners/parse.rs::detect_version_from_wasm`` walks the WASM custom sections
-and returns the contents of the ``genvm.version`` section as the runner version string.
+``executor/src/runners/parse.rs::describe_wasm`` walks the WASM custom sections in one
+pass and returns the contents of the ``genvm.version`` section as the runner version
+string, alongside the optional ``genvm.runner.json`` section.
 When the contract is not a raw WASM but a zip-packaged archive the version is read from
 the ``version`` file in the archive. For single-file text contracts (Python source) the
 first comment line is inspected: if it starts with ``v`` it is taken as the version
@@ -36,7 +37,8 @@ The request body is the raw contract bytecode; the response is::
    { "specified_major": <u8> }
 
 The node MUST store the returned value in the contract's :ref:`genvm-def-root-slot` at
-offset ``4`` (the ``major`` field — see :doc:`/spec/04-contract-interface/03-storage`).
+offset :ref:`gvm-def-consts-value-root-offsets-major`. See
+:doc:`/spec/04-contract-interface/03-storage` for the root-slot layout.
 On every subsequent load :term:`GenVM` re-reads that byte and refuses to execute when it
 does not match its own ``CURRENT_MAJOR``. Without this check a node running a newer
 GenVM could silently mis-interpret an older contract's calldata or storage.
@@ -44,8 +46,9 @@ GenVM could silently mis-interpret an older contract's calldata or storage.
 Runner manifest
 ---------------
 
-The manager maintains an executor version manifest (the JSON document published as
-:doc:`available-runners` and shipped at ``doc/website/src/impl-spec/appendix/runners-versions.json``).
+The manager maintains an executor version manifest (the per-line available-runners
+listing, generated as ``runners-versions.json`` and published on each executor
+line's docs sub-site).
 For every supported runner version it lists the content hashes of every runtime artifact
 (``cpython``, ``py-genlayer``, ``py-lib-genlayer-std``, ``softfloat``, ...). When a contract
 selects a runner version (via its ``runner.json`` or the bundled `StartWasm` action) the

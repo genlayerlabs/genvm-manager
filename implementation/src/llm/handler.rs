@@ -20,6 +20,10 @@ pub struct Inner {
     genvm_id: genvm_modules_interfaces::GenVMId,
 }
 
+#[cfg(test)]
+#[path = "handler_test.rs"]
+mod tests;
+
 type LlmSubContext = crate::manager::execution_context::LlmSubContext;
 
 pub struct Provider {
@@ -59,7 +63,7 @@ impl MessageHandlerProvider<genvm_modules_interfaces::llm::Message, llm_iface::P
         impl MessageHandler<genvm_modules_interfaces::llm::Message, llm_iface::PromptAnswer>,
     > {
         let genvm_id = ctx.scripting.hello.genvm_id;
-        let user_vm = self.vm_pool.get().await;
+        let user_vm = self.vm_pool.get().await?;
 
         let (handler_ctx, ctx_val) = user_vm.create_ctx(&ctx)?;
 
@@ -89,7 +93,7 @@ impl crate::common::MessageHandler<llm_iface::Message, llm_iface::PromptAnswer> 
         match message {
             llm_iface::Message::Prompt {
                 payload,
-                remaining_fuel_as_gen,
+                remaining_time_fee_gen_wei,
             } => {
                 if payload.images.len() > 2 {
                     return Err(ModuleError {
@@ -111,7 +115,21 @@ impl crate::common::MessageHandler<llm_iface::Message, llm_iface::PromptAnswer> 
                         .into());
                     }
 
-                    if prompt::ImageType::sniff(img.as_ref()).is_none() {
+                    let decodes = match prompt::ImageType::sniff(img.as_ref()) {
+                        None => false,
+                        Some(kind) => {
+                            let img = img.clone();
+                            // a decoder panic is the image's fault, not the manager's
+                            match tokio::task::spawn_blocking(move || kind.decodes(&img)).await {
+                                Ok(decodes) => decodes,
+                                Err(error) => {
+                                    log_warn_into!(@user,&LoggerWithId, genvm_id:id = self.0.genvm_id.0, error:err = error; "image decoder failed");
+                                    false
+                                }
+                            }
+                        }
+                    };
+                    if !decodes {
                         return Err(ModuleError {
                             causes: vec!["INVALID_IMAGE".into()],
                             fatal: false,
@@ -121,15 +139,15 @@ impl crate::common::MessageHandler<llm_iface::Message, llm_iface::PromptAnswer> 
                     }
                 }
                 self.0
-                    .exec_prompt(self.0.clone(), payload, remaining_fuel_as_gen)
+                    .exec_prompt(self.0.clone(), payload, remaining_time_fee_gen_wei)
                     .await
             }
             llm_iface::Message::PromptTemplate {
                 payload,
-                remaining_fuel_as_gen,
+                remaining_time_fee_gen_wei,
             } => {
                 self.0
-                    .exec_prompt_template(self.0.clone(), payload, remaining_fuel_as_gen)
+                    .exec_prompt_template(self.0.clone(), payload, remaining_time_fee_gen_wei)
                     .await
             }
         }
@@ -180,37 +198,38 @@ impl Inner {
         Ok(llm_iface::PromptAnswer { data, consumed_gen })
     }
 
+    fn is_budget_exhausted(err: &(dyn std::error::Error + 'static)) -> bool {
+        // `scripting::call_fn` unwraps top-level `ExternalError`/`WithContext` into an `Arc`
+        if let Some(ext) = err.downcast_ref::<Arc<dyn std::error::Error + Send + Sync>>() {
+            return Self::is_budget_exhausted(&**ext);
+        }
+        if let Some(cause) = err.downcast_ref::<Arc<mlua::Error>>() {
+            return Self::is_budget_exhausted(&**cause);
+        }
+        match err.downcast_ref::<mlua::Error>() {
+            // walks `CallbackError`, `BadArgument`, `WithContext` and `ExternalError` wrappers
+            Some(lua_err) => lua_err
+                .chain()
+                .any(|e| e.is::<crate::common::BudgetExhausted>()),
+            None => err.is::<crate::common::BudgetExhausted>(),
+        }
+    }
+
     fn try_catch_budget_exhausted(err: anyhow::Error) -> ModuleResult<llm_iface::PromptAnswer> {
-        if err
-            .downcast_ref::<crate::common::BudgetExhausted>()
-            .is_some()
-        {
-            return Ok(llm_iface::PromptAnswer {
-                data: llm_iface::PromptAnswerData::Text(String::new()),
-                consumed_gen: primitive_types::U256::MAX,
-            });
+        if !err.chain().any(Self::is_budget_exhausted) {
+            return Err(err);
         }
-        if let Some(mlua_err) = err.downcast_ref::<mlua::Error>() {
-            if let mlua::Error::ExternalError(ext) = mlua_err {
-                if ext
-                    .downcast_ref::<crate::common::BudgetExhausted>()
-                    .is_some()
-                {
-                    return Ok(llm_iface::PromptAnswer {
-                        data: llm_iface::PromptAnswerData::Text(String::new()),
-                        consumed_gen: primitive_types::U256::MAX,
-                    });
-                }
-            }
-        }
-        Err(err)
+        Ok(llm_iface::PromptAnswer {
+            data: llm_iface::PromptAnswerData::Text(String::new()),
+            consumed_gen: primitive_types::U256::MAX,
+        })
     }
 
     async fn exec_prompt(
         &self,
         _zelf: Arc<Inner>,
         payload: llm_iface::PromptPayload,
-        remaining_fuel_as_gen: primitive_types::U256,
+        remaining_time_fee_gen_wei: primitive_types::U256,
     ) -> ModuleResult<llm_iface::PromptAnswer> {
         log_debug_into!(&LoggerWithId, payload:serde = payload, genvm_id:id = self.genvm_id.0; "exec_prompt start");
 
@@ -218,13 +237,13 @@ impl Inner {
             .user_vm
             .vm
             .to_value_with(&payload, scripting::DEFAULT_LUA_SER_OPTIONS)?;
-        let fuel = self.u256_to_lua_rat(remaining_fuel_as_gen)?;
+        let time_fee_gen_wei = self.u256_to_lua_rat(remaining_time_fee_gen_wei)?;
 
         let res: Result<mlua::Value, _> = self
             .user_vm
             .call_fn(
                 &self.user_vm.data.exec_prompt,
-                (self.ctx_val.clone(), payload, fuel),
+                (self.ctx_val.clone(), payload, time_fee_gen_wei),
             )
             .await;
 
@@ -242,7 +261,7 @@ impl Inner {
         &self,
         _zelf: Arc<Inner>,
         payload: llm_iface::PromptTemplatePayload,
-        remaining_fuel_as_gen: primitive_types::U256,
+        remaining_time_fee_gen_wei: primitive_types::U256,
     ) -> ModuleResult<llm_iface::PromptAnswer> {
         log_debug_into!(&LoggerWithId, payload:serde = payload, genvm_id:id = self.genvm_id.0; "exec_prompt_template start");
 
@@ -250,13 +269,13 @@ impl Inner {
             .user_vm
             .vm
             .to_value_with(&payload, scripting::DEFAULT_LUA_SER_OPTIONS)?;
-        let fuel = self.u256_to_lua_rat(remaining_fuel_as_gen)?;
+        let time_fee_gen_wei = self.u256_to_lua_rat(remaining_time_fee_gen_wei)?;
 
         let res: Result<mlua::Value, _> = self
             .user_vm
             .call_fn(
                 &self.user_vm.data.exec_prompt_template,
-                (self.ctx_val.clone(), payload, fuel),
+                (self.ctx_val.clone(), payload, time_fee_gen_wei),
             )
             .await;
 
