@@ -681,7 +681,10 @@ components:
     Address:
       type: string
       format: hex
-      description: 20-byte Ethereum-style address as hex string
+      description: |
+        20-byte Ethereum-style address. On the calldata wire this is an address
+        value, not a string: encoding it as `Str` is rejected as
+        `malformed_frame`.
       example: "0x1234567890abcdef1234567890abcdef12345678"
 
     ExecutorSelector:
@@ -750,13 +753,17 @@ components:
         signer_address:
           $ref: '#/components/schemas/Address'
         chain_id:
-          type: string
-          description: Chain ID as big integer string
-          example: "1"
+          type: integer
+          description: |
+            Chain ID, as a big integer on the calldata wire. A string is
+            rejected as `malformed_frame`.
+          example: 1
         value:
-          type: string
-          description: Transaction value as big integer string
-          example: "0"
+          type: integer
+          description: |
+            Transaction value, as a big integer on the calldata wire. A string
+            is rejected as `malformed_frame`.
+          example: 0
         is_init:
           type: boolean
           description: Whether this is a contract initialization call
@@ -812,11 +819,12 @@ components:
           type: object
           minProperties: 1
           additionalProperties:
-            type: string
+            type: integer
           description: |
-            Per-bucket data-fee balances, as big integer strings keyed by the
-            non-empty names the executor's fee config references. No default:
-            a request that omits it is rejected.
+            Per-bucket data-fee balances, keyed by the non-empty names the
+            executor's fee config references. Each value is a big integer on the
+            calldata wire; a string is rejected as `malformed_frame`. No
+            default: a request that omits it is rejected.
         host_data:
           type: string
           description: Host-specific data as JSON string

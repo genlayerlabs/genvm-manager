@@ -1000,6 +1000,211 @@ fn request_schema_matches_the_rust_struct() {
     assert_eq!(documented_properties("GenvmRunRequest"), accepted);
 }
 
+/// Pins the types the schema has to agree with, by borrowing each field as the
+/// type the decoder actually expects.
+///
+/// The closure is never called; it is here because its body is type-checked
+/// anyway, which is the whole point. Retyping a field on [`Request`] or
+/// `MessageData` stops this compiling, so the schema assertions below cannot
+/// quietly go stale. Written as borrows rather than a destructure so there is no
+/// field list to keep in sync by hand.
+#[test]
+fn the_documented_types_are_the_types_the_decoder_expects() {
+    #[allow(unused_variables)]
+    let types_are_pinned = |request: &Request| {
+        let _: &genvm_modules_interfaces::MessageData = &request.message;
+        let _: &bool = &request.is_sync;
+        let _: &u64 = &request.max_execution_minutes;
+        let _: &std::collections::BTreeMap<String, num_bigint::BigInt> = &request.bucket_totals;
+        let _: &String = &request.host_data;
+        let _: &String = &request.host;
+        let _: &Vec<String> = &request.extra_args;
+        let _: &bool = &request.no_modules;
+        let _: &Vec<String> = &request.record_actions;
+        let _: &bool = &request.hook_cross_contract_calls;
+
+        let message: &genvm_modules_interfaces::MessageData = &request.message;
+        let _: &genlayer_calldata::Address = &message.contract_address;
+        let _: &num_bigint::BigInt = &message.chain_id;
+        let _: &num_bigint::BigInt = &message.value;
+        let _: &bool = &message.is_init;
+    };
+}
+
+/// The type a schema property documents, following a `$ref` to the component it
+/// names and reporting what a value on the wire is rather than the JSON type
+/// that carries it.
+///
+/// `property` may address a nested node with `/`, so `bucket_totals` reaches its
+/// values through `bucket_totals/additionalProperties`.
+fn documented_type(doc: &serde_yaml::Value, schema: &str, property: &str) -> String {
+    fn resolve<'a>(doc: &'a serde_yaml::Value, node: &'a serde_yaml::Value) -> serde_yaml::Value {
+        match node.get("$ref").and_then(|reference| reference.as_str()) {
+            Some(reference) => {
+                // Every `$ref` in this schema points at a local component.
+                let name = reference
+                    .rsplit('/')
+                    .next()
+                    .expect("a $ref names a component");
+                resolve(doc, &doc["components"]["schemas"][name])
+            }
+            None => node.clone(),
+        }
+    }
+
+    let mut node = resolve(doc, &doc["components"]["schemas"][schema]["properties"]);
+    for segment in property.split('/') {
+        let next = node
+            .get(segment)
+            .unwrap_or_else(|| panic!("{schema}.{property} has no {segment}: {node:?}"));
+        node = resolve(doc, next);
+    }
+
+    // A `oneOf` documents alternatives rather than a type of its own. What a
+    // host has to encode is the same either way, so the arms only have to agree
+    // on their type: the two ExecutorSelector arms differ in which field they
+    // require, not in being objects.
+    if let Some(variants) = node.get("oneOf").and_then(|v| v.as_sequence()) {
+        let mut types = variants
+            .iter()
+            .map(|variant| {
+                resolve(doc, variant)
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or_else(|| panic!("{schema}.{property} has an untyped oneOf arm"))
+                    .to_owned()
+            })
+            .collect::<Vec<_>>();
+        types.sort();
+        types.dedup();
+        assert_eq!(
+            types.len(),
+            1,
+            "{schema}.{property} has oneOf arms of differing types {types:?}, so \
+             there is no single documented type to compare against",
+        );
+        return types.remove(0);
+    }
+
+    // An array or a map is documented by what its values are, since that is what
+    // a host has to encode.
+    let base = ["type", "items", "additionalProperties"]
+        .iter()
+        .find_map(|key| node.get(*key))
+        .unwrap_or_else(|| panic!("{schema}.{property} documents no type: {node:?}"));
+
+    base.as_str()
+        .unwrap_or_else(|| panic!("{schema}.{property} has a non-string type: {base:?}"))
+        .to_owned()
+}
+
+fn documented_schema() -> serde_yaml::Value {
+    serde_yaml::from_str(
+        &std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../docs/website/src/impl-spec/appendix/manager-api.yaml"
+        ))
+        .expect("reading the documented manager API"),
+    )
+    .expect("parsing the documented manager API")
+}
+
+/// The name check above proves the schema lists the right fields. This proves
+/// the fields it lists carry the right types, which is the half a host actually
+/// encodes against.
+///
+/// The load-bearing case is a big integer documented as a `string`:
+/// `Decode for BigInt` implements `visit_bigint` alone, so a host that follows
+/// such a schema and encodes `"1"` reaches the default `visit_str` and the
+/// frame comes back `malformed_frame`.
+#[test]
+fn request_schema_matches_the_rust_types() {
+    let doc = documented_schema();
+
+    // (property, documented type)
+    let expected = [
+        ("selector", "object"),
+        ("message", "object"),
+        ("is_sync", "boolean"),
+        ("debug_mode", "string"),
+        ("max_execution_minutes", "integer"),
+        ("bucket_totals", "object"),
+        ("host_data", "string"),
+        ("timestamp", "string"),
+        ("host", "string"),
+        ("extra_args", "array"),
+        ("calldata", "string"),
+        ("code", "string"),
+        ("permissions", "string"),
+        ("no_modules", "boolean"),
+        ("unsafe_overrides", "object"),
+        ("leader_public_data", "string"),
+        ("gas_data", "object"),
+        ("message_fee_allocation", "array"),
+        ("initial_time_units_allocation", "integer"),
+        ("record_actions", "array"),
+        ("host_genvm_id", "string"),
+        ("deadline", "string"),
+        ("host_hello_data", "array"),
+        ("hook_cross_contract_calls", "boolean"),
+    ];
+
+    for (property, documented) in expected {
+        assert_eq!(
+            documented_type(&doc, "GenvmRunRequest", property),
+            documented,
+            "GenvmRunRequest.{property} is documented as the wrong type",
+        );
+    }
+
+    // A bucket total is the one value nested inside another property, and the
+    // one a fee-configuring host is most likely to send as a string.
+    assert_eq!(
+        documented_type(
+            &doc,
+            "GenvmRunRequest",
+            "bucket_totals/additionalProperties",
+        ),
+        "integer",
+        "GenvmRunRequest.bucket_totals values are big integers on the wire, so \
+         documenting them as strings sends hosts to `malformed_frame`",
+    );
+}
+
+/// The same contract for the message the host builds by hand.
+///
+/// An address is spelled as a hex `string` and travels as an address value;
+/// that spelling is correct, which is why only the two big integers are
+/// asserted as `integer` here.
+#[test]
+fn message_schema_documents_big_integers_as_integers() {
+    let doc = documented_schema();
+
+    for property in ["chain_id", "value"] {
+        assert_eq!(
+            documented_type(&doc, "MessageData", property),
+            "integer",
+            "MessageData.{property} is a big integer on the calldata wire, so \
+             documenting it as a string sends hosts to `malformed_frame`",
+        );
+    }
+
+    // The addresses stay `string`: that is how a host spells one, and the
+    // Address component says so.
+    for property in [
+        "contract_address",
+        "sender_address",
+        "origin_address",
+        "signer_address",
+    ] {
+        assert_eq!(
+            documented_type(&doc, "MessageData", property),
+            "string",
+            "MessageData.{property} is documented as a hex string",
+        );
+    }
+}
+
 /// Same contract for the message the host builds by hand.
 #[test]
 fn message_schema_matches_the_rust_struct() {
