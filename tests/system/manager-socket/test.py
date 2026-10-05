@@ -402,6 +402,30 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					aiohttp.WSCloseCode.MESSAGE_TOO_BIG,
 				), close_code
 
+	async def _rejected_run_still_gets_id(self):
+		async with await self._manager('async-validation') as manager:
+			host_path = manager.work_dir / 'unused-host.sock'
+			cases = [
+				({'host_hello_data': [b'', b'injected']}, 'host index 1'),
+				# The fixture manager runs no modules
+				(
+					{'no_modules': False, 'is_sync': False, 'permissions': 'n'},
+					'modules are required',
+				),
+			]
+			for request_id, (overrides, error) in enumerate(cases, start=1):
+				async with ManagerWsClient(manager.uri) as client:
+					await _read_hello(client)
+					req = _run_request(self.case.shared.root_dir, host_path)
+					req['run'].update(overrides)
+					await client.send(Methods.RUN, request_id, req)
+					method, got_request_id, payload = await client.read_frame()
+					assert (method, got_request_id) == (Methods.RUN, request_id), payload
+					variant, event = await _wait_terminal(client, timeout=5)
+					assert variant == 'failed_to_start', variant
+					assert event['genvm_id'] == payload['genvm_id']
+					assert error in event['error'], event
+
 	async def _startup_failure_events_and_permits(self):
 		async with await self._manager('startup-failures') as manager:
 			async with ManagerWsClient(manager.uri) as client:
@@ -971,6 +995,13 @@ def collect(
 		(
 			'startup-failures',
 			'_startup_failure_events_and_permits',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'async-validation',
+			'_rejected_run_still_gets_id',
 			{},
 			None,
 			genvm.ManagerService,

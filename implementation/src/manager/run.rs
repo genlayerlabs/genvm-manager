@@ -2012,7 +2012,7 @@ fn execution_data_from_request(
 enum RunResources {
     TopLevel {
         permits: tokio::sync::OwnedSemaphorePermit,
-        modules_lock: Box<dyn std::any::Any + Send + Sync>,
+        modules_lock: Option<super::modules::ModuleLocks>,
     },
     Nested {
         caller_stream: Arc<ManagerHostStreamState>,
@@ -2098,12 +2098,7 @@ impl Ctx {
         Reservation::Reserved(exec_ctx)
     }
 
-    pub async fn start(
-        &self,
-        full_ctx: sync::DArc<crate::manager::AppContext>,
-        req: Request,
-        modules_lock: Box<dyn std::any::Any + Send + Sync>,
-    ) -> anyhow::Result<GenVMId> {
+    pub fn start(&self, full_ctx: sync::DArc<crate::manager::AppContext>, req: Request) -> GenVMId {
         let reservation = self.reserve_execution(req.host_genvm_id.as_deref(), |genvm_id| {
             let events = tokio::sync::watch::Sender::new(Snapshot::Queued {
                 genvm_id,
@@ -2144,14 +2139,14 @@ impl Ctx {
         });
 
         let exec_ctx = match reservation {
-            Reservation::Existing(genvm_id) => return Ok(genvm_id),
+            Reservation::Existing(genvm_id) => return genvm_id,
             Reservation::Reserved(exec_ctx) => exec_ctx,
         };
         let genvm_id = exec_ctx.id;
 
-        tokio::spawn(supervise_genvm(full_ctx, exec_ctx, req, modules_lock));
+        tokio::spawn(supervise_genvm(full_ctx, exec_ctx, req));
 
-        Ok(genvm_id)
+        genvm_id
     }
 
     async fn start_nested(
@@ -2264,12 +2259,49 @@ impl Ctx {
     }
 }
 
+fn check_top_level_request(req: &Request, has_modules_lock: bool) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !req.needs_modules() || has_modules_lock,
+        "modules are required but not running"
+    );
+    anyhow::ensure!(
+        req.host_hello_data
+            .get(1)
+            .is_none_or(|data| data.is_empty()),
+        "host_hello_data for manager-owned host index 1 is not allowed"
+    );
+    Ok(())
+}
+
 async fn supervise_genvm(
     full_ctx: sync::DArc<crate::manager::AppContext>,
     exec_ctx: sync::DArc<SingleGenVMContext>,
     req: Request,
-    modules_lock: Box<dyn std::any::Any + Send + Sync>,
 ) {
+    async fn finish_cancelled(exec_ctx: &SingleGenVMContext) {
+        let cause = exec_ctx.finish_cause().unwrap_or(FinishCause::Cancelled);
+        let _ = finish_execution(exec_ctx, None, cause).await;
+    }
+
+    // A queued module stop or restart blocks new read guards, so this wait
+    // must stay off the connection that issued the run
+    let modules_lock = if req.needs_modules() {
+        tokio::select! {
+            _ = exec_ctx.wait_cancelled() => {
+                finish_cancelled(&exec_ctx).await;
+                return;
+            }
+            lock = super::modules::Ctx::get_module_locks(full_ctx.gep(|x| &x.mod_ctx)) => lock,
+        }
+    } else {
+        None
+    };
+
+    if let Err(e) = check_top_level_request(&req, modules_lock.is_some()) {
+        fail_to_start(&exec_ctx, e);
+        return;
+    }
+
     let ctx = full_ctx.gep(|x| &x.run_ctx);
     let permit_count = ctx.permits_for(&req);
 
@@ -2277,8 +2309,7 @@ async fn supervise_genvm(
     tokio::pin!(permit_future);
     let permits = tokio::select! {
         _ = exec_ctx.wait_cancelled() => {
-            let cause = exec_ctx.finish_cause().unwrap_or(FinishCause::Cancelled);
-            let _ = finish_execution(&exec_ctx, None, cause).await;
+            finish_cancelled(&exec_ctx).await;
             return;
         }
         permits = &mut permit_future => match permits {
@@ -2291,9 +2322,9 @@ async fn supervise_genvm(
     };
 
     if exec_ctx.cancel_requested.load(Ordering::SeqCst) {
-        let cause = exec_ctx.finish_cause().unwrap_or(FinishCause::Cancelled);
         drop(permits);
-        let _ = finish_execution(&exec_ctx, None, cause).await;
+        drop(modules_lock);
+        finish_cancelled(&exec_ctx).await;
         return;
     }
 
@@ -2319,7 +2350,7 @@ async fn supervise_genvm_inner(
     full_ctx: sync::DArc<crate::manager::AppContext>,
     exec_ctx: sync::DArc<SingleGenVMContext>,
     req: Request,
-    modules_lock: Box<dyn std::any::Any + Send + Sync>,
+    modules_lock: Option<super::modules::ModuleLocks>,
     permits: tokio::sync::OwnedSemaphorePermit,
 ) -> anyhow::Result<()> {
     let execution_data = execution_data_from_request(&req, &full_ctx.config);
@@ -2414,18 +2445,18 @@ async fn run_genvm_process(
 ) -> anyhow::Result<std::process::ExitStatus> {
     let is_top_level = resources.is_top_level();
     let caller_stream = resources.caller_stream();
-    let module_handlers = if req.needs_modules() {
-        let (llm, web) = full_ctx
-            .mod_ctx
-            .get_handlers()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("modules are required but not all are running"))?;
-        Some((llm, web))
-    } else {
-        None
+    let modules_lock = match &resources {
+        RunResources::TopLevel { modules_lock, .. } => modules_lock.as_ref(),
+        RunResources::Nested { .. } => None,
     };
+    assert_eq!(
+        modules_lock.is_some(),
+        req.needs_modules(),
+        "a run needing modules must hold their locks"
+    );
+    let module_handlers = modules_lock.map(|lock| lock.handlers());
 
-    let execution_context = if req.needs_modules() {
+    let execution_context = if let Some(modules_lock) = modules_lock {
         let host_data: genvm_modules_interfaces::HostData = serde_json::from_str(&req.host_data)?;
         let role = if req.leader_public_data.is_none() {
             genvm_modules_interfaces::Role::Leader
@@ -2439,7 +2470,7 @@ async fn run_genvm_process(
             gas_data: req.gas_data.clone(),
             initial_time_units_allocation: req.initial_time_units_allocation,
         });
-        let ctx = full_ctx.mod_ctx.create_execution_context(hello).await?;
+        let ctx = modules_lock.create_execution_context(hello)?;
         let _ = exec_ctx.execution_context.set(ctx.clone());
         Some(ctx)
     } else {
@@ -2513,14 +2544,6 @@ async fn run_genvm_process(
     } else {
         None
     };
-
-    if req
-        .host_hello_data
-        .get(1)
-        .is_some_and(|data| !data.is_empty())
-    {
-        anyhow::bail!("host_hello_data for manager-owned host index 1 is not allowed");
-    }
 
     let execution_data_bytes = bytes::Bytes::from(calldata::encode_obj(&execution_data));
 

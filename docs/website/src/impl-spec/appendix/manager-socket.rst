@@ -95,7 +95,9 @@ Request payload: the same logical structure as the deprecated
 - ``host_genvm_id`` (string, optional) -- client correlation token, echoed in
   events for this run. Also an idempotency key: a ``run`` repeated with the
   same token before the retention TTL expires returns the id already
-  allocated for it instead of starting a second execution.
+  allocated for it instead of starting a second execution. A run that ended
+  with ``failed_to_start`` holds its token too, so ``ack`` it before retrying
+  with the same token.
 - ``host_hello_data`` (array of bytes, optional, default ``[]``) -- indexed
   by host connection index; the executor writes entry *i* verbatim to host
   *i* on connect, before the first method byte (see :doc:`host-loop`). The
@@ -141,6 +143,10 @@ The id is allocated and returned immediately; validation, permit acquisition
 and process spawn continue asynchronously and report through ``event``
 notifications. The requesting connection is subscribed to the run's events
 automatically.
+
+Only a payload that fails to decode is answered with ``error``. A decoded request
+that fails a check, such as a non-empty ``host_hello_data[1]`` or needing
+modules while they are stopped, ends with ``failed_to_start``.
 
 ``attach``
 ----------

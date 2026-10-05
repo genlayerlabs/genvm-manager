@@ -491,51 +491,8 @@ where
                 return Ok(());
             }
         };
-        if req
-            .host_hello_data
-            .get(1)
-            .is_some_and(|data| !data.is_empty())
-        {
-            self.writer
-                .error(
-                    request_id,
-                    Errors::MalformedFrame,
-                    "host_hello_data for manager-owned host index 1 is not allowed",
-                )
-                .await?;
-            return Ok(());
-        }
-
-        let modules_lock = if req.needs_modules() {
-            match super::modules::Ctx::get_module_locks(self.ctx.gep(|x| &x.mod_ctx)).await {
-                Some(lock) => Some(lock),
-                None => {
-                    self.writer
-                        .error(
-                            request_id,
-                            Errors::Internal,
-                            "modules are required but not running",
-                        )
-                        .await?;
-                    return Ok(());
-                }
-            }
-        } else {
-            None
-        };
         let run_ctx = self.ctx.gep(|x| &x.run_ctx);
-        let genvm_id = match run_ctx
-            .start(self.ctx.clone(), req, Box::new(modules_lock))
-            .await
-        {
-            Ok(id) => id,
-            Err(e) => {
-                self.writer
-                    .error(request_id, Errors::Internal, format!("{:#}", e))
-                    .await?;
-                return Ok(());
-            }
-        };
+        let genvm_id = run_ctx.start(self.ctx.clone(), req);
         let (snapshot, rx) = match run_ctx.attach(run_ctx.boot_id(), genvm_id) {
             Ok(result) => result,
             Err(e) => {

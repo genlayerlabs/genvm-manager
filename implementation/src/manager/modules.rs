@@ -161,23 +161,6 @@ impl Ctx {
         }
     }
 
-    pub async fn create_execution_context(
-        &self,
-        hello: Arc<genvm_modules_interfaces::GenVMHello>,
-    ) -> anyhow::Result<sync::DArc<ExecutionContext>> {
-        let llm = if let Some(state) = self.llm_module.read().await.as_ref() {
-            Some(state.create_sub_context(&hello)?)
-        } else {
-            None
-        };
-        let web = if let Some(state) = self.web_module.read().await.as_ref() {
-            Some(state.create_sub_context(&hello)?)
-        } else {
-            None
-        };
-        Ok(sync::DArc::new(ExecutionContext { hello, llm, web }))
-    }
-
     pub async fn start(&self, req: StartRequest) -> anyhow::Result<()> {
         self.start_or_restart(req, false).await
     }
@@ -443,42 +426,48 @@ impl Ctx {
         }
     }
 
-    /// Get the handler for a running module (returns None if module not running)
-    pub async fn get_handler(&self, module_type: Type) -> Option<StreamHandler> {
-        match module_type {
-            Type::Llm => {
-                let module_lock = self.llm_module.read().await;
-                module_lock.as_ref().map(|state| state.base.handler.clone())
-            }
-            Type::Web => {
-                let module_lock = self.web_module.read().await;
-                module_lock.as_ref().map(|state| state.base.handler.clone())
-            }
-        }
-    }
-
-    /// Get both module handlers if both are running
-    pub async fn get_handlers(&self) -> Option<(StreamHandler, StreamHandler)> {
-        let llm = self.get_handler(Type::Llm).await?;
-        let web = self.get_handler(Type::Web).await?;
-        Some((llm, web))
-    }
-
-    pub async fn get_module_locks(zelf: sync::DArc<Ctx>) -> Option<impl std::any::Any> {
-        let llm_lock = zelf
+    pub async fn get_module_locks(zelf: sync::DArc<Ctx>) -> Option<ModuleLocks> {
+        let llm = zelf
             .clone()
             .into_get_sub_async(|x| x.llm_module.read())
             .await;
-        if llm_lock.is_none() {
-            return None;
-        }
-        let web_lock = zelf
-            .clone()
-            .into_get_sub_async(|x| x.web_module.read())
-            .await;
-        if web_lock.is_none() {
-            return None;
-        }
-        Some((llm_lock, web_lock))
+        llm.as_ref()?;
+        let web = zelf.into_get_sub_async(|x| x.web_module.read()).await;
+        web.as_ref()?;
+        Some(ModuleLocks { llm, web })
+    }
+}
+
+/// Keeps both modules running while a run uses them. Everything a run needs
+/// from the modules is read through these guards: taking the module locks again
+/// would queue behind a pending stop or restart that waits on these guards.
+pub struct ModuleLocks {
+    llm: sync::DArcStruct<tokio::sync::RwLockReadGuard<'static, Option<ModuleStateLlm>>>,
+    web: sync::DArcStruct<tokio::sync::RwLockReadGuard<'static, Option<ModuleStateWeb>>>,
+}
+
+impl ModuleLocks {
+    fn llm(&self) -> &ModuleStateLlm {
+        self.llm.as_ref().expect("checked in get_module_locks")
+    }
+
+    fn web(&self) -> &ModuleStateWeb {
+        self.web.as_ref().expect("checked in get_module_locks")
+    }
+
+    pub fn handlers(&self) -> (StreamHandler, StreamHandler) {
+        (
+            self.llm().base.handler.clone(),
+            self.web().base.handler.clone(),
+        )
+    }
+
+    pub fn create_execution_context(
+        &self,
+        hello: Arc<genvm_modules_interfaces::GenVMHello>,
+    ) -> anyhow::Result<sync::DArc<ExecutionContext>> {
+        let llm = Some(self.llm().create_sub_context(&hello)?);
+        let web = Some(self.web().create_sub_context(&hello)?);
+        Ok(sync::DArc::new(ExecutionContext { hello, llm, web }))
     }
 }

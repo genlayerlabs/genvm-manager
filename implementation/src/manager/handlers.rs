@@ -6,10 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use crate::manager::{
-    modules::{self, Ctx},
-    run, versioning,
-};
+use crate::manager::{modules, run, versioning};
 use crate::{common, llm, scripting};
 
 use super::AppContext;
@@ -78,20 +75,8 @@ pub async fn handle_genvm_run(
 ) -> Result<Json<serde_json::Value>> {
     let res: super::run::Request = calldata::decode_obj(data)?;
 
-    let modules_lock = if res.needs_modules() {
-        let lock = Ctx::get_module_locks(ctx.gep(|x| &x.mod_ctx)).await;
-        if lock.is_none() {
-            anyhow::bail!(
-                "modules are required but not running (is_sync=false with 'n' permission)"
-            );
-        }
-        lock
-    } else {
-        None
-    };
-
     let run_ctx = ctx.gep(|x| &x.run_ctx);
-    let id = run_ctx.start(ctx, res, Box::new(modules_lock)).await?;
+    let id = run_ctx.start(ctx, res);
     let (snapshot, mut events) = run_ctx.attach(run_ctx.boot_id(), id)?;
 
     let start_event = match snapshot {
@@ -105,6 +90,8 @@ pub async fn handle_genvm_run(
     };
 
     if let run::Event::FailedToStart { error, .. } = start_event {
+        // The caller never learns the id, so nothing else would ack it
+        run_ctx.ack(id);
         anyhow::bail!(error);
     }
 
