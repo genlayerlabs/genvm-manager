@@ -54,6 +54,7 @@ fn fake_execution_with_host_id(
         log_sink: Arc::new(LogSinkInner::new(false)),
         consumed_result: tokio::sync::OnceCell::new(),
         process_handle: tokio::sync::Mutex::new(None),
+        spawned: AtomicBool::new(false),
         cancel_requested: AtomicBool::new(false),
         cancel_notify: tokio::sync::Notify::new(),
         finish_cause: std::sync::Mutex::new(None),
@@ -749,6 +750,50 @@ async fn terminal_event_is_published_once() {
         Snapshot::Event(Event::Finished { .. })
     ));
     assert!(matches!(rx.has_changed(), Ok(false)));
+}
+
+#[tokio::test]
+async fn a_failure_after_spawn_is_a_finished_not_a_failed_to_start() {
+    let error = || anyhow::anyhow!("stdin write task panicked");
+
+    let spawned = fake_execution(GenVMId(1), None);
+    spawned.mark_spawned();
+    let mut rx = spawned.events.subscribe();
+    report_run_failure(&spawned, error()).await;
+    match rx.borrow_and_update().clone() {
+        Snapshot::Event(Event::Finished {
+            exit_code, cause, ..
+        }) => {
+            assert_eq!(exit_code, None);
+            assert_eq!(cause, FinishCause::Exited);
+        }
+        other => panic!("spawned run reported {other:?}, expected a finished event"),
+    }
+
+    let never_spawned = fake_execution(GenVMId(2), None);
+    let mut rx = never_spawned.events.subscribe();
+    report_run_failure(&never_spawned, error()).await;
+    assert!(matches!(
+        rx.borrow_and_update().clone(),
+        Snapshot::Event(Event::FailedToStart { .. })
+    ));
+}
+
+#[tokio::test]
+async fn epipe_from_an_exited_executor_is_not_an_error() {
+    let mut child = tokio::process::Command::new("bash")
+        .args(["-c", "exit 3"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Larger than any default pipe buffer, so the write must hit EPIPE
+    let data = bytes::Bytes::from(vec![0u8; 4 << 20]);
+    let writer = spawn_stdin_writer(child.stdin.take().unwrap(), data);
+
+    let write = writer.await;
+    assert!(matches!(&write, Ok(Err(e)) if e.kind() == std::io::ErrorKind::BrokenPipe));
+    check_stdin_write(GenVMId(1), write).unwrap();
+    child.wait().await.unwrap();
 }
 
 #[tokio::test]

@@ -305,6 +305,7 @@ struct SingleGenVMContext {
     consumed_result: tokio::sync::OnceCell<Vec<u8>>,
 
     process_handle: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    spawned: AtomicBool,
     cancel_requested: AtomicBool,
     cancel_notify: tokio::sync::Notify,
     finish_cause: std::sync::Mutex<Option<FinishCause>>,
@@ -329,6 +330,14 @@ impl SingleGenVMContext {
             .read()
             .map(|v| v.clone())
             .unwrap_or_else(|_| String::new())
+    }
+
+    fn mark_spawned(&self) {
+        self.spawned.store(true, Ordering::SeqCst);
+    }
+
+    fn was_spawned(&self) -> bool {
+        self.spawned.load(Ordering::SeqCst)
     }
 
     fn request_finish(&self, cause: FinishCause) {
@@ -1927,6 +1936,27 @@ fn spawn_stdin_writer(
     })
 }
 
+fn check_stdin_write(
+    genvm_id: GenVMId,
+    result: Result<std::io::Result<()>, tokio::task::JoinError>,
+) -> anyhow::Result<()> {
+    match result {
+        Ok(Ok(())) => {
+            log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "execution data written");
+            Ok(())
+        }
+        // The executor stopped reading; its exit status tells how the run ended
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "executor closed stdin before reading execution data");
+            Ok(())
+        }
+        Ok(Err(e)) => Err(anyhow::anyhow!(
+            "failed to write execution data to child stdin: {e}"
+        )),
+        Err(e) => Err(anyhow::anyhow!("stdin write task panicked: {e}")),
+    }
+}
+
 fn strict_deadline_from_request(req: &Request) -> chrono::DateTime<chrono::Utc> {
     let max = std::time::Duration::from_secs(24 * 60 * 60);
     let duration = req
@@ -2091,6 +2121,7 @@ impl Ctx {
                 id: genvm_id,
                 host_genvm_id: req.host_genvm_id.clone(),
                 process_handle: tokio::sync::Mutex::new(None),
+                spawned: AtomicBool::new(false),
                 started_at: chrono::Utc::now(),
                 strict_deadline: strict_deadline_from_request(&req),
 
@@ -2269,8 +2300,19 @@ async fn supervise_genvm(
     if let Err(e) =
         supervise_genvm_inner(full_ctx, exec_ctx.clone(), req, modules_lock, permits).await
     {
-        fail_to_start(&exec_ctx, e);
+        report_run_failure(&exec_ctx, e).await;
     }
+}
+
+/// A spawned executor always ends in `finished`, even when the manager fails it
+async fn report_run_failure(exec: &SingleGenVMContext, error: anyhow::Error) {
+    if !exec.was_spawned() {
+        fail_to_start(exec, error);
+        return;
+    }
+
+    log_warn_into!(@operator, &LoggerWithId, genvm_id:id = exec.id.0, error:ah = error; "executor was spawned but the run failed before its exit status was known");
+    let _ = finish_execution(exec, None, FinishCause::Exited).await;
 }
 
 async fn supervise_genvm_inner(
@@ -2494,6 +2536,9 @@ async fn run_genvm_process(
     let process = async {
         // Spawn child process, then drop child-side FDs
         let mut child = proc.spawn()?;
+        if is_top_level {
+            exec_ctx.mark_spawned();
+        }
         drop(write_fd);
         log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, pid:? = child.id(); "genvm process started");
         std::mem::drop(module_child_fds);
@@ -2507,12 +2552,26 @@ async fn run_genvm_process(
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let stdout_perm = if stdout.is_some() {
-            Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
+            Some(
+                exec_ctx
+                    .stdout_stderr_sem
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("stdout/stderr semaphore is never closed"),
+            )
         } else {
             None
         };
         let stderr_perm = if stderr.is_some() {
-            Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
+            Some(
+                exec_ctx
+                    .stdout_stderr_sem
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("stdout/stderr semaphore is never closed"),
+            )
         } else {
             None
         };
@@ -2544,31 +2603,21 @@ async fn run_genvm_process(
                 wait_for_process_stop(&exec_ctx, caller_stream.as_deref(), deadline_duration);
             tokio::pin!(stop);
             tokio::select! {
-                result = &mut stdin_task => match result {
-                    Ok(Ok(())) => {
-                        log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "execution data written");
-                    }
-                    Ok(Err(e)) => {
+                result = &mut stdin_task => {
+                    if let Err(e) = check_stdin_write(genvm_id, result) {
                         let _ = child.start_kill();
                         let _ = child.wait().await;
-                        anyhow::bail!("failed to write execution data to child stdin: {e}");
+                        return Err(e);
                     }
-                    Err(e) => {
-                        let _ = child.start_kill();
-                        let _ = child.wait().await;
-                        anyhow::bail!("stdin write task panicked: {e}");
-                    }
-                },
+                }
+                // An early exit is reported by the regular wait below, which caches the status
                 status = child.wait() => {
                     stdin_task.abort();
-                    return match status {
-                        Ok(status) => Ok(status),
-                        Err(e) => {
-                            let _ = child.start_kill();
-                            let _ = child.wait().await;
-                            Err(e.into())
-                        }
-                    };
+                    if let Err(e) = status {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        return Err(e.into());
+                    }
                 }
                 reason = &mut stop => {
                     if reason == ProcessStop::Deadline {

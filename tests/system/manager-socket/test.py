@@ -407,21 +407,38 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 			async with ManagerWsClient(manager.uri) as client:
 				await _read_hello(client)
 				host_path = manager.work_dir / 'unused-host.sock'
-				await client.send(
-					Methods.RUN,
-					10,
-					_run_request(self.case.shared.root_dir, host_path, extra_args=['--bad-flag']),
+				req = _run_request(
+					self.case.shared.root_dir, host_path, extra_args=['--bad-flag']
 				)
+				# Outgrows the stdin pipe, so the executor exits while it is being written
+				req['run']['calldata'] = gvm_calldata.encode({'pad': bytes(4 << 20)})
+				await client.send(Methods.RUN, 10, req)
 				method, request_id, payload = await client.read_frame()
 				assert method == Methods.RUN
 				assert request_id == 10
 				genvm_id = payload['genvm_id']
-				# The executor rejects the flag and exits on its own, so this is
-				# a `finished` with its exit code rather than `failed_to_start`.
+				# The executor rejects the flag and exits on its own, so this is a
+				# `finished` with its exit code and its complaint in stderr, whichever
+				# of the write and the exit the manager notices first.
 				variant, event = await _wait_terminal(client, timeout=5)
 				assert event['genvm_id'] == genvm_id
 				assert variant == 'finished', variant
 				assert event['exit_code'] not in (0, None), event
+				assert event['artifact_sizes']['stderr'] > 0, event
+				await client.send(
+					Methods.GET_ARTIFACT,
+					11,
+					{
+						'get_artifact': {
+							'genvm_id': genvm_id,
+							'field': 'stderr',
+							'offset': 0,
+							'max_len': 4096,
+						}
+					},
+				)
+				artifact = await _read_reply(client, Methods.GET_ARTIFACT, 11)
+				assert b'--bad-flag' in artifact['data'], artifact
 
 			async with ManagerWsClient(manager.uri) as client:
 				await _read_hello(client)

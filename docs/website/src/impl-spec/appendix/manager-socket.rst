@@ -261,6 +261,9 @@ started with one, ``host_genvm_id``. Variants:
           "artifact_sizes": { "stdout": u64, "stderr": u64,
                               "genvm_log": u64 } } }
 
+   An internal manager failure after the spawn also ends in ``finished``, with
+   cause ``exited`` and a null ``exit_code``.
+
 For a top-level run, ``consumed_result`` is one outer ``ResultCode`` byte
 followed by a calldata-encoded ``ReportedResult`` map. Before retaining it, the
 manager checks that:
