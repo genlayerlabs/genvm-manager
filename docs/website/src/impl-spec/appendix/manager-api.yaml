@@ -24,8 +24,10 @@ paths:
       responses:
         '101':
           description: Switching protocols; the connection becomes a manager socket
+        '400':
+          description: Not a WebSocket handshake; the body is plain text
         '426':
-          description: Upgrade required (the request was not a WebSocket handshake)
+          description: A handshake on a connection that cannot be upgraded, such as HTTP/1.0
 
   /status:
     get:
@@ -42,12 +44,12 @@ paths:
                 properties:
                   llm_module:
                     type: string
+                    enum: [running, stopping, stopped]
                     description: Status of the LLM module
-                    example: running
                   web_module:
                     type: string
+                    enum: [running, stopping, stopped]
                     description: Status of the web module
-                    example: stopped
                   permits:
                     type: object
                     properties:
@@ -65,7 +67,27 @@ paths:
                         description: Permits a nondet run costs
                   executions:
                     type: object
-                    description: Status of running executions
+                    description: Known executions, keyed by GenVM id
+                    additionalProperties:
+                      type: object
+                      properties:
+                        result:
+                          type: object
+                          nullable: true
+                          description: Null until the execution finishes
+                          properties:
+                            finished_at:
+                              type: string
+                              format: date-time
+                        version:
+                          type: string
+                          description: Executor version the run resolved to, empty until resolved
+                        started_at:
+                          type: string
+                          format: date-time
+                        strict_deadline:
+                          type: string
+                          format: date-time
 
   /module/start:
     post:
@@ -77,22 +99,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-                - module_type
-              properties:
-                module_type:
-                  type: string
-                  enum: [llm, web]
-                  description: Type of module to start
-                config:
-                  type: object
-                  description: Module-specific configuration
-              example:
-                module_type: llm
-                config:
-                  host: localhost
-                  port: 8080
+              $ref: '#/components/schemas/ModuleStartRequest'
       responses:
         '200':
           description: Module started successfully
@@ -125,10 +132,10 @@ paths:
               properties:
                 module_type:
                   type: string
-                  enum: [llm, web]
+                  enum: [Llm, Web]
                   description: Type of module to stop
               example:
-                module_type: llm
+                module_type: Llm
       responses:
         '200':
           description: Module stop result
@@ -158,22 +165,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-                - module_type
-              properties:
-                module_type:
-                  type: string
-                  enum: [llm, web]
-                  description: Type of module to restart
-                config:
-                  type: object
-                  description: Module-specific configuration (null to use default config file)
-              example:
-                module_type: llm
-                config:
-                  host: localhost
-                  port: 8080
+              $ref: '#/components/schemas/ModuleStartRequest'
       responses:
         '200':
           description: Module restarted successfully
@@ -209,8 +201,8 @@ paths:
         types. What differs is only what this call *returns*: an id after the
         execution has started, rather than immediately.
 
-        The request body uses calldata binary encoding (not JSON). The schema below
-        shows the logical structure that must be encoded using the calldata format.
+        The body is calldata, not JSON; `GenvmRunRequest` says how its types map
+        onto calldata.
       operationId: runGenvm
       requestBody:
         required: true
@@ -284,14 +276,35 @@ paths:
                     type: integer
                   status:
                     type: object
-                    description: Current status of the GenVM instance
+                    nullable: true
+                    description: Result of a finished execution; null while it runs, once acknowledged, or for an unknown id
                     properties:
+                      finished_at:
+                        type: integer
+                        format: int64
+                        description: Unix time in milliseconds
+                      stdout:
+                        type: string
+                      stderr:
+                        type: string
+                      genvm_log:
+                        type: array
+                        items:
+                          type: object
+                      metrics:
+                        type: object
                       consumed_result:
                         type: string
                         format: byte
                         nullable: true
+                      version_major:
+                        type: integer
+                      version_minor:
+                        type: integer
         '400':
           $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ErrorResponse'
     delete:
@@ -333,6 +346,8 @@ paths:
                         type: integer
         '400':
           $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
 
   /genvm/{genvm_id}/artifact:
     get:
@@ -391,6 +406,8 @@ paths:
                     format: byte
         '400':
           $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -447,8 +464,8 @@ paths:
               properties:
                 level:
                   type: string
-                  enum: [trace, debug, info, warn, error]
-                  description: Log level to set
+                  enum: [trace, debug, info, warn, warning, error]
+                  description: Log level to set, matched case-insensitively
               example:
                 level: debug
       responses:
@@ -464,6 +481,7 @@ paths:
                     example: log_level_set
                   level:
                     type: string
+                    enum: [Trace, Debug, Info, Warn, Error]
         '400':
           $ref: '#/components/responses/ErrorResponse'
         '500':
@@ -491,11 +509,11 @@ paths:
   /permits:
     get:
       summary: Get permits
-      description: Get the current number of execution permits available.
+      description: Get the current maximum number of execution permits; `/status` reports how many are free.
       operationId: getPermits
       responses:
         '200':
-          description: Current permits
+          description: Maximum permits
           content:
             application/json:
               schema:
@@ -503,7 +521,7 @@ paths:
                 properties:
                   permits:
                     type: integer
-                    description: Number of available permits
+                    description: Maximum number of permits
     post:
       summary: Set permits
       description: >-
@@ -574,8 +592,8 @@ paths:
                         example: https://api.openai.com
                       provider:
                         type: string
+                        enum: [ollama, openai-compatible, anthropic, google]
                         description: Provider type
-                        example: openai-compatible
                       model:
                         type: string
                         description: Model name
@@ -588,6 +606,12 @@ paths:
                   type: array
                   items:
                     type: object
+                    required:
+                      - user_message
+                      - temperature
+                      - images
+                      - max_tokens
+                      - use_max_completion_tokens
                     properties:
                       system_message:
                         type: string
@@ -598,12 +622,37 @@ paths:
                         type: number
                       images:
                         type: array
+                        description: Each image is its raw bytes as an array of integers
                         items:
-                          type: string
+                          type: array
+                          items:
+                            type: integer
+                            minimum: 0
+                            maximum: 255
                       max_tokens:
                         type: integer
+                        format: uint32
                       use_max_completion_tokens:
                         type: boolean
+                      seed:
+                        type: integer
+                        format: uint64
+                        nullable: true
+                      extra:
+                        type: object
+                        default: {}
+                        description: Provider-specific request fields
+                      extra_merge_strategy:
+                        description: |
+                          How `extra` merges into the provider request: `none`, `replace`,
+                          `merge_left`, `merge_right`, or a map of these per key
+                        default: none
+                      timeout:
+                        oneOf:
+                          - type: number
+                            nullable: true
+                          - type: string
+                        description: Seconds as a number, or a string such as `500ms`, `1.5s` or `2m`
             example:
               configs:
                 - host: https://api.openai.com
@@ -678,14 +727,39 @@ paths:
 
 components:
   schemas:
+    ModuleStartRequest:
+      type: object
+      required:
+        - module_type
+        - config
+      properties:
+        module_type:
+          type: string
+          enum: [Llm, Web]
+        config:
+          type: object
+          nullable: true
+          description: Module configuration; null loads the module's default config file
+        allow_empty_backends:
+          type: boolean
+          default: false
+          description: Start the LLM module even with no valid backend
+        user_error:
+          type: boolean
+          default: false
+          description: Load the config but answer every module request with a user error
+      example:
+        module_type: Llm
+        config: null
+
     Address:
       type: string
       format: hex
-      description: 20-byte Ethereum-style address as hex string
+      description: A calldata address (20 bytes), shown here in hex
       example: "0x1234567890abcdef1234567890abcdef12345678"
 
     ExecutorSelector:
-      description: Which executor line runs a request.
+      description: Which executor line runs a request
       oneOf:
         - $ref: '#/components/schemas/ExecutorSelectorMajor'
         - $ref: '#/components/schemas/ExecutorSelectorVersion'
@@ -700,7 +774,7 @@ components:
       description: |
         Resolved by the manifest's rules, falling back to the newest line when
         none provides this major. Cannot separate lines that share a semver
-        major, which every released line does.
+        major, which every released line does
       required:
         - kind
         - major
@@ -717,7 +791,7 @@ components:
       description: |
         Names a line: an executor directory used as it stands, or a `re:`-prefixed
         regular expression over manifest version keys, the newest match winning.
-        No match fails the run.
+        No match fails the run
       required:
         - kind
         - version
@@ -728,6 +802,56 @@ components:
         version:
           type: string
           example: "v0.2.17"
+
+    InternalMessageParams:
+      type: object
+      required:
+        - leader_timeunits_allocation
+        - validator_timeunits_allocation
+        - execution_budget_per_round
+        - rotations
+        - max_price_gen_per_time_unit
+        - storage_fee_max_gas_price
+        - receipt_fee_max_gas_price
+      properties:
+        leader_timeunits_allocation:
+          type: integer
+          format: uint256
+        validator_timeunits_allocation:
+          type: integer
+          format: uint256
+        execution_budget_per_round:
+          type: integer
+          format: uint256
+        rotations:
+          type: array
+          minItems: 1
+          items:
+            type: integer
+            format: uint256
+          description: Per-round rotation allocations, the initial round first, then appeal rounds
+        max_price_gen_per_time_unit:
+          type: integer
+          format: uint256
+        storage_fee_max_gas_price:
+          type: integer
+          format: uint256
+        receipt_fee_max_gas_price:
+          type: integer
+          format: uint256
+
+    ExternalMessageParams:
+      type: object
+      required:
+        - gas_limit
+        - max_gas_price
+      properties:
+        gas_limit:
+          type: integer
+          format: uint256
+        max_gas_price:
+          type: integer
+          format: uint256
 
     MessageData:
       type: object
@@ -750,26 +874,39 @@ components:
         signer_address:
           $ref: '#/components/schemas/Address'
         chain_id:
-          type: string
-          description: Chain ID as big integer string
-          example: "1"
+          type: integer
+          example: 1
         value:
-          type: string
-          description: Transaction value as big integer string
-          example: "0"
+          type: integer
+          description: Transaction value
+          example: 0
         is_init:
           type: boolean
           description: Whether this is a contract initialization call
         transaction_timestamp:
           type: string
           format: date-time
+          default: "2024-11-26T06:42:42.424242Z"
           description: Transaction timestamp
 
     GenvmRunRequest:
       type: object
       description: |
-        GenVM execution request. This structure must be encoded using the calldata
-        binary format before sending.
+        GenVM execution request, encoded as calldata (see the spec's Calldata
+        Encoding page) rather than JSON. This schema and every schema it
+        references map onto calldata kinds:
+
+        - `integer` is a calldata number, never a decimal string
+        - `format: binary` is calldata bytes
+        - `Address` is a calldata address, never a hex string
+        - `date-time` is an RFC 3339 string
+        - `format: uint256` is a number in `[0, 2^256)`
+
+        A value of another kind or an unknown key fails decoding, which the
+        socket answers with `malformed_frame`. A required nullable property must
+        be present, possibly as null. Range and cardinality limits (`format: uint256`
+        on `bucket_totals`, `minProperties`, `minItems` on `rotations`) are checked
+        when the run starts, not at decode.
       required:
         - selector
         - message
@@ -796,43 +933,43 @@ components:
           enum: [disabled, safe, safe-unbounded, unsafe, unsafe-tracing]
           description: |
             Executor debug level (see the Executor "Debug modes" section). Each level
-            adds to the previous one. Replaces the former `capture_output` boolean,
-            from which the output `Capture` (disabled/bounded/unbounded) is now derived.
+            adds to the previous one and also sets output capture.
 
-            On a consensus network the manager MUST reject (or clamp) `unsafe` and
-            `unsafe-tracing` from untrusted callers: `unsafe` enables `:latest`/`:test`
-            resolution (different nodes may diverge) and `unsafe-tracing` exposes real
-            time (breaks single-machine determinism). An unrecognized value is rejected.
+            The manager accepts every level as sent, so a host on a consensus network
+            must not pass `unsafe` or `unsafe-tracing` from untrusted callers: `unsafe`
+            enables `:latest`/`:test` resolution (different nodes may diverge) and
+            `unsafe-tracing` exposes real time (breaks single-machine determinism).
         max_execution_minutes:
           type: integer
           format: uint64
           default: 20
-          description: Maximum execution time in minutes
+          description: Maximum execution time in minutes, capped at 24 hours
         bucket_totals:
           type: object
           minProperties: 1
           additionalProperties:
-            type: string
+            type: integer
+            format: uint256
           description: |
-            Per-bucket data-fee balances, as big integer strings keyed by the
-            non-empty names the executor's fee config references. No default:
-            a request that omits it is rejected.
+            Per-bucket data-fee balances, keyed by the non-empty names the
+            executor's fee config references
         host_data:
           type: string
-          description: Host-specific data as JSON string
+          description: JSON object carrying at least string `node_address` and `tx_id`
+          example: '{"node_address":"0x00","tx_id":"0x00"}'
         timestamp:
           type: string
           format: date-time
-          description: Execution timestamp in RFC3339 format
+          description: Execution timestamp
         host:
           type: string
-          description: Host identifier
+          description: Address of host connection 0, `unix://<path>` or a TCP `host:port`
         extra_args:
           type: array
           items:
             type: string
           default: []
-          description: Additional arguments for execution
+          description: Extra arguments for the executor's `run` command
         calldata:
           type: string
           format: binary
@@ -841,20 +978,18 @@ components:
           type: string
           format: binary
           nullable: true
-          description: |
-            Contract bytecode for a deployment, or null for a call. Required to be
-            present; only its value is nullable.
+          description: Contract bytecode for a deployment, or null for a call
         leader_public_data:
           type: string
           format: binary
           nullable: true
           description: |
             Opaque executor-owned leader public data for a validator run, or null
-            for a leader run. Required to be present; only its value is nullable.
+            for a leader run
         initial_time_units_allocation:
           type: integer
           format: uint32
-          description: Initial time-unit budget for the execution.
+          description: Initial time-unit budget for the execution
         permissions:
           type: string
           default: wscn
@@ -862,44 +997,67 @@ components:
             Permission meta-properties granted to the entry VM, as a subset of the
             characters `w` (write storage), `s` (send messages), `c` (call other
             contracts) and `n` (spawn nondet). **Defaults to all four**, so a host
-            that computes narrower permissions must send this field explicitly.
+            that computes narrower permissions must send this field explicitly
         no_modules:
           type: boolean
           default: false
           description: |
             Run without the LLM and web modules even when the permissions would
-            otherwise require them.
+            otherwise require them
         gas_data:
           type: object
           additionalProperties:
             type: string
           default: {}
-          description: Host-provided `node` fee constants.
+          description: Host-provided `node` fee constants
         message_fee_allocation:
           type: array
           items:
             type: object
-            required: [recipient, call_key, budget, on, fee_params, children_budget, subtree]
+            required: [recipient, call_key, budget, 'on', fee_params, children_budget, subtree]
             properties:
               recipient:
+                type: string
+                allOf:
+                  - $ref: '#/components/schemas/Address'
                 nullable: true
-                description: Recipient address, or null for an open allocation.
+                description: Recipient address, or null for an open allocation
               call_key:
+                type: string
+                format: binary
+                minLength: 32
+                maxLength: 32
                 nullable: true
-                description: Call key bytes, or null for a wildcard.
+                description: 32-byte call key, or null for a wildcard
               budget:
+                type: integer
+                format: uint256
                 nullable: true
-                description: Stored chain budget, or the allowance of a synthetic recipient wildcard; null is uncapped. A zero-budget entry with a recipient still matches internal messages and is absent for external ones, as on chain.
-              on:
+                description: |
+                  Stored chain budget, or the allowance of a synthetic recipient wildcard; null is uncapped.
+                  A zero-budget entry with a recipient still matches internal messages and is absent for
+                  external ones, as on chain
+              'on':
                 type: string
                 enum: [decided, finalized]
               fee_params:
                 type: object
-                description: Internal or External fee parameters.
+                minProperties: 1
+                maxProperties: 1
+                description: Single-key map naming the message kind
+                properties:
+                  Internal:
+                    $ref: '#/components/schemas/InternalMessageParams'
+                  External:
+                    $ref: '#/components/schemas/ExternalMessageParams'
               children_budget:
-                description: Sum of direct descendant allocation budgets, funded per emitted child.
+                type: integer
+                format: uint256
+                description: Sum of direct descendant allocation budgets, funded per emitted child
               subtree:
-                description: Opaque bytes for the matched subtree, including any required Merkle proof.
+                type: string
+                format: binary
+                description: Opaque bytes for the matched subtree, including any required Merkle proof
           default: []
           description: |
             Flat funding allocations. The node supplies the exact subtree transport
@@ -908,14 +1066,14 @@ components:
             committed subtree use empty bytes. children_budget and subtree are required
             on every entry, including allocations without descendants.
             Omit allocations absent on-chain. Recipient wildcards are
-            synthetic entries for open-pool or view execution, not chain allocations.
+            synthetic entries for open-pool or view execution, not chain allocations
         record_actions:
           type: array
           items:
             type: string
             enum: [runner_load, vm_spawn]
           default: []
-          description: Auditable supervisor action kinds to return in the result.
+          description: Auditable supervisor action kinds to return in the result
         host_genvm_id:
           type: string
           nullable: true
@@ -923,14 +1081,16 @@ components:
           description: |
             Client correlation token, echoed in this run's events. Also an
             idempotency key on the socket protocol; see the `run` method in the
-            manager socket protocol page.
+            manager socket protocol page
         deadline:
           type: string
           nullable: true
           default: null
+          example: 30s
           description: |
-            Duration string that overrides `max_execution_minutes` as the strict
-            deadline when set.
+            Duration, a decimal number followed by `ms`, `s`, `m` or `h`, that
+            overrides `max_execution_minutes` as the strict deadline when set.
+            Capped at 24 hours
         host_hello_data:
           type: array
           items:
@@ -940,19 +1100,20 @@ components:
           description: |
             Bytes written verbatim to each host connection, indexed by connection
             index, before the first method byte. The manager rejects a non-empty
-            entry for a connection it owns itself.
+            entry for a connection it owns itself
         hook_cross_contract_calls:
           type: boolean
           default: false
           description: |
             Whether the host wants to answer `resolve_call_contract_executor`. When
             false the manager answers it with a null reply and every `CallContract`
-            stays in-process.
+            stays in-process
         unsafe_overrides:
           type: object
+          default: {}
           description: |
             Overrides that reach boundaries production traffic cannot. Each member
-            states the `debug_mode` it needs; with debugging disabled none apply.
+            states the `debug_mode` it needs; with debugging disabled none apply
           properties:
             reroute_to:
               type: string
@@ -960,7 +1121,7 @@ components:
               description: |
                 Run this version instead of the one `selector` resolves to, in
                 the same two forms `selector`'s version variant accepts. Empty is
-                no override. Honored from `safe` up.
+                no override. Honored from `safe` up
             initial_recursion:
               type: integer
               format: uint32
@@ -968,7 +1129,7 @@ components:
               default: null
               description: |
                 Seeds the chain's recursion budget, replacing the executor's own
-                `VM_RECURSION`. Honored from `unsafe` up.
+                `VM_RECURSION`. Honored from `unsafe` up
             allow_two_workers:
               type: boolean
               nullable: true
@@ -976,7 +1137,7 @@ components:
               description: |
                 Overrides the manager's `allow_two_workers` config. v0.2 warns
                 when false and keeps its existing scheduling.
-                Honored from `unsafe` up. Null keeps the configured value.
+                Honored from `unsafe` up. Null keeps the configured value
 
   responses:
     ErrorResponse:
@@ -989,3 +1150,13 @@ components:
               error:
                 type: string
                 description: Error message
+    NotFound:
+      description: The `genvm_id` path segment is not a decimal 64-bit unsigned integer
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Not Found

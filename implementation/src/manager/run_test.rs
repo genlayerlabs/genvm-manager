@@ -985,10 +985,8 @@ fn documented_properties(schema: &str) -> Vec<String> {
     names
 }
 
-/// A host implementing against the schema alone must see every field the
-/// manager accepts, and none it does not. Drift here is not cosmetic: an
-/// undocumented `permissions` silently grants the `wscn` default, and a
-/// documented-but-absent field makes a host send something that is ignored.
+/// An undocumented `permissions` field would silently grant the default `wscn`.
+/// Compares property names only; types, defaults and `required` are unchecked.
 #[test]
 fn request_schema_matches_the_rust_struct() {
     let mut accepted = request_field_names()
@@ -1000,7 +998,7 @@ fn request_schema_matches_the_rust_struct() {
     assert_eq!(documented_properties("GenvmRunRequest"), accepted);
 }
 
-/// Same contract for the message the host builds by hand.
+/// Same name-only check for `MessageData`.
 #[test]
 fn message_schema_matches_the_rust_struct() {
     #[allow(unused_variables)]
