@@ -305,6 +305,7 @@ struct SingleGenVMContext {
     consumed_result: tokio::sync::OnceCell<Vec<u8>>,
 
     process_handle: tokio::sync::Mutex<Option<tokio::process::Child>>,
+    spawned: AtomicBool,
     cancel_requested: AtomicBool,
     cancel_notify: tokio::sync::Notify,
     finish_cause: std::sync::Mutex<Option<FinishCause>>,
@@ -329,6 +330,14 @@ impl SingleGenVMContext {
             .read()
             .map(|v| v.clone())
             .unwrap_or_else(|_| String::new())
+    }
+
+    fn mark_spawned(&self) {
+        self.spawned.store(true, Ordering::SeqCst);
+    }
+
+    fn was_spawned(&self) -> bool {
+        self.spawned.load(Ordering::SeqCst)
     }
 
     fn request_finish(&self, cause: FinishCause) {
@@ -532,17 +541,17 @@ impl Ctx {
     pub async fn set_permits(&self, permits: usize) -> usize {
         let mut permits_lock = self.max_permits.lock().await;
 
-        permits_lock.max += permits_lock.num_throttled;
-        permits_lock.num_throttled = 0;
-        permits_lock.throttled = None;
-        // actually this causes drop of previous one, so we can enter more genvms than we have permits, but it's ok for now
-        // especially since this method is expected to be called before starting any genvms at all
-
         let min = self.min_permits();
         if permits < min {
             log_warn!(@operator, permits = permits, min = min; "cannot set permits below the most expensive run");
             return permits_lock.max;
         }
+
+        permits_lock.max += permits_lock.num_throttled;
+        permits_lock.num_throttled = 0;
+        permits_lock.throttled = None;
+        // actually this causes drop of previous one, so we can enter more genvms than we have permits, but it's ok for now
+        // especially since this method is expected to be called before starting any genvms at all
 
         if permits_lock.max > permits {
             let delta = permits_lock.max - permits;
@@ -1927,6 +1936,27 @@ fn spawn_stdin_writer(
     })
 }
 
+fn check_stdin_write(
+    genvm_id: GenVMId,
+    result: Result<std::io::Result<()>, tokio::task::JoinError>,
+) -> anyhow::Result<()> {
+    match result {
+        Ok(Ok(())) => {
+            log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "execution data written");
+            Ok(())
+        }
+        // The executor stopped reading; its exit status tells how the run ended
+        Ok(Err(e)) if e.kind() == std::io::ErrorKind::BrokenPipe => {
+            log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "executor closed stdin before reading execution data");
+            Ok(())
+        }
+        Ok(Err(e)) => Err(anyhow::anyhow!(
+            "failed to write execution data to child stdin: {e}"
+        )),
+        Err(e) => Err(anyhow::anyhow!("stdin write task panicked: {e}")),
+    }
+}
+
 fn strict_deadline_from_request(req: &Request) -> chrono::DateTime<chrono::Utc> {
     let max = std::time::Duration::from_secs(24 * 60 * 60);
     let duration = req
@@ -1982,7 +2012,7 @@ fn execution_data_from_request(
 enum RunResources {
     TopLevel {
         permits: tokio::sync::OwnedSemaphorePermit,
-        modules_lock: Box<dyn std::any::Any + Send + Sync>,
+        modules_lock: Option<super::modules::ModuleLocks>,
     },
     Nested {
         caller_stream: Arc<ManagerHostStreamState>,
@@ -2012,6 +2042,11 @@ enum ProcessStop {
 enum Reservation {
     Existing(GenVMId),
     Reserved(sync::DArc<SingleGenVMContext>),
+}
+
+pub struct StartResult {
+    pub genvm_id: GenVMId,
+    pub reserved: bool,
 }
 
 async fn wait_for_process_stop(
@@ -2068,12 +2103,11 @@ impl Ctx {
         Reservation::Reserved(exec_ctx)
     }
 
-    pub async fn start(
+    pub fn start(
         &self,
         full_ctx: sync::DArc<crate::manager::AppContext>,
         req: Request,
-        modules_lock: Box<dyn std::any::Any + Send + Sync>,
-    ) -> anyhow::Result<GenVMId> {
+    ) -> StartResult {
         let reservation = self.reserve_execution(req.host_genvm_id.as_deref(), |genvm_id| {
             let events = tokio::sync::watch::Sender::new(Snapshot::Queued {
                 genvm_id,
@@ -2091,6 +2125,7 @@ impl Ctx {
                 id: genvm_id,
                 host_genvm_id: req.host_genvm_id.clone(),
                 process_handle: tokio::sync::Mutex::new(None),
+                spawned: AtomicBool::new(false),
                 started_at: chrono::Utc::now(),
                 strict_deadline: strict_deadline_from_request(&req),
 
@@ -2113,14 +2148,22 @@ impl Ctx {
         });
 
         let exec_ctx = match reservation {
-            Reservation::Existing(genvm_id) => return Ok(genvm_id),
+            Reservation::Existing(genvm_id) => {
+                return StartResult {
+                    genvm_id,
+                    reserved: false,
+                };
+            }
             Reservation::Reserved(exec_ctx) => exec_ctx,
         };
         let genvm_id = exec_ctx.id;
 
-        tokio::spawn(supervise_genvm(full_ctx, exec_ctx, req, modules_lock));
+        tokio::spawn(supervise_genvm(full_ctx, exec_ctx, req));
 
-        Ok(genvm_id)
+        StartResult {
+            genvm_id,
+            reserved: true,
+        }
     }
 
     async fn start_nested(
@@ -2233,12 +2276,49 @@ impl Ctx {
     }
 }
 
+fn check_top_level_request(req: &Request, has_modules_lock: bool) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        !req.needs_modules() || has_modules_lock,
+        "modules are required but not running"
+    );
+    anyhow::ensure!(
+        req.host_hello_data
+            .get(1)
+            .is_none_or(|data| data.is_empty()),
+        "host_hello_data for manager-owned host index 1 is not allowed"
+    );
+    Ok(())
+}
+
 async fn supervise_genvm(
     full_ctx: sync::DArc<crate::manager::AppContext>,
     exec_ctx: sync::DArc<SingleGenVMContext>,
     req: Request,
-    modules_lock: Box<dyn std::any::Any + Send + Sync>,
 ) {
+    async fn finish_cancelled(exec_ctx: &SingleGenVMContext) {
+        let cause = exec_ctx.finish_cause().unwrap_or(FinishCause::Cancelled);
+        let _ = finish_execution(exec_ctx, None, cause).await;
+    }
+
+    // A queued module stop or restart blocks new read guards
+    let modules_lock = if req.needs_modules() {
+        tokio::select! {
+            _ = exec_ctx.wait_cancelled() => {
+                finish_cancelled(&exec_ctx).await;
+                return;
+            }
+            lock = super::modules::Ctx::get_module_locks(full_ctx.gep(|x| &x.mod_ctx)) => lock,
+        }
+    } else {
+        None
+    };
+
+    if let Err(e) = check_top_level_request(&req, modules_lock.is_some()) {
+        fail_to_start(&exec_ctx, e);
+        return;
+    }
+    drop(modules_lock);
+
     let ctx = full_ctx.gep(|x| &x.run_ctx);
     let permit_count = ctx.permits_for(&req);
 
@@ -2246,8 +2326,7 @@ async fn supervise_genvm(
     tokio::pin!(permit_future);
     let permits = tokio::select! {
         _ = exec_ctx.wait_cancelled() => {
-            let cause = exec_ctx.finish_cause().unwrap_or(FinishCause::Cancelled);
-            let _ = finish_execution(&exec_ctx, None, cause).await;
+            finish_cancelled(&exec_ctx).await;
             return;
         }
         permits = &mut permit_future => match permits {
@@ -2259,25 +2338,55 @@ async fn supervise_genvm(
         },
     };
 
-    if exec_ctx.cancel_requested.load(Ordering::SeqCst) {
-        let cause = exec_ctx.finish_cause().unwrap_or(FinishCause::Cancelled);
+    let modules_lock = if req.needs_modules() {
+        tokio::select! {
+            _ = exec_ctx.wait_cancelled() => {
+                drop(permits);
+                finish_cancelled(&exec_ctx).await;
+                return;
+            }
+            lock = super::modules::Ctx::get_module_locks(full_ctx.gep(|x| &x.mod_ctx)) => lock,
+        }
+    } else {
+        None
+    };
+
+    if let Err(e) = check_top_level_request(&req, modules_lock.is_some()) {
         drop(permits);
-        let _ = finish_execution(&exec_ctx, None, cause).await;
+        fail_to_start(&exec_ctx, e);
+        return;
+    }
+
+    if exec_ctx.cancel_requested.load(Ordering::SeqCst) {
+        drop(permits);
+        drop(modules_lock);
+        finish_cancelled(&exec_ctx).await;
         return;
     }
 
     if let Err(e) =
         supervise_genvm_inner(full_ctx, exec_ctx.clone(), req, modules_lock, permits).await
     {
-        fail_to_start(&exec_ctx, e);
+        report_run_failure(&exec_ctx, e).await;
     }
+}
+
+/// A spawned executor always ends in `finished`, even when the manager fails it
+async fn report_run_failure(exec: &SingleGenVMContext, error: anyhow::Error) {
+    if !exec.was_spawned() {
+        fail_to_start(exec, error);
+        return;
+    }
+
+    log_warn_into!(@operator, &LoggerWithId, genvm_id:id = exec.id.0, error:ah = error; "executor was spawned but the run failed before its exit status was known");
+    let _ = finish_execution(exec, None, FinishCause::Exited).await;
 }
 
 async fn supervise_genvm_inner(
     full_ctx: sync::DArc<crate::manager::AppContext>,
     exec_ctx: sync::DArc<SingleGenVMContext>,
     req: Request,
-    modules_lock: Box<dyn std::any::Any + Send + Sync>,
+    modules_lock: Option<super::modules::ModuleLocks>,
     permits: tokio::sync::OwnedSemaphorePermit,
 ) -> anyhow::Result<()> {
     let execution_data = execution_data_from_request(&req, &full_ctx.config);
@@ -2372,18 +2481,18 @@ async fn run_genvm_process(
 ) -> anyhow::Result<std::process::ExitStatus> {
     let is_top_level = resources.is_top_level();
     let caller_stream = resources.caller_stream();
-    let module_handlers = if req.needs_modules() {
-        let (llm, web) = full_ctx
-            .mod_ctx
-            .get_handlers()
-            .await
-            .ok_or_else(|| anyhow::anyhow!("modules are required but not all are running"))?;
-        Some((llm, web))
-    } else {
-        None
+    let modules_lock = match &resources {
+        RunResources::TopLevel { modules_lock, .. } => modules_lock.as_ref(),
+        RunResources::Nested { .. } => None,
     };
+    assert_eq!(
+        modules_lock.is_some(),
+        req.needs_modules(),
+        "a run needing modules must hold their locks"
+    );
+    let module_handlers = modules_lock.map(|lock| lock.handlers());
 
-    let execution_context = if req.needs_modules() {
+    let execution_context = if let Some(modules_lock) = modules_lock {
         let host_data: genvm_modules_interfaces::HostData = serde_json::from_str(&req.host_data)?;
         let role = if req.leader_public_data.is_none() {
             genvm_modules_interfaces::Role::Leader
@@ -2397,7 +2506,7 @@ async fn run_genvm_process(
             gas_data: req.gas_data.clone(),
             initial_time_units_allocation: req.initial_time_units_allocation,
         });
-        let ctx = full_ctx.mod_ctx.create_execution_context(hello).await?;
+        let ctx = modules_lock.create_execution_context(hello)?;
         let _ = exec_ctx.execution_context.set(ctx.clone());
         Some(ctx)
     } else {
@@ -2472,14 +2581,6 @@ async fn run_genvm_process(
         None
     };
 
-    if req
-        .host_hello_data
-        .get(1)
-        .is_some_and(|data| !data.is_empty())
-    {
-        anyhow::bail!("host_hello_data for manager-owned host index 1 is not allowed");
-    }
-
     let execution_data_bytes = bytes::Bytes::from(calldata::encode_obj(&execution_data));
 
     let log_reader = async {
@@ -2494,6 +2595,9 @@ async fn run_genvm_process(
     let process = async {
         // Spawn child process, then drop child-side FDs
         let mut child = proc.spawn()?;
+        if is_top_level {
+            exec_ctx.mark_spawned();
+        }
         drop(write_fd);
         log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0, pid:? = child.id(); "genvm process started");
         std::mem::drop(module_child_fds);
@@ -2507,12 +2611,26 @@ async fn run_genvm_process(
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
         let stdout_perm = if stdout.is_some() {
-            Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
+            Some(
+                exec_ctx
+                    .stdout_stderr_sem
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("stdout/stderr semaphore is never closed"),
+            )
         } else {
             None
         };
         let stderr_perm = if stderr.is_some() {
-            Some(exec_ctx.stdout_stderr_sem.clone().acquire_owned().await?)
+            Some(
+                exec_ctx
+                    .stdout_stderr_sem
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .expect("stdout/stderr semaphore is never closed"),
+            )
         } else {
             None
         };
@@ -2544,31 +2662,21 @@ async fn run_genvm_process(
                 wait_for_process_stop(&exec_ctx, caller_stream.as_deref(), deadline_duration);
             tokio::pin!(stop);
             tokio::select! {
-                result = &mut stdin_task => match result {
-                    Ok(Ok(())) => {
-                        log_debug_into!(&LoggerWithId, genvm_id:id = genvm_id.0; "execution data written");
-                    }
-                    Ok(Err(e)) => {
+                result = &mut stdin_task => {
+                    if let Err(e) = check_stdin_write(genvm_id, result) {
                         let _ = child.start_kill();
                         let _ = child.wait().await;
-                        anyhow::bail!("failed to write execution data to child stdin: {e}");
+                        return Err(e);
                     }
-                    Err(e) => {
-                        let _ = child.start_kill();
-                        let _ = child.wait().await;
-                        anyhow::bail!("stdin write task panicked: {e}");
-                    }
-                },
+                }
+                // An early exit is reported by the regular wait below, which caches the status
                 status = child.wait() => {
                     stdin_task.abort();
-                    return match status {
-                        Ok(status) => Ok(status),
-                        Err(e) => {
-                            let _ = child.start_kill();
-                            let _ = child.wait().await;
-                            Err(e.into())
-                        }
-                    };
+                    if let Err(e) = status {
+                        let _ = child.start_kill();
+                        let _ = child.wait().await;
+                        return Err(e.into());
+                    }
                 }
                 reason = &mut stop => {
                     if reason == ProcessStop::Deadline {

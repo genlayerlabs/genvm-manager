@@ -402,26 +402,114 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					aiohttp.WSCloseCode.MESSAGE_TOO_BIG,
 				), close_code
 
+	async def _rejected_run_still_gets_id(self):
+		async with (
+			await self._manager('async-validation') as manager,
+			self._occupied_permits(manager),
+		):
+			host_path = manager.work_dir / 'unused-host.sock'
+			cases = [
+				({'host_hello_data': [b'', b'injected']}, 'host index 1'),
+				# The fixture manager runs no modules
+				(
+					{'no_modules': False, 'is_sync': False, 'permissions': 'n'},
+					'modules are required',
+				),
+			]
+			for request_id, (overrides, error) in enumerate(cases, start=1):
+				async with ManagerWsClient(manager.uri) as client:
+					await _read_hello(client)
+					req = _run_request(self.case.shared.root_dir, host_path)
+					req['run'].update(overrides)
+					await client.send(Methods.RUN, request_id, req)
+					method, got_request_id, payload = await client.read_frame()
+					assert (method, got_request_id) == (Methods.RUN, request_id), payload
+					variant, event = await _wait_terminal(client, timeout=5)
+					assert variant == 'failed_to_start', variant
+					assert event['genvm_id'] == payload['genvm_id']
+					assert error in event['error'], event
+					status, body = await _http_json('GET', manager.uri, '/status')
+					assert status == 200, body
+					assert body['permits']['current'] == 0, body
+
+	@contextlib.asynccontextmanager
+	async def _occupied_permits(self, manager: _ManagerFixture):
+		status, body = await _http_json('GET', manager.uri, '/status')
+		assert status == 200, body
+		permits = body['permits']
+		assert permits['current'] == permits['max'], permits
+		assert permits['max'] % permits['per_sync_run'] == 0, permits
+		genvm_ids = []
+		host_tasks = []
+		cancel_host = asyncio.Event()
+		async with contextlib.AsyncExitStack() as stack:
+			try:
+				for i in range(permits['max'] // permits['per_sync_run']):
+					ctx = _TestContext(self.case.shared.logger)
+					host, host_path = _make_mock_host(manager, f'busy-{i}', ctx)
+					mock_host = stack.enter_context(host)
+					host_tasks.append(
+						asyncio.create_task(base_host.host_loop(mock_host, cancel_host, ctx=ctx))
+					)
+					client = await stack.enter_async_context(ManagerWsClient(manager.uri))
+					await _read_hello(client)
+					req = _run_request(self.case.shared.root_dir, host_path)
+					req['run']['code'] = (self.case.shared.root_dir / BUSY_CONTRACT).read_bytes()
+					req['run']['deadline'] = '120s'
+					await client.send(Methods.RUN, 1, req)
+					genvm_ids.append((await _read_reply(client, Methods.RUN, 1))['genvm_id'])
+					await _wait_event(client, 'started')
+				status, body = await _http_json('GET', manager.uri, '/status')
+				assert status == 200, body
+				assert body['permits']['current'] == 0, body
+				yield
+			finally:
+				cancel_host.set()
+				try:
+					for genvm_id in genvm_ids:
+						await _http_json('DELETE', manager.uri, f'/genvm/{genvm_id}')
+				finally:
+					for task in host_tasks:
+						task.cancel()
+					await asyncio.gather(*host_tasks, return_exceptions=True)
+
 	async def _startup_failure_events_and_permits(self):
 		async with await self._manager('startup-failures') as manager:
 			async with ManagerWsClient(manager.uri) as client:
 				await _read_hello(client)
 				host_path = manager.work_dir / 'unused-host.sock'
-				await client.send(
-					Methods.RUN,
-					10,
-					_run_request(self.case.shared.root_dir, host_path, extra_args=['--bad-flag']),
+				req = _run_request(
+					self.case.shared.root_dir, host_path, extra_args=['--bad-flag']
 				)
+				# Outgrows the stdin pipe, so the executor exits while it is being written
+				req['run']['calldata'] = gvm_calldata.encode({'pad': bytes(4 << 20)})
+				await client.send(Methods.RUN, 10, req)
 				method, request_id, payload = await client.read_frame()
 				assert method == Methods.RUN
 				assert request_id == 10
 				genvm_id = payload['genvm_id']
-				# The executor rejects the flag and exits on its own, so this is
-				# a `finished` with its exit code rather than `failed_to_start`.
+				# The executor rejects the flag and exits on its own, so this is a
+				# `finished` with its exit code and its complaint in stderr, whichever
+				# of the write and the exit the manager notices first.
 				variant, event = await _wait_terminal(client, timeout=5)
 				assert event['genvm_id'] == genvm_id
 				assert variant == 'finished', variant
 				assert event['exit_code'] not in (0, None), event
+				assert event['artifact_sizes']['stderr'] > 0, event
+				await client.send(
+					Methods.GET_ARTIFACT,
+					11,
+					{
+						'get_artifact': {
+							'genvm_id': genvm_id,
+							'field': 'stderr',
+							'offset': 0,
+							'max_len': 4096,
+						}
+					},
+				)
+				artifact = await _read_reply(client, Methods.GET_ARTIFACT, 11)
+				assert b'--bad-flag' in artifact['data'], artifact
 
 			async with ManagerWsClient(manager.uri) as client:
 				await _read_hello(client)
@@ -816,6 +904,28 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					)
 					await _read_error(client, 111, Errors.UNKNOWN_ID)
 
+	async def _http_retry_preserves_socket_failure(self):
+		async with await self._manager('http-retry-socket-failure') as manager:
+			async with ManagerWsClient(manager.uri) as client:
+				boot_id = await _read_hello(client)
+				req = _run_request(self.case.shared.root_dir, manager.work_dir / 'unused.sock')
+				req['run'].update(
+					host_genvm_id='socket-failure', host_hello_data=[b'', b'injected']
+				)
+				await client.send(Methods.RUN, 1, req)
+				genvm_id = (await _read_reply(client, Methods.RUN, 1))['genvm_id']
+				variant, failure = await _wait_terminal(client, timeout=5)
+				assert variant == 'failed_to_start', failure
+				status, body = await _http_json(
+					'POST', manager.uri, '/genvm/run', data=gvm_calldata.encode(req['run'])
+				)
+				assert status == 500, body
+				await client.send(
+					Methods.ATTACH, 2, {'attach': {'boot_id': boot_id, 'genvm_id': genvm_id}}
+				)
+				snapshot = (await _read_reply(client, Methods.ATTACH, 2))['snapshot']
+				assert snapshot['failed_to_start'] == failure, snapshot
+
 	async def _http_and_socket_same_fixture(self):
 		async with await self._manager('http-socket-parity') as manager:
 			http_res = await self._run_fixture_over_http(manager, 'http')
@@ -825,7 +935,23 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 			assert http_res['result_kind'] == socket_res.result_kind
 			assert http_res['result_data'] == socket_res.result_data
 
-	async def _run_fixture_over_http(self, manager: _ManagerFixture, name: str):
+	async def _http_failure_releases_token(self):
+		async with await self._manager('http-failure-cleanup') as manager:
+			req = _run_request(self.case.shared.root_dir, manager.work_dir / 'unused.sock')
+			req['run'].update(
+				host_genvm_id='http-failure', host_hello_data=[b'', b'injected']
+			)
+			status, body = await _http_json(
+				'POST', manager.uri, '/genvm/run', data=gvm_calldata.encode(req['run'])
+			)
+			assert status == 500, body
+			await self._run_fixture_over_http(
+				manager, 'corrected', host_genvm_id='http-failure'
+			)
+
+	async def _run_fixture_over_http(
+		self, manager: _ManagerFixture, name: str, *, host_genvm_id: str | None = None
+	):
 		ctx = _TestContext(self.case.shared.logger)
 		host, host_path = _make_mock_host(manager, name, ctx)
 		cancel_host = asyncio.Event()
@@ -834,6 +960,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 				base_host.host_loop(mock_host, cancel_host, ctx=ctx)
 			)
 			req = _run_request(self.case.shared.root_dir, host_path)['run']
+			req['host_genvm_id'] = host_genvm_id
 			async with aiohttp.request(
 				'POST',
 				f'{manager.uri}/genvm/run',
@@ -958,6 +1085,13 @@ def collect(
 			None,
 			genvm.ManagerService,
 		),
+		(
+			'async-validation',
+			'_rejected_run_still_gets_id',
+			{},
+			None,
+			genvm.ManagerService,
+		),
 		('happy-path', '_happy_path_artifact_ack_attach', {}, None, genvm.ManagerService),
 		(
 			'reconnect-mid-run',
@@ -1006,6 +1140,20 @@ def collect(
 		),
 		('http-parity', '_http_and_socket_same_fixture', {}, None, genvm.ManagerService),
 		(
+			'http-failure-cleanup',
+			'_http_failure_releases_token',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
+			'http-retry-socket-failure',
+			'_http_retry_preserves_socket_failure',
+			{},
+			None,
+			genvm.ManagerService,
+		),
+		(
 			'unix-stale-socket',
 			'_unix_parent_and_stale_socket',
 			{},
@@ -1024,6 +1172,7 @@ def collect(
 			name=f'tests/system/manager-socket/{slug}',
 			needed_services=frozenset({manager_service}),
 			tags=frozenset({'integration', 'stable', 'feature-manager-socket'}),
+			console_pool=True,
 		)
 		ctx.add_case(
 			ManagerSocketCase(

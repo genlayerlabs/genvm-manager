@@ -679,9 +679,9 @@ class TerminalResultUnavailable(Exception):
 		super().__init__(message)
 
 
-# Transient manager refusals worth retrying. The manager reports these with the
-# generic `Errors.INTERNAL` code (no dedicated variant yet), so the message is
-# the only discriminator -- kept here so callers never have to string-match.
+# Transient manager refusals worth retrying. They arrive as a `failed_to_start`
+# error string, so the message is the only discriminator -- kept here so callers
+# never have to string-match.
 _RETRYABLE_RUN_REFUSAL_MARKERS: typing.Final = (
 	'modules are required but not running',
 	'modules are required but not all are running',
