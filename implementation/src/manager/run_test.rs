@@ -19,6 +19,56 @@ fn test_ctx(retention: &str, permits: usize) -> Ctx {
     }
 }
 
+async fn test_app_ctx() -> sync::DArc<crate::manager::AppContext> {
+    let manifest_path =
+        std::env::temp_dir().join(format!("genvm-run-test-{}.yaml", rand::random::<u128>()));
+    std::fs::write(&manifest_path, "executor_versions: {}\n").unwrap();
+    let config: sync::DArc<crate::manager::Config> = sync::DArc::new(
+        serde_json::from_value(serde_json::json!({
+            "threads": 1,
+            "blocking_threads": 1,
+            "log_disable": "",
+            "manifest_path": manifest_path,
+        }))
+        .unwrap(),
+    );
+    let ver_ctx = crate::manager::versioning::Ctx::new(config.clone()).await;
+    std::fs::remove_file(manifest_path).unwrap();
+    let (cancel, _) = cancellation::make();
+    sync::DArc::new(crate::manager::AppContext {
+        mod_ctx: crate::manager::modules::Ctx::new(cancel.clone()),
+        cancel,
+        config,
+        run_ctx: test_ctx("5m", 2),
+        ver_ctx: ver_ctx.unwrap(),
+    })
+}
+
+fn module_request() -> Request {
+    let message = genvm_modules_interfaces::MessageData {
+        contract_address: calldata::Address::from([0; 20]),
+        sender_address: calldata::Address::from([0; 20]),
+        origin_address: calldata::Address::from([0; 20]),
+        signer_address: calldata::Address::from([0; 20]),
+        chain_id: 0.into(),
+        value: 0.into(),
+        is_init: false,
+        transaction_timestamp: chrono::Utc::now(),
+    };
+    serde_json::from_value(serde_json::json!({
+        "selector": genvm_modules_interfaces::ExecutorSelector::MajorOverride { major: 0 },
+        "message": message,
+        "is_sync": false,
+        "bucket_totals": {},
+        "host_data": "",
+        "timestamp": message.transaction_timestamp,
+        "host": "",
+        "calldata": [],
+        "initial_time_units_allocation": 0,
+    }))
+    .unwrap()
+}
+
 fn fake_execution(
     genvm_id: GenVMId,
     finished_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -444,6 +494,75 @@ async fn cancel_while_queued_consumes_no_permit() {
     assert_eq!(permits.available_permits(), 0);
     permits.add_permits(1);
     assert_eq!(permits.available_permits(), 1);
+}
+
+#[tokio::test]
+async fn permit_queued_run_allows_module_stop_and_rechecks_modules() {
+    use crate::manager::modules::{StartRequest, Type};
+
+    let ctx = test_app_ctx().await;
+    let config = serde_json::json!({
+        "threads": 1,
+        "blocking_threads": 1,
+        "log_disable": "",
+        "lua_script_path": "",
+        "vm_count": 1,
+        "lua_path": "",
+        "signer_url": "",
+        "signer_headers": {},
+        "data_dir": "",
+        "backends": {},
+        "prompt_templates": {
+            "eq_comparative": null,
+            "eq_non_comparative_leader": null,
+            "eq_non_comparative_validator": null,
+        },
+        "webdriver_host": "",
+        "extra_tld": [],
+        "always_allow_hosts": [],
+    });
+    for module_type in [Type::Llm, Type::Web] {
+        ctx.mod_ctx
+            .start(StartRequest {
+                module_type,
+                config: config.clone(),
+                allow_empty_backends: true,
+                user_error: true,
+            })
+            .await
+            .unwrap();
+    }
+    let occupied = ctx
+        .run_ctx
+        .permits
+        .clone()
+        .acquire_many_owned(2)
+        .await
+        .unwrap();
+    let exec = fake_execution(GenVMId(1), None);
+    let run = supervise_genvm(ctx.clone(), exec.clone(), module_request());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(run.as_mut()).is_pending());
+    assert!(matches!(*exec.events.borrow(), Snapshot::Queued { .. }));
+
+    for module_type in [Type::Llm, Type::Web] {
+        let stop = ctx.mod_ctx.stop(module_type);
+        tokio::pin!(stop);
+        assert!(matches!(
+            futures_util::poll!(stop.as_mut()),
+            std::task::Poll::Ready(Ok(true))
+        ));
+    }
+
+    drop(occupied);
+    assert!(futures_util::poll!(run.as_mut()).is_ready());
+    assert_eq!(ctx.run_ctx.permits.available_permits(), 2);
+    let snapshot = exec.events.borrow();
+    assert!(
+        matches!(&*snapshot, Snapshot::Event(Event::FailedToStart { error, .. })
+            if error == "modules are required but not running"),
+        "unexpected snapshot: {snapshot:?}"
+    );
 }
 
 #[tokio::test]

@@ -2300,8 +2300,7 @@ async fn supervise_genvm(
         let _ = finish_execution(exec_ctx, None, cause).await;
     }
 
-    // A queued module stop or restart blocks new read guards, so this wait
-    // must stay off the connection that issued the run
+    // A queued module stop or restart blocks new read guards
     let modules_lock = if req.needs_modules() {
         tokio::select! {
             _ = exec_ctx.wait_cancelled() => {
@@ -2318,6 +2317,7 @@ async fn supervise_genvm(
         fail_to_start(&exec_ctx, e);
         return;
     }
+    drop(modules_lock);
 
     let ctx = full_ctx.gep(|x| &x.run_ctx);
     let permit_count = ctx.permits_for(&req);
@@ -2337,6 +2337,25 @@ async fn supervise_genvm(
             }
         },
     };
+
+    let modules_lock = if req.needs_modules() {
+        tokio::select! {
+            _ = exec_ctx.wait_cancelled() => {
+                drop(permits);
+                finish_cancelled(&exec_ctx).await;
+                return;
+            }
+            lock = super::modules::Ctx::get_module_locks(full_ctx.gep(|x| &x.mod_ctx)) => lock,
+        }
+    } else {
+        None
+    };
+
+    if let Err(e) = check_top_level_request(&req, modules_lock.is_some()) {
+        drop(permits);
+        fail_to_start(&exec_ctx, e);
+        return;
+    }
 
     if exec_ctx.cancel_requested.load(Ordering::SeqCst) {
         drop(permits);

@@ -228,8 +228,9 @@ Externally-tagged; every event carries ``genvm_id`` and, when the run was
 started with one, ``host_genvm_id``. Variants:
 
 ``queued``
-   The run is allocated but no executor process exists yet, because it is
-   waiting for a permit. Non-terminal. Mainly seen as the ``attach`` snapshot of
+   The run is allocated but no executor process exists yet; startup validation
+   (module locks) or permit acquisition may still be pending. Non-terminal.
+   Mainly seen as the ``attach`` snapshot of
    a run that has not spawned. ``attach`` returns the current lifecycle state;
    later notifications follow the `Lifecycle guarantees`_. Intermediate states
    may be coalesced, so a fast run can go straight from ``queued`` to a terminal

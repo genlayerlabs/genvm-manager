@@ -197,7 +197,7 @@ paths:
         `host_genvm_id` idempotency token. A failed HTTP start created by this
         request is released, freeing its token for a corrected retry. A retry
         that finds an existing retained run does not release it. Socket startup
-        failures remain retained until `ack` or the retention TTL
+        failures remain retained until `ack` or until the retention TTL expires
 
         The body is calldata, not JSON; `GenvmRunRequest` says how its types map
         onto calldata.
