@@ -58,9 +58,9 @@ is **dropped without a close frame** -- a client observes an abnormal closure
 (1006), not 1009, and no ``error`` payload is sent. Clients that page artifacts
 within the documented chunk cap never approach the cap.
 
-Payloads are externally-tagged: a single-key map whose key names the variant.
-The ``method_id`` header is authoritative for routing; the in-payload tag is
-redundant by design (log readability).
+Requests and notifications are externally-tagged: a single-key map whose key
+names the variant. Replies, including errors, are untagged maps.
+The ``method_id`` header is authoritative for routing
 
 Method ids
 ----------
@@ -144,9 +144,11 @@ and process spawn continue asynchronously and report through ``event``
 notifications. The requesting connection is subscribed to the run's events
 automatically.
 
-Only a payload that fails to decode is answered with ``error``. A decoded request
-that fails a check, such as a non-empty ``host_hello_data[1]`` or needing
-modules while they are stopped, ends with ``failed_to_start``.
+A payload that fails to decode is answered with ``malformed_frame``. An
+idempotent retry can receive ``unknown_id`` if the retained run is removed
+concurrently before subscription. A decoded request that fails a check, such
+as a non-empty ``host_hello_data[1]`` or needing modules while they are stopped,
+ends with ``failed_to_start``
 
 ``attach``
 ----------
@@ -173,10 +175,10 @@ affect the run (see below).
 
    { "cancel": { "genvm_id": u64 } }
 
-Requests termination. Response is an empty map; the outcome arrives as the
-run's single terminal event. Cancelling a run still queued on permits aborts
-it before spawn (no permit is consumed) and still yields exactly one terminal
-event with cause ``cancelled``.
+Requests termination. Response is an empty map; the outcome is reported through
+``event`` under the `Lifecycle guarantees`_. Cancelling a run still queued on
+permits aborts it before spawn (no permit is consumed) and ends in ``finished``
+with cause ``cancelled``
 
 ``ack``
 -------
@@ -211,8 +213,13 @@ connections.
 connection through a low-priority writer queue, so bulk transfers cannot
 starve lifecycle events.
 
-The terminal event carries each artifact's total size, so clients can skip
-the calls entirely when the blobs are empty.
+Artifacts are available only for retained ``finished`` runs. Queued, running,
+and retained ``failed_to_start`` runs answer ``unknown_id`` even though they
+remain attachable. An invalid ``field`` on a retained ``finished`` run answers
+``malformed_frame``
+
+The ``finished`` event carries each artifact's total size, so clients can skip
+the calls entirely when the blobs are empty
 
 ``event`` notifications
 -----------------------
@@ -223,10 +230,10 @@ started with one, ``host_genvm_id``. Variants:
 ``queued``
    The run is allocated but no executor process exists yet, because it is
    waiting for a permit. Non-terminal. Mainly seen as the ``attach`` snapshot of
-   a run that has not spawned; a client that attaches this early always observes
-   the current lifecycle state and every terminal event, but intermediate states
+   a run that has not spawned. ``attach`` returns the current lifecycle state;
+   later notifications follow the `Lifecycle guarantees`_. Intermediate states
    may be coalesced, so a fast run can go straight from ``queued`` to a terminal
-   event. ::
+   event ::
 
       { "queued": { "genvm_id": u64, "host_genvm_id": str? } }
 
@@ -249,12 +256,8 @@ started with one, ``host_genvm_id``. Variants:
    can observe without guessing, and a timer that guesses it would both tax
    every healthy run and still race a slow failure.
 
-   Either way the host receives a terminal event promptly, which is what
-   matters: this is the class of failure that used to leave it waiting on
-   ``accept()`` forever.
-
 ``finished``
-   Terminal, sent exactly once per run. ::
+   Terminal; retries can replay its notification (see `Lifecycle guarantees`_) ::
 
       { "finished": {
           "genvm_id": u64, "host_genvm_id": str?,
@@ -267,8 +270,9 @@ started with one, ``host_genvm_id``. Variants:
           "artifact_sizes": { "stdout": u64, "stderr": u64,
                               "genvm_log": u64 } } }
 
-   An internal manager failure after the spawn also ends in ``finished``, with
-   cause ``exited`` and a null ``exit_code``.
+   An internal manager failure after the spawn also ends in ``finished`` with
+   a null ``exit_code``. Its cause is ``exited`` unless a termination cause was
+   already recorded
 
 For a top-level run, ``consumed_result`` is one outer ``ResultCode`` byte
 followed by a calldata-encoded ``ReportedResult`` map. Before retaining it, the
@@ -288,10 +292,14 @@ therefore never receive a top-level ``FatalVmError``
 The manager does not decode reported ``leader_public_data``. The bytes remain
 opaque, executor-line-specific consensus proposals
 
+.. _Lifecycle guarantees:
+
 Lifecycle guarantees:
 
-- Exactly one terminal event (``failed_to_start`` or ``finished``) per run,
-  delivered to every connection subscribed at the time.
+- Each run has 1 terminal state (``failed_to_start`` or ``finished``).
+  Subscribed connections receive its notification while connected; retrying
+  ``run`` with the same retained token can replay it. Manager shutdown may
+  close connections before the terminal notification is delivered
 - **Disconnect does not kill a run.** Runs terminate only via ``cancel``, the
   deadline, or manager shutdown. A client may disconnect, reconnect, and
   ``attach`` by ``(boot_id, genvm_id)`` to recover the state and result.
@@ -332,9 +340,11 @@ Error messages
 See :ref:`gvm-def-enum-errors` for the generated error code enum. Meanings:
 ``internal`` is a handler failure with a diagnostic message;
 ``malformed_frame`` is failed calldata decode, a bad payload shape, a message
-shorter than the header, or a non-binary message; ``unknown_method`` is a
-method id not in the generated table; ``unknown_id`` means the run never
-existed, was acked, or expired; ``boot_id_mismatch`` is ``attach`` across a
+shorter than the header, a non-binary message, or an invalid artifact field;
+``unknown_method`` is a method id absent from the generated table or unavailable
+to client requests (``hello``, ``event``, ``error``); ``unknown_id`` means the run
+never existed, was acked, expired, or has no finished result for ``get_artifact``;
+``boot_id_mismatch`` is ``attach`` across a
 manager restart; ``bad_request_id`` is a client request with
 ``request_id == 0``; and ``not_finished`` is ``ack`` before a terminal event
 or result.

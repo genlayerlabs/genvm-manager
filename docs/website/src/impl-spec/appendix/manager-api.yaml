@@ -74,7 +74,8 @@ paths:
                         result:
                           type: object
                           nullable: true
-                          description: Null until the execution finishes
+                          description: >-
+                            Stored finished result; null for pending runs and retained startup failures
                           properties:
                             finished_at:
                               type: string
@@ -192,14 +193,11 @@ paths:
         migrate. Unlike the socket `run`, this call responds only after the
         execution has started (or failed to start).
 
-        Both entry points decode the same request type and share the same start
-        path, so every field of `GenvmRunRequest` behaves identically here --
-        including the ones the socket protocol introduced (`deadline`,
-        `host_hello_data`, `hook_cross_contract_calls`) and the `host_genvm_id`
-        idempotency token, whose reservation happens below both. That is a
-        guarantee for as long as this adapter exists, not an accident of shared
-        types. What differs is only what this call *returns*: an id after the
-        execution has started, rather than immediately.
+        Both entry points decode `GenvmRunRequest` and share the start path and
+        `host_genvm_id` idempotency token. A failed HTTP start created by this
+        request is released, freeing its token for a corrected retry. A retry
+        that finds an existing retained run does not release it. Socket startup
+        failures remain retained until `ack` or the retention TTL
 
         The body is calldata, not JSON; `GenvmRunRequest` says how its types map
         onto calldata.
@@ -277,7 +275,9 @@ paths:
                   status:
                     type: object
                     nullable: true
-                    description: Result of a finished execution; null while it runs, once acknowledged, or for an unknown id
+                    description: >-
+                      Stored finished result; null for pending runs, retained startup failures,
+                      acknowledged runs, or unknown ids
                     properties:
                       finished_at:
                         type: integer
@@ -293,6 +293,7 @@ paths:
                           type: object
                       metrics:
                         type: object
+                        nullable: true
                       consumed_result:
                         type: string
                         format: byte
@@ -331,6 +332,7 @@ paths:
               schema:
                 oneOf:
                   - type: object
+                    required: [result, genvm_id]
                     properties:
                       result:
                         type: string
@@ -338,6 +340,7 @@ paths:
                       genvm_id:
                         type: integer
                   - type: object
+                    required: [error, genvm_id]
                     properties:
                       error:
                         type: string
@@ -643,10 +646,7 @@ paths:
                         default: {}
                         description: Provider-specific request fields
                       extra_merge_strategy:
-                        description: |
-                          How `extra` merges into the provider request: `none`, `replace`,
-                          `merge_left`, `merge_right`, or a map of these per key
-                        default: none
+                        $ref: '#/components/schemas/MergeStrategy'
                       timeout:
                         oneOf:
                           - type: number
@@ -727,6 +727,17 @@ paths:
 
 components:
   schemas:
+    MergeStrategy:
+      description: How `extra` merges into the provider request; null means `none`, maps select strategies per key
+      default: none
+      oneOf:
+        - type: string
+          nullable: true
+          enum: [null, none, replace, merge_left, merge_right]
+        - type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MergeStrategy'
+
     ModuleStartRequest:
       type: object
       required:
@@ -771,6 +782,7 @@ components:
 
     ExecutorSelectorMajor:
       type: object
+      additionalProperties: false
       description: |
         Resolved by the manifest's rules, falling back to the newest line when
         none provides this major. Cannot separate lines that share a semver
@@ -788,6 +800,7 @@ components:
 
     ExecutorSelectorVersion:
       type: object
+      additionalProperties: false
       description: |
         Names a line: an executor directory used as it stands, or a `re:`-prefixed
         regular expression over manifest version keys, the newest match winning.
@@ -805,6 +818,7 @@ components:
 
     InternalMessageParams:
       type: object
+      additionalProperties: false
       required:
         - leader_timeunits_allocation
         - validator_timeunits_allocation
@@ -825,7 +839,6 @@ components:
           format: uint256
         rotations:
           type: array
-          minItems: 1
           items:
             type: integer
             format: uint256
@@ -842,6 +855,7 @@ components:
 
     ExternalMessageParams:
       type: object
+      additionalProperties: false
       required:
         - gas_limit
         - max_gas_price
@@ -855,6 +869,7 @@ components:
 
     MessageData:
       type: object
+      additionalProperties: false
       description: Contract execution message data
       required:
         - contract_address
@@ -891,6 +906,7 @@ components:
 
     GenvmRunRequest:
       type: object
+      additionalProperties: false
       description: |
         GenVM execution request, encoded as calldata (see the spec's Calldata
         Encoding page) rather than JSON. This schema and every schema it
@@ -904,9 +920,8 @@ components:
 
         A value of another kind or an unknown key fails decoding, which the
         socket answers with `malformed_frame`. A required nullable property must
-        be present, possibly as null. Range and cardinality limits (`format: uint256`
-        on `bucket_totals`, `minProperties`, `minItems` on `rotations`) are checked
-        when the run starts, not at decode.
+        be present, possibly as null. The range and non-empty-map constraints on
+        `bucket_totals` are checked when the run starts, not at decode
       required:
         - selector
         - message
@@ -1014,14 +1029,14 @@ components:
           type: array
           items:
             type: object
+            additionalProperties: false
             required: [recipient, call_key, budget, 'on', fee_params, children_budget, subtree]
             properties:
               recipient:
                 type: string
-                allOf:
-                  - $ref: '#/components/schemas/Address'
+                format: hex
                 nullable: true
-                description: Recipient address, or null for an open allocation
+                description: Calldata address (20 bytes), or null for an open allocation
               call_key:
                 type: string
                 format: binary
@@ -1042,6 +1057,7 @@ components:
                 enum: [decided, finalized]
               fee_params:
                 type: object
+                additionalProperties: false
                 minProperties: 1
                 maxProperties: 1
                 description: Single-key map naming the message kind
@@ -1110,6 +1126,7 @@ components:
             stays in-process
         unsafe_overrides:
           type: object
+          additionalProperties: false
           default: {}
           description: |
             Overrides that reach boundaries production traffic cannot. Each member
