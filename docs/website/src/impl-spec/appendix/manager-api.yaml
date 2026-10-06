@@ -9,6 +9,26 @@ servers:
     description: Default local development server
 
 paths:
+  /ws:
+    get:
+      summary: Upgrade to the manager socket protocol
+      description: |
+        WebSocket upgrade. Everything past the handshake -- framing, methods,
+        events, error codes -- is specified in the Manager Socket Protocol
+        appendix, not here; OpenAPI cannot describe a bidirectional message
+        stream. Listed so this file stays a complete route table.
+
+        This is the supported way to drive executions. The `/genvm/*` paths
+        below are deprecated adapters over the same core.
+      operationId: managerSocket
+      responses:
+        '101':
+          description: Switching protocols; the connection becomes a manager socket
+        '400':
+          description: Not a WebSocket handshake; the body is plain text
+        '426':
+          description: A handshake on a connection that cannot be upgraded, such as HTTP/1.0
+
   /status:
     get:
       summary: Get manager status
@@ -24,12 +44,12 @@ paths:
                 properties:
                   llm_module:
                     type: string
+                    enum: [running, stopping, stopped]
                     description: Status of the LLM module
-                    example: running
                   web_module:
                     type: string
+                    enum: [running, stopping, stopped]
                     description: Status of the web module
-                    example: stopped
                   permits:
                     type: object
                     properties:
@@ -39,9 +59,36 @@ paths:
                       max:
                         type: integer
                         description: Maximum number of permits
+                      per_sync_run:
+                        type: integer
+                        description: Permits a sync run costs
+                      per_nondet_run:
+                        type: integer
+                        description: Permits a nondet run costs
                   executions:
                     type: object
-                    description: Status of running executions
+                    description: Known executions, keyed by GenVM id
+                    additionalProperties:
+                      type: object
+                      properties:
+                        result:
+                          type: object
+                          nullable: true
+                          description: >-
+                            Stored finished result; null for pending runs and retained startup failures
+                          properties:
+                            finished_at:
+                              type: string
+                              format: date-time
+                        version:
+                          type: string
+                          description: Executor version the run resolved to, empty until resolved
+                        started_at:
+                          type: string
+                          format: date-time
+                        strict_deadline:
+                          type: string
+                          format: date-time
 
   /module/start:
     post:
@@ -53,22 +100,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-                - module_type
-              properties:
-                module_type:
-                  type: string
-                  enum: [llm, web]
-                  description: Type of module to start
-                config:
-                  type: object
-                  description: Module-specific configuration
-              example:
-                module_type: llm
-                config:
-                  host: localhost
-                  port: 8080
+              $ref: '#/components/schemas/ModuleStartRequest'
       responses:
         '200':
           description: Module started successfully
@@ -80,6 +112,8 @@ paths:
                   result:
                     type: string
                     example: module_started
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -99,10 +133,10 @@ paths:
               properties:
                 module_type:
                   type: string
-                  enum: [llm, web]
+                  enum: [Llm, Web]
                   description: Type of module to stop
               example:
-                module_type: llm
+                module_type: Llm
       responses:
         '200':
           description: Module stop result
@@ -114,6 +148,8 @@ paths:
                   result:
                     type: string
                     enum: [module_stopped, module_not_running]
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -130,22 +166,7 @@ paths:
         content:
           application/json:
             schema:
-              type: object
-              required:
-                - module_type
-              properties:
-                module_type:
-                  type: string
-                  enum: [llm, web]
-                  description: Type of module to restart
-                config:
-                  type: object
-                  description: Module-specific configuration (null to use default config file)
-              example:
-                module_type: llm
-                config:
-                  host: localhost
-                  port: 8080
+              $ref: '#/components/schemas/ModuleStartRequest'
       responses:
         '200':
           description: Module restarted successfully
@@ -157,17 +178,29 @@ paths:
                   result:
                     type: string
                     example: module_restarted
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
   /genvm/run:
     post:
-      summary: Start a GenVM execution
+      summary: Start a GenVM execution (deprecated)
+      deprecated: true
       description: |
-        Start a new GenVM instance for contract execution.
+        Deprecated adapter over the socket protocol's `run` (see the Manager
+        Socket Protocol appendix); kept for one release train while hosts
+        migrate. Unlike the socket `run`, this call responds only after the
+        execution has started (or failed to start).
 
-        The request body uses calldata binary encoding (not JSON). The schema below
-        shows the logical structure that must be encoded using the calldata format.
+        Both entry points decode `GenvmRunRequest` and share the start path and
+        `host_genvm_id` idempotency token. A failed HTTP start created by this
+        request is released, freeing its token for a corrected retry. A retry
+        that finds an existing retained run does not release it. Socket startup
+        failures remain retained until `ack` or until the retention TTL expires
+
+        The body is calldata, not JSON; `GenvmRunRequest` says how its types map
+        onto calldata.
       operationId: runGenvm
       requestBody:
         required: true
@@ -195,8 +228,20 @@ paths:
 
   /genvm/{genvm_id}:
     get:
-      summary: Get GenVM status
-      description: Get the status of a specific GenVM instance.
+      summary: Get GenVM status (deprecated)
+      deprecated: true
+      description: |
+        Deprecated adapter over the socket protocol's `attach` + `ack`; kept
+        for one release train while hosts migrate
+
+        The optional `wait` parameter exists so hosts that cannot use the
+        socket protocol can stop busy-polling. It does not un-deprecate this
+        route; the socket protocol remains the supported interface
+
+        The route preserves the historical destructive semantics: a returned
+        non-null status acknowledges the execution, so a second GET answers
+        null. Socket clients get non-destructive reads with an explicit `ack`
+        instead
       operationId: getGenvmStatus
       parameters:
         - name: genvm_id
@@ -205,6 +250,18 @@ paths:
           schema:
             type: integer
           description: Unique identifier of the GenVM instance
+        - name: wait
+          in: query
+          required: false
+          schema:
+            type: string
+            example: 30s
+          description: |
+            Maximum time to wait for a terminal status, as a number followed
+            by `ms`, `s`, `m`, or `h`, for example `500ms`, `30s`, or `1m`
+
+            Values above 120 seconds are clamped to 120 seconds. If the wait
+            times out, the response has a null status rather than an error
       responses:
         '200':
           description: GenVM status
@@ -217,12 +274,48 @@ paths:
                     type: integer
                   status:
                     type: object
-                    description: Current status of the GenVM instance
+                    nullable: true
+                    description: >-
+                      Stored finished result; null for pending runs, retained startup failures,
+                      acknowledged runs, or unknown ids
+                    properties:
+                      finished_at:
+                        type: integer
+                        format: int64
+                        description: Unix time in milliseconds
+                      stdout:
+                        type: string
+                      stderr:
+                        type: string
+                      genvm_log:
+                        type: array
+                        items:
+                          type: object
+                      metrics:
+                        type: object
+                        nullable: true
+                      consumed_result:
+                        type: string
+                        format: byte
+                        nullable: true
+                      version_major:
+                        type: integer
+                      version_minor:
+                        type: integer
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/ErrorResponse'
     delete:
-      summary: Shutdown GenVM instance
-      description: Gracefully shutdown a GenVM instance.
+      summary: Shutdown GenVM instance (deprecated)
+      deprecated: true
+      description: |
+        Deprecated adapter over the socket protocol's `cancel`; kept for one
+        release train while hosts migrate. Socket clients should rely on the
+        request-carried deadline plus `cancel` instead of a client-side
+        timeout that fires DELETE.
       operationId: shutdownGenvm
       parameters:
         - name: genvm_id
@@ -239,6 +332,7 @@ paths:
               schema:
                 oneOf:
                   - type: object
+                    required: [result, genvm_id]
                     properties:
                       result:
                         type: string
@@ -246,12 +340,79 @@ paths:
                       genvm_id:
                         type: integer
                   - type: object
+                    required: [error, genvm_id]
                     properties:
                       error:
                         type: string
                         example: timeout during shutdown
                       genvm_id:
                         type: integer
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /genvm/{genvm_id}/artifact:
+    get:
+      summary: Get retained GenVM artifact
+      description: |
+        Debug convenience adapter over the socket protocol's `get_artifact`.
+        Returns a base64-encoded chunk from one retained artifact. Socket
+        clients should use the framed `get_artifact` method instead.
+      operationId: getGenvmArtifact
+      parameters:
+        - name: genvm_id
+          in: path
+          required: true
+          schema:
+            type: integer
+          description: Unique identifier of the GenVM instance
+        - name: field
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [stdout, stderr, genvm_log]
+          description: Artifact field to read
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            format: uint64
+            default: 0
+          description: Byte offset within the artifact
+        - name: max_len
+          in: query
+          required: true
+          schema:
+            type: integer
+            format: uint32
+          description: Maximum bytes to return before server-side chunk capping
+      responses:
+        '200':
+          description: Artifact chunk
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  genvm_id:
+                    type: integer
+                  field:
+                    type: string
+                  total_len:
+                    type: integer
+                    format: uint64
+                  data_base64:
+                    type: string
+                    format: byte
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/ErrorResponse'
 
   /contract/detect-version:
     post:
@@ -285,6 +446,8 @@ paths:
                   specified_major:
                     type: integer
                     description: Detected major version
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -304,8 +467,8 @@ paths:
               properties:
                 level:
                   type: string
-                  enum: [trace, debug, info, warn, error]
-                  description: Log level to set
+                  enum: [trace, debug, info, warn, warning, error]
+                  description: Log level to set, matched case-insensitively
               example:
                 level: debug
       responses:
@@ -321,6 +484,9 @@ paths:
                     example: log_level_set
                   level:
                     type: string
+                    enum: [Trace, Debug, Info, Warn, Error]
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -343,54 +509,14 @@ paths:
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
-  /env:
-    post:
-      summary: Set environment variable
-      description: Set an environment variable in the manager process.
-      operationId: setEnv
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - key
-                - value
-              properties:
-                key:
-                  type: string
-                  description: Environment variable name
-                value:
-                  type: string
-                  description: Environment variable value
-              example:
-                key: DEBUG_MODE
-                value: "true"
-      responses:
-        '200':
-          description: Environment variable set
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  result:
-                    type: string
-                    example: env_var_set
-                  key:
-                    type: string
-        '500':
-          $ref: '#/components/responses/ErrorResponse'
-
   /permits:
     get:
       summary: Get permits
-      description: Get the current number of execution permits available.
+      description: Get the current maximum number of execution permits; `/status` reports how many are free.
       operationId: getPermits
       responses:
         '200':
-          description: Current permits
+          description: Maximum permits
           content:
             application/json:
               schema:
@@ -398,10 +524,13 @@ paths:
                 properties:
                   permits:
                     type: integer
-                    description: Number of available permits
+                    description: Maximum number of permits
     post:
       summary: Set permits
-      description: Set the number of execution permits.
+      description: >-
+        Set the number of execution permits, one permit is one gigabyte of RAM.
+        A value below the cost of the most expensive run is rejected, and the
+        response carries the unchanged maximum.
       operationId: setPermits
       requestBody:
         required: true
@@ -430,6 +559,8 @@ paths:
                     example: permits_set
                   permits:
                     type: integer
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -464,8 +595,8 @@ paths:
                         example: https://api.openai.com
                       provider:
                         type: string
+                        enum: [ollama, openai-compatible, anthropic, google]
                         description: Provider type
-                        example: openai-compatible
                       model:
                         type: string
                         description: Model name
@@ -478,6 +609,12 @@ paths:
                   type: array
                   items:
                     type: object
+                    required:
+                      - user_message
+                      - temperature
+                      - images
+                      - max_tokens
+                      - use_max_completion_tokens
                     properties:
                       system_message:
                         type: string
@@ -488,12 +625,34 @@ paths:
                         type: number
                       images:
                         type: array
+                        description: Each image is its raw bytes as an array of integers
                         items:
-                          type: string
+                          type: array
+                          items:
+                            type: integer
+                            minimum: 0
+                            maximum: 255
                       max_tokens:
                         type: integer
+                        format: uint32
                       use_max_completion_tokens:
                         type: boolean
+                      seed:
+                        type: integer
+                        format: uint64
+                        nullable: true
+                      extra:
+                        type: object
+                        default: {}
+                        description: Provider-specific request fields
+                      extra_merge_strategy:
+                        $ref: '#/components/schemas/MergeStrategy'
+                      timeout:
+                        oneOf:
+                          - type: number
+                            nullable: true
+                          - type: string
+                        description: Seconds as a number, or a string such as `500ms`, `1.5s` or `2m`
             example:
               configs:
                 - host: https://api.openai.com
@@ -532,6 +691,8 @@ paths:
                     response:
                       type: string
                       nullable: true
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
@@ -559,25 +720,164 @@ paths:
                     type: string
                     nullable: true
                     description: Human-readable error description, or null if unknown
+        '400':
+          $ref: '#/components/responses/ErrorResponse'
         '500':
           $ref: '#/components/responses/ErrorResponse'
 
 components:
   schemas:
+    MergeStrategy:
+      description: How `extra` merges into the provider request; null means `none`, maps select strategies per key
+      default: none
+      oneOf:
+        - type: string
+          nullable: true
+          enum: [null, none, replace, merge_left, merge_right]
+        - type: object
+          additionalProperties:
+            $ref: '#/components/schemas/MergeStrategy'
+
+    ModuleStartRequest:
+      type: object
+      required:
+        - module_type
+        - config
+      properties:
+        module_type:
+          type: string
+          enum: [Llm, Web]
+        config:
+          type: object
+          nullable: true
+          description: Module configuration; null loads the module's default config file
+        allow_empty_backends:
+          type: boolean
+          default: false
+          description: Start the LLM module even with no valid backend
+        user_error:
+          type: boolean
+          default: false
+          description: Load the config but answer every module request with a user error
+      example:
+        module_type: Llm
+        config: null
+
     Address:
       type: string
       format: hex
-      description: 20-byte Ethereum-style address as hex string
+      description: A calldata address (20 bytes), shown here in hex
       example: "0x1234567890abcdef1234567890abcdef12345678"
+
+    ExecutorSelector:
+      description: Which executor line runs a request
+      oneOf:
+        - $ref: '#/components/schemas/ExecutorSelectorMajor'
+        - $ref: '#/components/schemas/ExecutorSelectorVersion'
+      discriminator:
+        propertyName: kind
+        mapping:
+          major: '#/components/schemas/ExecutorSelectorMajor'
+          version: '#/components/schemas/ExecutorSelectorVersion'
+
+    ExecutorSelectorMajor:
+      type: object
+      additionalProperties: false
+      description: |
+        Resolved by the manifest's rules, falling back to the newest line when
+        none provides this major. Cannot separate lines that share a semver
+        major, which every released line does
+      required:
+        - kind
+        - major
+      properties:
+        kind:
+          type: string
+          enum: [major]
+        major:
+          type: integer
+          format: uint32
+
+    ExecutorSelectorVersion:
+      type: object
+      additionalProperties: false
+      description: |
+        Names a line: an executor directory used as it stands, or a `re:`-prefixed
+        regular expression over manifest version keys, the newest match winning.
+        No match fails the run
+      required:
+        - kind
+        - version
+      properties:
+        kind:
+          type: string
+          enum: [version]
+        version:
+          type: string
+          example: "v0.2.17"
+
+    InternalMessageParams:
+      type: object
+      additionalProperties: false
+      required:
+        - leader_timeunits_allocation
+        - validator_timeunits_allocation
+        - execution_budget_per_round
+        - rotations
+        - max_price_gen_per_time_unit
+        - storage_fee_max_gas_price
+        - receipt_fee_max_gas_price
+      properties:
+        leader_timeunits_allocation:
+          type: integer
+          format: uint256
+        validator_timeunits_allocation:
+          type: integer
+          format: uint256
+        execution_budget_per_round:
+          type: integer
+          format: uint256
+        rotations:
+          type: array
+          items:
+            type: integer
+            format: uint256
+          description: Per-round rotation allocations, the initial round first, then appeal rounds
+        max_price_gen_per_time_unit:
+          type: integer
+          format: uint256
+        storage_fee_max_gas_price:
+          type: integer
+          format: uint256
+        receipt_fee_max_gas_price:
+          type: integer
+          format: uint256
+
+    ExternalMessageParams:
+      type: object
+      additionalProperties: false
+      required:
+        - gas_limit
+        - max_gas_price
+      properties:
+        gas_limit:
+          type: integer
+          format: uint256
+        max_gas_price:
+          type: integer
+          format: uint256
 
     MessageData:
       type: object
+      additionalProperties: false
       description: Contract execution message data
       required:
         - contract_address
         - sender_address
         - origin_address
+        - signer_address
         - chain_id
+        - value
         - is_init
       properties:
         contract_address:
@@ -586,47 +886,57 @@ components:
           $ref: '#/components/schemas/Address'
         origin_address:
           $ref: '#/components/schemas/Address'
-        stack:
-          type: array
-          items:
-            $ref: '#/components/schemas/Address'
-          default: []
-          description: View methods call chain (empty for entrypoint)
+        signer_address:
+          $ref: '#/components/schemas/Address'
         chain_id:
-          type: string
-          description: Chain ID as big integer string
-          example: "1"
+          type: integer
+          example: 1
         value:
-          type: string
-          description: Transaction value as big integer string
-          default: "0"
+          type: integer
+          description: Transaction value
+          example: 0
         is_init:
           type: boolean
           description: Whether this is a contract initialization call
-        datetime:
+        transaction_timestamp:
           type: string
           format: date-time
+          default: "2024-11-26T06:42:42.424242Z"
           description: Transaction timestamp
 
     GenvmRunRequest:
       type: object
+      additionalProperties: false
       description: |
-        GenVM execution request. This structure must be encoded using the calldata
-        binary format before sending.
+        GenVM execution request, encoded as calldata (see the spec's Calldata
+        Encoding page) rather than JSON. This schema and every schema it
+        references map onto calldata kinds:
+
+        - `integer` is a calldata number, never a decimal string
+        - `format: binary` is calldata bytes
+        - `Address` is a calldata address, never a hex string
+        - `date-time` is an RFC 3339 string
+        - `format: uint256` is a number in `[0, 2^256)`
+
+        A value of another kind or an unknown key fails decoding, which the
+        socket answers with `malformed_frame`. A required nullable property must
+        be present, possibly as null. The range and non-empty-map constraints on
+        `bucket_totals` are checked when the run starts, not at decode
       required:
-        - major
+        - selector
         - message
         - is_sync
-        - storage_pages
+        - bucket_totals
         - host_data
         - timestamp
         - host
         - calldata
+        - code
+        - leader_public_data
+        - initial_time_units_allocation
       properties:
-        major:
-          type: integer
-          format: uint32
-          description: Major version specification
+        selector:
+          $ref: '#/components/schemas/ExecutorSelector'
         message:
           $ref: '#/components/schemas/MessageData'
         is_sync:
@@ -638,38 +948,43 @@ components:
           enum: [disabled, safe, safe-unbounded, unsafe, unsafe-tracing]
           description: |
             Executor debug level (see the Executor "Debug modes" section). Each level
-            adds to the previous one. Replaces the former `capture_output` boolean,
-            from which the output `Capture` (disabled/bounded/unbounded) is now derived.
+            adds to the previous one and also sets output capture.
 
-            On a consensus network the manager MUST reject (or clamp) `unsafe` and
-            `unsafe-tracing` from untrusted callers: `unsafe` enables `:latest`/`:test`
-            resolution (different nodes may diverge) and `unsafe-tracing` exposes real
-            time (breaks single-machine determinism). An unrecognized value is rejected.
+            The manager accepts every level as sent, so a host on a consensus network
+            must not pass `unsafe` or `unsafe-tracing` from untrusted callers: `unsafe`
+            enables `:latest`/`:test` resolution (different nodes may diverge) and
+            `unsafe-tracing` exposes real time (breaks single-machine determinism).
         max_execution_minutes:
           type: integer
           format: uint64
           default: 20
-          description: Maximum execution time in minutes
-        storage_pages:
-          type: integer
-          format: uint64
-          description: Number of storage pages allocated
+          description: Maximum execution time in minutes, capped at 24 hours
+        bucket_totals:
+          type: object
+          minProperties: 1
+          additionalProperties:
+            type: integer
+            format: uint256
+          description: |
+            Per-bucket data-fee balances, keyed by the non-empty names the
+            executor's fee config references
         host_data:
           type: string
-          description: Host-specific data as JSON string
+          description: JSON object carrying at least string `node_address` and `tx_id`
+          example: '{"node_address":"0x00","tx_id":"0x00"}'
         timestamp:
           type: string
           format: date-time
-          description: Execution timestamp in RFC3339 format
+          description: Execution timestamp
         host:
           type: string
-          description: Host identifier
+          description: Address of host connection 0, `unix://<path>` or a TCP `host:port`
         extra_args:
           type: array
           items:
             type: string
           default: []
-          description: Additional arguments for execution
+          description: Extra arguments for the executor's `run` command
         calldata:
           type: string
           format: binary
@@ -678,15 +993,168 @@ components:
           type: string
           format: binary
           nullable: true
-          description: Optional contract bytecode (for deployment)
-        reroute_to:
+          description: Contract bytecode for a deployment, or null for a call
+        leader_public_data:
           type: string
-          default: ""
+          format: binary
+          nullable: true
           description: |
-            Debug-only override of the executor directory (a version dir under the
-            manager's executors path) to run, bypassing manifest resolution. Honored
-            only when `debug_mode` is `safe` or above; ignored in production
-            (`disabled`) so consensus always runs the manifest-resolved version.
+            Opaque executor-owned leader public data for a validator run, or null
+            for a leader run
+        initial_time_units_allocation:
+          type: integer
+          format: uint32
+          description: Initial time-unit budget for the execution
+        permissions:
+          type: string
+          default: wscn
+          description: |
+            Permission meta-properties granted to the entry VM, as a subset of the
+            characters `w` (write storage), `s` (send messages), `c` (call other
+            contracts) and `n` (spawn nondet). **Defaults to all four**, so a host
+            that computes narrower permissions must send this field explicitly
+        no_modules:
+          type: boolean
+          default: false
+          description: |
+            Run without the LLM and web modules even when the permissions would
+            otherwise require them
+        gas_data:
+          type: object
+          additionalProperties:
+            type: string
+          default: {}
+          description: Host-provided `node` fee constants
+        message_fee_allocation:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            required: [recipient, call_key, budget, 'on', fee_params, children_budget, subtree]
+            properties:
+              recipient:
+                type: string
+                format: hex
+                nullable: true
+                description: Calldata address (20 bytes), or null for an open allocation
+              call_key:
+                type: string
+                format: binary
+                minLength: 32
+                maxLength: 32
+                nullable: true
+                description: 32-byte call key, or null for a wildcard
+              budget:
+                type: integer
+                format: uint256
+                nullable: true
+                description: |
+                  Stored chain budget, or the allowance of a synthetic recipient wildcard; null is uncapped.
+                  A zero-budget entry with a recipient still matches internal messages and is absent for
+                  external ones, as on chain
+              'on':
+                type: string
+                enum: [decided, finalized]
+              fee_params:
+                type: object
+                additionalProperties: false
+                minProperties: 1
+                maxProperties: 1
+                description: Single-key map naming the message kind
+                properties:
+                  Internal:
+                    $ref: '#/components/schemas/InternalMessageParams'
+                  External:
+                    $ref: '#/components/schemas/ExternalMessageParams'
+              children_budget:
+                type: integer
+                format: uint256
+                description: Sum of direct descendant allocation budgets, funded per emitted child
+              subtree:
+                type: string
+                format: binary
+                description: Opaque bytes for the matched subtree, including any required Merkle proof
+          default: []
+          description: |
+            Flat funding allocations. The node supplies the exact subtree transport
+            bytes for the transaction's pinned storage mode. GenVM forwards these bytes
+            unchanged and meters their length. External and open allocations without a
+            committed subtree use empty bytes. children_budget and subtree are required
+            on every entry, including allocations without descendants.
+            Omit allocations absent on-chain. Recipient wildcards are
+            synthetic entries for open-pool or view execution, not chain allocations
+        record_actions:
+          type: array
+          items:
+            type: string
+            enum: [runner_load, vm_spawn]
+          default: []
+          description: Auditable supervisor action kinds to return in the result
+        host_genvm_id:
+          type: string
+          nullable: true
+          default: null
+          description: |
+            Client correlation token, echoed in this run's events. Also an
+            idempotency key on the socket protocol; see the `run` method in the
+            manager socket protocol page
+        deadline:
+          type: string
+          nullable: true
+          default: null
+          example: 30s
+          description: |
+            Duration, a decimal number followed by `ms`, `s`, `m` or `h`, that
+            overrides `max_execution_minutes` as the strict deadline when set.
+            Capped at 24 hours
+        host_hello_data:
+          type: array
+          items:
+            type: string
+            format: binary
+          default: []
+          description: |
+            Bytes written verbatim to each host connection, indexed by connection
+            index, before the first method byte. The manager rejects a non-empty
+            entry for a connection it owns itself
+        hook_cross_contract_calls:
+          type: boolean
+          default: false
+          description: |
+            Whether the host wants to answer `resolve_call_contract_executor`. When
+            false the manager answers it with a null reply and every `CallContract`
+            stays in-process
+        unsafe_overrides:
+          type: object
+          additionalProperties: false
+          default: {}
+          description: |
+            Overrides that reach boundaries production traffic cannot. Each member
+            states the `debug_mode` it needs; with debugging disabled none apply
+          properties:
+            reroute_to:
+              type: string
+              default: ""
+              description: |
+                Run this version instead of the one `selector` resolves to, in
+                the same two forms `selector`'s version variant accepts. Empty is
+                no override. Honored from `safe` up
+            initial_recursion:
+              type: integer
+              format: uint32
+              nullable: true
+              default: null
+              description: |
+                Seeds the chain's recursion budget, replacing the executor's own
+                `VM_RECURSION`. Honored from `unsafe` up
+            allow_two_workers:
+              type: boolean
+              nullable: true
+              default: null
+              description: |
+                Overrides the manager's `allow_two_workers` config. v0.2 warns
+                when false and keeps its existing scheduling.
+                Honored from `unsafe` up. Null keeps the configured value
 
   responses:
     ErrorResponse:
@@ -699,3 +1167,13 @@ components:
               error:
                 type: string
                 description: Error message
+    NotFound:
+      description: The `genvm_id` path segment is not a decimal 64-bit unsigned integer
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+                example: Not Found

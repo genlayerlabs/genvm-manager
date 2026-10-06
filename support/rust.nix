@@ -28,7 +28,7 @@ let
 
   is-macos = systemAsGenVM == "arm64-macos";
 
-  manifest-src = deps."rust-channel-stable-2026-03-05";
+  manifest-src = deps."rust-channel-stable-2026-09-03";
 
   manifest = builtins.fromTOML (builtins.readFile manifest-src);
 

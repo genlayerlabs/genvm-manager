@@ -3,6 +3,7 @@
   "extends": [
     "config:recommended",
     "group:recommended",
+    "helpers:pinGitHubActionDigests",
     "group:allNonMajor",
     "group:githubArtifactActions",
     "group:rust-analyzerMonorepo",

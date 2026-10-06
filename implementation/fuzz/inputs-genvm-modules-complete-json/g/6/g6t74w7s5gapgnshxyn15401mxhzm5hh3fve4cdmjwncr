@@ -1,0 +1,16 @@
+{
+    "foo": [
+        "bar",
+        "baz\n\\z",
+        1.3,
+        -123,
+        -1e10,
+        1e20,
+        null,
+        true,
+        false,
+        [     "русские буквы 殥本",
+        "mbbbbbbbbbbbbbbaz\t\uabbbbb",
+        "mbbbbbbbbbbbbb бу\\uabbbbb"
+    ]
+}

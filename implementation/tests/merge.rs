@@ -1,3 +1,5 @@
+// genvm-tool-test-tags: feature-prompt
+
 use genvm_modules::llm::merge::{merge_extra, merge_values, MergeStrategy};
 use serde_json::json;
 use std::collections::BTreeMap;

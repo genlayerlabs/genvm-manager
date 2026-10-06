@@ -2,15 +2,16 @@
 """
 Watchdog process for genvm-tool test.
 
-Started by the test runner as a child process. It owns the cleanups (e.g.
-``docker stop``) registered by the runner and is the single place that runs
-them, so a container is always torn down through the watchdog:
+Started by the test runner as a child process, in its own session and with
+terminating signals ignored, so that Ctrl+C does not take it down before it had
+a chance to clean up. It owns the cleanups (e.g. ``docker stop``) registered by
+the runner and is the single place that runs them, so a container is always torn
+down through the watchdog:
 
 - on a ``kill`` request: runs that one cleanup now and acknowledges it;
-- on normal exit (stdin closed): runs every still-registered cleanup, killing
-	whatever the runner left dangling;
-- on unexpected death (detected via reparenting): kills the original process
-	group, then runs every still-registered cleanup.
+- when the runner is gone - stdin closed, or reparenting for the cases where no
+	EOF ever comes - runs every still-registered cleanup, whether the runner
+	exited normally or died on us.
 
 Communication protocol (length-prefixed cloudpickle frames on stdin, a 4-byte
 big-endian length followed by the pickled message dict):
@@ -35,73 +36,75 @@ def _run_cleanup(cleanup) -> None:
 		pass
 
 
+def _read(fd: int, timeout: float) -> bytes | None:
+	"""Pending stdin bytes, ``b''`` if none within ``timeout``, ``None`` on EOF."""
+	try:
+		ready, _, _ = select.select([fd], [], [], timeout)
+		if not ready:
+			return b''
+		return os.read(fd, 65536) or None
+	except (ValueError, OSError):
+		return None
+
+
+def _consume(buffer: bytes, cleanups: dict[int, object]) -> bytes:
+	"""Handle every complete frame in ``buffer``; return the incomplete tail."""
+	while len(buffer) >= 4:
+		length = int.from_bytes(buffer[:4], 'big')
+		if len(buffer) < 4 + length:
+			break
+		frame, buffer = buffer[4 : 4 + length], buffer[4 + length :]
+		try:
+			msg = cloudpickle.loads(frame)
+			action = msg.get('action')
+			token = msg.get('token')
+		except Exception:
+			continue
+		if action == 'add':
+			cleanups[token] = msg.get('cleanup')
+		elif action == 'remove':
+			cleanups.pop(token, None)
+		elif action == 'kill':
+			cleanup = cleanups.pop(token, None)
+			if cleanup is not None:
+				_run_cleanup(cleanup)
+			try:
+				os.write(1, f'{token}\n'.encode())
+			except OSError:
+				pass
+	return buffer
+
+
 def main():
+	# Dying on Ctrl+C, or on a SIGTERM aimed at the whole tree, is exactly the
+	# case cleanups exist for. Own session (see the parent) keeps group-wide
+	# signals away; this also covers the ones addressed to us directly. The
+	# parent closing stdin is the only exit signal we honour.
+	for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
+		signal.signal(sig, signal.SIG_IGN)
+
 	original_ppid = os.getppid()
-	original_pgrp = os.getpgrp()
 
 	cleanups: dict[int, object] = {}
 	buffer = b''
 	stdin_fd = sys.stdin.fileno()
-	reparented = False
 
 	while True:
+		# A dying parent closes stdin, so EOF is the usual way out; the ppid
+		# check only covers a parent that somehow leaked the write end.
 		if os.getppid() != original_ppid:
-			reparented = True
+			# Drain whatever it managed to send before dying.
+			while True:
+				data = _read(stdin_fd, 0)
+				if not data:
+					break
+				buffer = _consume(buffer + data, cleanups)
 			break
 
-		try:
-			ready, _, _ = select.select([stdin_fd], [], [], 1.0)
-		except (ValueError, OSError):
+		data = _read(stdin_fd, 1.0)
+		if data is None:
 			break
-
-		if not ready:
-			continue
-
-		try:
-			data = os.read(stdin_fd, 65536)
-		except OSError:
-			break
-		if not data:
-			# stdin closed - parent finished normally
-			break
-
-		buffer += data
-		while len(buffer) >= 4:
-			length = int.from_bytes(buffer[:4], 'big')
-			if len(buffer) < 4 + length:
-				break
-			payload = buffer[4 + length :]
-			frame, buffer = buffer[4 : 4 + length], payload
-			try:
-				msg = cloudpickle.loads(frame)
-				action = msg.get('action')
-				token = msg.get('token')
-			except Exception:
-				continue
-			if action == 'add':
-				cleanups[token] = msg.get('cleanup')
-			elif action == 'remove':
-				cleanups.pop(token, None)
-			elif action == 'kill':
-				cleanup = cleanups.pop(token, None)
-				if cleanup is not None:
-					_run_cleanup(cleanup)
-				try:
-					os.write(1, f'{token}\n'.encode())
-				except OSError:
-					pass
-
-	if reparented:
-		# Parent died. Move to our own group so we survive the group kill, then
-		# take down the original group before running cleanups.
-		try:
-			os.setpgrp()
-		except OSError:
-			pass
-		try:
-			os.killpg(original_pgrp, signal.SIGKILL)
-		except (ProcessLookupError, PermissionError, OSError):
-			pass
+		buffer = _consume(buffer + data, cleanups)
 
 	# Tear down everything still registered (dangling cleanups).
 	for cleanup in cleanups.values():

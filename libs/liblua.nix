@@ -14,7 +14,7 @@ let
   installNameFlag = if isMacos then "-Wl,-install_name,@rpath/liblua.dylib" else "";
 in
 pkgs.stdenvNoCC.mkDerivation {
-  name = "liblua-${name-target}";
+  name = "genvm-liblua-${name-target}";
 
   inherit version;
 

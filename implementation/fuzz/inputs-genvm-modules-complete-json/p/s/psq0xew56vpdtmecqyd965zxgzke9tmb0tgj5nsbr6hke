@@ -1,0 +1,20 @@
+{
+    "foo": [
+        "bar",
+        "baz\n\\{",
+        123,
+        -123,
+        -1e10,
+        1e20,
+        null,
+        true,
+        false,
+        [1, 2, 3]
+    ],
+       "mbb   t\uabbbbbbbbbbbaz111151111111111161111.11112\t  -bar": [ ],
+  "\\\\r": [
+        "Ї 日本",
+        "mbbbbbbbbbbbcbbaz\t\uabbbbb",
+        "mbbbbbbbbbbbbbbaz\t\\uab"
+    ]
+}

@@ -1,0 +1,21 @@
+{
+    "foo": [
+        "bar",
+        "baz\n\\z",
+        123,
+        -123,
+        -1e10,
+        1e20,
+        null,
+        true,
+        false,
+        [1, 2, 3]
+   
+],
+    "bar"
+													: [
+        "руссºие буквы 日本\uabbbbb",
+        "m1111111111111111111111111bbbbbbaz\t",
+        "mbbвы 日本\uabbbbbbaz\t\\uabbbbb"
+    ]
+}	

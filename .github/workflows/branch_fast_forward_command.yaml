@@ -1,0 +1,68 @@
+name: branch / fast-forward command
+
+# `/genvm-fast-forward` lands a PR by moving its base branch to the PR head,
+# without a merge or squash commit. The tool gates on approvals, required checks
+# and E2E, since the deploy key it pushes with bypasses the base's rulesets.
+# The resulting push triggers the usual executor branch sync
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions: {}
+
+# One request per PR at a time; across PRs the non-force push keeps landings safe
+concurrency:
+  group: fast-forward-command-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  fast-forward:
+    # The association only spares strangers the deploy key; the tool authorizes
+    if: >-
+      github.event.issue.pull_request &&
+      github.event.comment.body == '/genvm-fast-forward' &&
+      contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      checks: read
+      contents: read
+      issues: write
+      pull-requests: write
+      statuses: read
+    steps:
+      # issue_comment workflows run from the default branch. Keep that trusted
+      # checkout: the deploy key is in scope, so no PR code may run here.
+      # Full history, so git can show the push builds on the base
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up manager push access
+        env:
+          MANAGER_DEPLOY_KEY: ${{ secrets.GENVM_CI_PRIVATE_KEY }}
+        run: |
+          install -m700 -d ~/.ssh
+          key="${RUNNER_TEMP}/manager_push_key"
+          set +x
+          printf '%s\n' "$MANAGER_DEPLOY_KEY" > "$key"
+          set -x
+          chmod 600 "$key"
+          git config --global url."git@github.com:".insteadOf "https://github.com/"
+          echo "GIT_SSH_COMMAND=ssh -i $key -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" >> "$GITHUB_ENV"
+
+      - name: Verify and fast-forward
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          COMMENT_ID: ${{ github.event.comment.id }}
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          SENDER: ${{ github.event.sender.login }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: ./support/ci/run.sh tool fast-forward-command

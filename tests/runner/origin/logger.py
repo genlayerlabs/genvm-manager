@@ -1,6 +1,8 @@
 import abc
+import collections.abc
 import json
 import sys
+import traceback
 
 
 class Logger(metaclass=abc.ABCMeta):
@@ -24,6 +26,37 @@ class Logger(metaclass=abc.ABCMeta):
 
 	def with_keys(self, keys: dict) -> 'Logger':
 		return _WithKeysLogger(self, keys)
+
+
+def _log_unwrap(x, seen: set[int]):
+	if isinstance(x, bytes):
+		return x.hex()
+	if x is None:
+		return None
+	if isinstance(x, (str, int, float, bool)):
+		return x
+	if isinstance(x, BaseException):
+		return _log_unwrap(
+			{
+				'message': x.args[0] if len(x.args) == 1 else x.args,
+				'type': x.__class__.__name__,
+				'notes': getattr(x, '__notes__', []),
+				'traceback': traceback.format_exception(x),
+			},
+			seen,
+		)
+	x_id = id(x)
+	if x_id in seen:
+		return f'<{x_id}>'
+	seen.add(x_id)
+	if isinstance(x, dict):
+		res = {k: _log_unwrap(v, seen) for k, v in x.items()}
+	elif isinstance(x, collections.abc.Sequence):
+		res = [_log_unwrap(v, seen) for v in x]
+	else:
+		res = repr(x)
+	seen.remove(x_id)
+	return res
 
 
 class _WithKeysLogger(Logger):
@@ -69,10 +102,15 @@ class StderrLogger(Logger):
 		if _level_to_num[level] < self.min_level:
 			return
 		json.dump(
-			{
-				'message': msg,
-				'level': level,
-				**kwargs,
-			},
+			_log_unwrap(
+				{
+					'message': msg,
+					'level': level,
+					**kwargs,
+				},
+				set(),
+			),
 			sys.stderr,
 		)
+		sys.stderr.write('\n')
+		sys.stderr.flush()

@@ -17,33 +17,33 @@ pub struct Version {
     pub patch: u32,
 }
 
+impl Version {
+    /// Reads a manifest key such as `v0.3.0-rc7`. The prerelease suffix is part
+    /// of the key but not of the ordering, so it is dropped here.
+    pub fn parse(s: &str) -> Result<Self, &'static str> {
+        let parts: Vec<&str> = s.split('.').collect();
+        if parts.len() != 3 {
+            return Err("Invalid version format");
+        }
+        let part0 = parts[0].strip_prefix("v").unwrap_or(parts[0]);
+        let patch_str = parts[2].split('-').next().unwrap_or(parts[2]);
+
+        Ok(Version {
+            major: part0.parse().map_err(|_| "Invalid major version")?,
+            minor: parts[1].parse().map_err(|_| "Invalid minor version")?,
+            patch: patch_str.parse().map_err(|_| "Invalid patch version")?,
+        })
+    }
+}
+
 impl<'de> serde::Deserialize<'de> for Version {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
         let s = String::deserialize(deserializer)?;
-        let parts: Vec<&str> = s.split('.').collect();
-        if parts.len() != 3 {
-            return Err(serde::de::Error::custom("Invalid version format"));
-        }
-        let part0 = parts[0].strip_prefix("v").unwrap_or(parts[0]);
-        let patch_str = parts[2].split('-').next().unwrap_or(parts[2]);
-        let major = part0
-            .parse()
-            .map_err(|_| serde::de::Error::custom("Invalid major version"))?;
-        let minor = parts[1]
-            .parse()
-            .map_err(|_| serde::de::Error::custom("Invalid minor version"))?;
-        let patch = patch_str
-            .parse()
-            .map_err(|_| serde::de::Error::custom("Invalid patch version"))?;
 
-        Ok(Version {
-            major,
-            minor,
-            patch,
-        })
+        Version::parse(&s).map_err(serde::de::Error::custom)
     }
 }
 
@@ -138,34 +138,89 @@ impl Ctx {
         timestamp: chrono::DateTime<chrono::Utc>,
     ) -> Option<ResolvedVersion> {
         let lock = self.manifest.read().await;
-
-        let mut ver = lock
-            .executor_versions
-            .iter()
-            .filter(|(ver, ev)| ver.major == major && ev.available_after <= timestamp)
-            .map(|(ver, _)| *ver)
-            .max()?;
-
-        // Walk forward to the newest contiguous patch, but only adopt a patch
-        // whose time gate has already opened. Skipping `available_after` here
-        // would activate a future (or rc) patch prematurely, which during a
-        // rolling update with staged manifests causes consensus divergence.
-        loop {
-            let mut next = ver;
-            next.patch += 1;
-            match lock.executor_versions.get(&next) {
-                Some(ev) if ev.available_after <= timestamp => {
-                    ver = next;
-                }
-                _ => break,
-            }
-        }
-
-        Some(ResolvedVersion {
-            version: ver,
-            orig_key: lock.version_orig_keys.get(&ver)?.clone(),
-        })
+        resolve_version(&lock, timestamp, |ver, _| ver.major == major)
     }
+
+    /// Newest line available at `timestamp`, whatever its major.
+    ///
+    /// The fallback for a major no installed line provides: the run still
+    /// reaches an executor, which rejects the contract with a canonical
+    /// `invalid_contract major_mismatch` instead of never starting.
+    pub async fn get_newest_version(
+        &self,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> Option<ResolvedVersion> {
+        let lock = self.manifest.read().await;
+        resolve_version(&lock, timestamp, |_, _| true)
+    }
+
+    /// Newest line whose manifest key matches `pattern`, by the same rules a
+    /// major goes through.
+    pub async fn get_matching_version(
+        &self,
+        pattern: &regex::Regex,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> Option<ResolvedVersion> {
+        let lock = self.manifest.read().await;
+        resolve_version(&lock, timestamp, |_, key| pattern.is_match(key))
+    }
+}
+
+/// The line an exact version string names.
+///
+/// No manifest lookup and no rules: the string is the executor directory. The
+/// version it reports back is read off the name for logging alone, and a name
+/// that is not a version at all still runs -- an exact pin is a statement by a
+/// party we trust, not a request to be resolved.
+pub fn exact_version(version: &str) -> ResolvedVersion {
+    ResolvedVersion {
+        version: Version::parse(version).unwrap_or(Version {
+            major: 0,
+            minor: 0,
+            patch: 0,
+        }),
+        orig_key: version.to_owned(),
+    }
+}
+
+fn resolve_version(
+    manifest: &Manifest,
+    timestamp: chrono::DateTime<chrono::Utc>,
+    matches: impl Fn(&Version, &str) -> bool,
+) -> Option<ResolvedVersion> {
+    let matches = |ver: &Version| match manifest.version_orig_keys.get(ver) {
+        Some(key) => matches(ver, key),
+        None => false,
+    };
+
+    let mut ver = manifest
+        .executor_versions
+        .iter()
+        .filter(|(ver, ev)| matches(ver) && ev.available_after <= timestamp)
+        .map(|(ver, _)| *ver)
+        .max()?;
+
+    // Walk forward to the newest contiguous patch, but only adopt a patch
+    // whose time gate has already opened. Skipping `available_after` here
+    // would activate a future (or rc) patch prematurely, which during a
+    // rolling update with staged manifests causes consensus divergence. The
+    // patch must satisfy the same predicate: a major cannot change under a
+    // patch bump, but a pattern the caller wrote can stop matching.
+    loop {
+        let mut next = ver;
+        next.patch += 1;
+        match manifest.executor_versions.get(&next) {
+            Some(ev) if ev.available_after <= timestamp && matches(&next) => {
+                ver = next;
+            }
+            _ => break,
+        }
+    }
+
+    Some(ResolvedVersion {
+        version: ver,
+        orig_key: manifest.version_orig_keys.get(&ver)?.clone(),
+    })
 }
 
 pub async fn detect_major_spec(
@@ -234,3 +289,7 @@ pub async fn detect_major_spec(
 
     detected_version.map(|v| v.min(possible_major))
 }
+
+#[cfg(test)]
+#[path = "versioning_test.rs"]
+mod tests;

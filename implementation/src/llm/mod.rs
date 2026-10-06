@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use genlayer_calldata as calldata;
 use genvm_common::*;
 use std::{
     collections::{BTreeMap, HashMap},
@@ -62,7 +63,7 @@ pub async fn create_vm(config: &sync::DArc<config::Config>) -> anyhow::Result<Us
             scripting::load_script(&vm, &config.mod_base.lua_script_path)
                 .await
                 .with_context(|| {
-                    format!("loading script from {}", &config.mod_base.lua_script_path)
+                    format!("loading script from {}", config.mod_base.lua_script_path)
                 })?;
 
             // get functions populated by script
@@ -114,10 +115,10 @@ pub async fn create_llm_module(
         v.script_config.models.retain(|_k, v| v.enabled);
 
         if v.script_config.models.is_empty() {
-            log_warn!(backend = k; "models are empty");
+            log_warn!(@operator, backend = k; "models are empty");
             v.enabled = false;
         } else if v.key.is_empty() {
-            log_warn!(backend = k; "could not detect key for backend");
+            log_warn!(@operator, backend = k; "could not detect key for backend");
             v.enabled = false;
         }
     }
@@ -125,7 +126,7 @@ pub async fn create_llm_module(
     config.backends.retain(|_k, v| v.enabled);
 
     if config.backends.is_empty() {
-        log_error!("no valid backend detected")
+        log_error!(@operator; "no valid backend detected")
     }
 
     if !allow_empty_backends && config.backends.is_empty() {
