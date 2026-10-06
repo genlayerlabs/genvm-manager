@@ -2,23 +2,27 @@
 
 import asyncio
 import contextlib
-import json
-import os
+import functools
 import pickle
 import typing
-from dataclasses import dataclass
 from pathlib import Path
 
 import genvm_tool.io as gvm_io
 import genvm_tool.tests
 import genvm_tool.tests.stage.collection
-import genvm_tool_plugins.runners as runners
-import origin.base_host as base_host
 import origin.calldata as gvm_calldata
-from gvm_extra.mock_host import MockHost, MockStorage
-from origin import host_fns, public_abi
+from gvm_extra import cross_major
+from gvm_extra.cross_major import (
+	TIMESTAMP,
+	assert_hashes_agree,
+	encode_call,
+	encode_leader_public_data,
+	message,
+	resolve_runners,
+)
+from gvm_extra.mock_host import MockStorage
+from origin import base_host, host_fns, public_abi
 from origin.calldata import Address
-from origin.leader_public_data import LeaderPublicData
 from origin.process_tree import descendants
 
 # One directory per line, because a contract is written against its own sdk.
@@ -40,33 +44,15 @@ ADDR_CHAIN_V03 = Address('0x' + '39' * 20)
 ADDR_CHAIN_V02 = Address('0x' + '28' * 20)
 ABSENT_CALLEE = Address('0x' + '99' * 20)
 
-SENDER = Address('0x' + '01' * 20)
 # Larger than the manager cap the test configures below, so the nested envelope
 # cannot fit through the socketpair.
 MANAGER_MAX_MESSAGE_BYTES = 1 * 1024 * 1024
 BLOB_BYTES = 2 * 1024 * 1024
-TIMESTAMP = '2024-11-26T06:42:42.424242Z'
 
-
-def _leader_public_data(output: bytes) -> bytes:
-	return LeaderPublicData([output]).encode()
-
-
-def resolve_runners(code: bytes | None, root_dir: Path) -> bytes | None:
-	"""
-	Turns the `@RUNNER_LATEST_...@` tokens of a contract source into uids.
-
-	Every comparison against a deployed contract's bytes has to go through this
-	too, because storage holds what the executor was given.
-	"""
-	return None if code is None else runners.substitute(code, root_dir)
-
-
-def _contract_source(line: int, name: str, assets_dir: Path = ASSETS_DIR) -> bytes:
-	"""
-	Reads a contract asset written against `line`'s sdk.
-	"""
-	return (assets_dir / f'v0.{line}' / f'{name}.py').read_bytes()
+_contract_source = functools.partial(
+	cross_major.contract_source,
+	assets_dir=ASSETS_DIR,
+)
 
 
 CALLER_V03 = _contract_source(3, 'caller')
@@ -165,61 +151,6 @@ def _loop_wat(target: Address, *, caller_line: typing.Literal[2, 3]) -> str:
 	"""
 
 
-class _TestContext(base_host.Context):
-	def __init__(self, logger: base_host.Logger):
-		self.logger = logger
-		self.stats: dict[str, typing.Any] = {}
-
-	def on_genvm_success(self): ...
-	def on_genvm_failure(self): ...
-
-	def add_stat(self, key: str, value: typing.Any, /):
-		self.stats[key] = value
-
-
-def _message(address: Address, *, is_init: bool) -> base_host.Message:
-	return {
-		'contract_address': address,
-		'sender_address': SENDER,
-		'origin_address': SENDER,
-		'signer_address': SENDER,
-		'chain_id': 61999,
-		'value': 0,
-		'is_init': is_init,
-		'transaction_timestamp': TIMESTAMP,
-	}
-
-
-def _calldata(method: str, *args: typing.Any) -> bytes:
-	return gvm_calldata.encode({'': method, 'args': list(args)})
-
-
-def _assert_hashes_agree(label: str, runs: list[tuple[str, typing.Any]]) -> None:
-	"""
-	A disagreement is only actionable once the failure says who disagreed.
-	"""
-	hashes = [(name, run.execution_hash.hex()) for name, run in runs]
-	assert len({digest for _name, digest in hashes}) == 1, '\n'.join(
-		[f'{label}: execution hashes disagree']
-		+ [f'  {name}: {digest}' for name, digest in hashes]
-	)
-
-
-def _apply_storage_deltas(
-	storage: MockStorage,
-	address: Address,
-	changes: list[tuple[bytes, bytes]],
-) -> None:
-	for key, value in changes:
-		assert len(key) == 36
-		storage.write(
-			address,
-			key[:32],
-			int.from_bytes(key[32:], byteorder='big') * 32,
-			value,
-		)
-
-
 async def _wait_for_descendants(
 	pid: int, expected: int, timeout: float = 10
 ) -> set[int]:
@@ -237,197 +168,21 @@ async def _wait_for_no_descendants(pid: int, timeout: float = 10) -> None:
 			await asyncio.sleep(0.05)
 
 
-@dataclass
-class CrossMajorCase(genvm_tool.tests.test.Case):
-	description: genvm_tool.tests.test.Description
-	shared: genvm_tool.tests.SharedContext
-	manager_service: genvm_tool.tests.stage.collection.Service
-	method: str
-	fixtures: tuple[str, ...]
-	arguments: tuple[typing.Any, ...] = ()
+class CrossMajorStep(cross_major.CrossMajorStep):
+	host_data_tx_id = 'cross-major'
+	fixture_table = FIXTURES
 
-	async def into_steps(self) -> list[genvm_tool.tests.exec.step.Step]:
-		return [CrossMajorStep(self)]
-
-
-class CrossMajorStep(genvm_tool.tests.exec.step.Python):
-	def __init__(self, case: CrossMajorCase):
-		self.case = case
-		self.phase = 'start'
-		self.notes: list[typing.Any] = []
-
-	def to_str(self) -> str:
-		return '<cross-major CallContract system test>'
-
-	async def run(
-		self, previous_results: list[typing.Any]
-	) -> genvm_tool.tests.test.Result:
-		try:
-			await self._run_all()
-			return genvm_tool.tests.test.Result(
-				passed=True, context={'notes': self.notes}, elapsed_seconds=0
-			)
-		except BaseException as exc:
-			return genvm_tool.tests.test.Result(
-				passed=False,
-				context={'phase': self.phase, 'error': exc, 'notes': self.notes},
-				elapsed_seconds=0,
-			)
-
-	async def _run_all(self):
-		root = self.case.shared.root_dir
-		build_info = json.loads((root / 'build' / 'info.json').read_text())
-		self.build_dir = Path(build_info['build_dir'])
-		self.versions = {
-			2: build_info['executor_versions']['v0.2'],
-			3: build_info['executor_versions']['v0.3'],
-		}
-		work_dir = self.case.shared.case_dir_for(self.case.description.name)
-		self.storage_path = work_dir / 'storage.pickle'
-		work_dir.mkdir(parents=True, exist_ok=True)
-		await gvm_io.write_file_bytes(self.storage_path, pickle.dumps(MockStorage()))
-
-		manager = self.case.manager_service.handle
-		assert manager is not None
-		self.manager = manager
-
-		self.phase = 'deploy fixtures'
-		for line, address, code in (FIXTURES[name] for name in self.case.fixtures):
-			await self._deploy(line, address, code)
-		if 'loop-v03' in self.case.fixtures:
-			loop_v03 = await self._compile_wat(
-				_loop_wat(ADDR_LOOP_V02, caller_line=3), work_dir / 'loop-v03'
-			)
-			loop_v02 = await self._compile_wat(
-				_loop_wat(ADDR_LOOP_V03, caller_line=2), work_dir / 'loop-v02'
-			)
-			self._replace_code(ADDR_LOOP_V03, LOOP_V03, loop_v03)
-			self._replace_code(ADDR_LOOP_V02, LOOP_V02, loop_v02)
-
-		self.phase = self.case.method
-		await getattr(self, self.case.method)(*self.case.arguments)
-
-	async def _assert_cancel_stops_chain(self):
-		await self._assert_chain_stopped('cancel')
-
-	async def _assert_deadline_stops_chain(self):
-		await self._assert_chain_stopped('deadline')
-
-	async def _new_host(
-		self,
-		name: str,
-		running_address: Address,
-		resolve_hook=None,
-		read_log: list[tuple[Address, public_abi.StorageView]] | None = None,
-		host_fuel: int | None = None,
-	) -> MockHost:
-		ctx = _TestContext(self.case.shared.logger)
-		host_path = (
-			Path('/tmp')
-			/ f'gvm-cross-major-{os.getpid()}'
-			/ f'{name[:20]}-{os.urandom(4).hex()}.sock'
+	async def _after_deploy(self) -> None:
+		if 'loop-v03' not in self.case.fixtures:
+			return
+		loop_v03 = await self._compile_wat(
+			_loop_wat(ADDR_LOOP_V02, caller_line=3), self.work_dir / 'loop-v03'
 		)
-		host_path.parent.mkdir(parents=True, exist_ok=True)
-		host = MockHost(
-			ctx=ctx,
-			path=str(host_path),
-			storage_path_pre=self.storage_path,
-			storage_path_post=self.storage_path,
-			balances={},
-			running_address=running_address,
-			resolve_call_contract_executor_hook=resolve_hook,
+		loop_v02 = await self._compile_wat(
+			_loop_wat(ADDR_LOOP_V03, caller_line=2), self.work_dir / 'loop-v02'
 		)
-		if read_log is not None:
-			original = host.storage_read
-
-			async def logged(mode, address, slot, offset, le, /):
-				read_log.append((Address(address), mode))
-				return await original(mode, address, slot, offset, le)
-
-			host.storage_read = logged  # type: ignore[method-assign]
-		if host_fuel is not None:
-
-			async def get_remaining_time_fee_gen_wei() -> int:
-				return host_fuel
-
-			host.get_remaining_time_fee_gen_wei = (  # type: ignore[method-assign]
-				get_remaining_time_fee_gen_wei
-			)
-		return host
-
-	async def _execute(
-		self,
-		*,
-		name: str,
-		line: int,
-		address: Address,
-		calldata: bytes,
-		code: bytes | None,
-		is_init: bool,
-		resolve_hook=None,
-		timeout: float = 30,
-		debug_initial_recursion: int | None = None,
-		is_sync: bool = True,
-		leader_public_data: bytes | None = None,
-		apply_changes: bool = True,
-		read_log: list[tuple[Address, public_abi.StorageView]] | None = None,
-		host_fuel: int | None = None,
-		hook_cross_contract_calls: bool = True,
-	):
-		host = await self._new_host(
-			name, address, resolve_hook, read_log=read_log, host_fuel=host_fuel
-		)
-		ctx = host.ctx
-		with host as mock_host:
-			try:
-				async with base_host.ManagerClient(self.manager.uri) as manager_client:
-					result = await base_host.run_genvm(
-						mock_host,
-						manager_uri=self.manager.uri,
-						manager_client=manager_client,
-						ctx=ctx,
-						is_sync=is_sync,
-						leader_public_data=leader_public_data,
-						message=_message(address, is_init=is_init),
-						host_data='{"node_address":"test","tx_id":"cross-major"}',
-						host='unix://' + mock_host.path,
-						code=resolve_runners(code, self.case.shared.root_dir),
-						calldata=calldata,
-						timeout=timeout,
-						debug_mode='unsafe',
-						unsafe_overrides=base_host.UnsafeOverrides(
-							reroute_to=self.versions[line],
-							initial_recursion=debug_initial_recursion,
-						),
-						request_extra={
-							'no_modules': True,
-							'hook_cross_contract_calls': hook_cross_contract_calls,
-						},
-						bucket_totals=base_host.default_bucket_totals(line),
-					)
-				if apply_changes and result.result_kind == host_fns.ResultCode.RETURN:
-					assert mock_host.storage is not None
-					_apply_storage_deltas(
-						mock_host.storage,
-						address,
-						result.result_storage_deltas,
-					)
-				return result
-			finally:
-				await host.stop_connections()
-
-	async def _deploy(self, line: int, address: Address, code: bytes):
-		result = await self._execute(
-			name=f'deploy-{line}-{address.as_bytes.hex()}',
-			line=line,
-			address=address,
-			calldata=gvm_calldata.encode({}),
-			code=code,
-			is_init=True,
-			timeout=10 * 60,
-		)
-		assert result.result_kind == host_fns.ResultCode.RETURN, result
-		assert len(result.execution_hash) == 32, result.execution_hash
+		self._replace_code(ADDR_LOOP_V03, LOOP_V03, loop_v03)
+		self._replace_code(ADDR_LOOP_V02, LOOP_V02, loop_v02)
 
 	async def _compile_wat(self, wat: str, path: Path) -> bytes:
 		await gvm_io.make_dir(path)
@@ -470,15 +225,11 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		with open(self.storage_path, 'wb') as storage_file:
 			pickle.dump(storage, storage_file)
 
-	def _route(self, line: int) -> bytes:
-		"""
-		Routing payload placing a callee on `line`'s executor.
+	async def _assert_cancel_stops_chain(self):
+		await self._assert_chain_stopped('cancel')
 
-		It names the directory rather than the major, because a major cannot
-		pick between the live lines: every manifest key is semver major 0, so
-		`{'kind': 'major'}` resolves to the newest line whatever it asks for.
-		"""
-		return gvm_calldata.encode({'kind': 'version', 'version': self.versions[line]})
+	async def _assert_deadline_stops_chain(self):
+		await self._assert_chain_stopped('deadline')
 
 	def _raw_request(
 		self,
@@ -490,7 +241,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 	) -> dict[str, typing.Any]:
 		return {
 			'selector': {'kind': 'major', 'major': base_host.UNDEPLOYED_MAJOR},
-			'message': _message(address, is_init=False),
+			'message': message(address, is_init=False),
 			'is_sync': True,
 			'debug_mode': 'unsafe',
 			'host_data': '{"node_address":"test","tx_id":"cross-major-lifecycle"}',
@@ -499,7 +250,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			'host': 'unix://' + host_path,
 			'extra_args': [],
 			'code': None,
-			'calldata': _calldata('call', ADDR_BUSY_V02),
+			'calldata': encode_call('call', ADDR_BUSY_V02),
 			'leader_public_data': None,
 			'bucket_totals': base_host.default_bucket_totals(line),
 			'gas_data': base_host.DEFAULT_GAS_DATA,
@@ -568,7 +319,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name='large-envelope-v02-to-v03',
 			line=2,
 			address=ADDR_BLOB_CALLER_V02,
-			calldata=_calldata('send', ADDR_BLOB_V03, BLOB_BYTES),
+			calldata=encode_call('send', ADDR_BLOB_V03, BLOB_BYTES),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
@@ -588,7 +339,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name='deadline-v03-to-v02',
 			line=3,
 			address=ADDR_CALLER_V03,
-			calldata=_calldata('call', ADDR_BUSY_V02),
+			calldata=encode_call('call', ADDR_BUSY_V02),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
@@ -599,36 +350,6 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		assert result.result_kind == host_fns.ResultCode.VM_ERROR, result
 		assert result.result_data == str(public_abi.VmError.timeout()), result
 
-	async def _lvs(
-		self, *, name: str, line: int, address: Address, calldata: bytes, resolve_hook
-	):
-		"""
-		Run the same step as leader, validator and sync run.
-
-		The three must agree on the execution hash; anything else is a
-		determinism violation an honest validator would see as a disagreement.
-		"""
-
-		async def one(suffix: str, **kwargs):
-			return await self._execute(
-				name=f'{name}-{suffix}',
-				line=line,
-				address=address,
-				calldata=calldata,
-				code=None,
-				is_init=False,
-				resolve_hook=resolve_hook,
-				apply_changes=False,
-				**kwargs,
-			)
-
-		leader = await one('leader', is_sync=False)
-		validator = await one(
-			'validator', is_sync=False, leader_public_data=leader.result_leader_public_data
-		)
-		sync = await one('sync', is_sync=True)
-		return leader, validator, sync
-
 	async def _assert_lvs_validator_mode(self):
 		# A leader/validator run that silently degraded to a sync one would make
 		# the agreement below vacuous, so first pin that the validator mode is
@@ -637,7 +358,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name='lvs-mode-is-real',
 			line=3,
 			address=ADDR_CALLER_V03,
-			calldata=_calldata('call', ADDR_CALLEE_V02),
+			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
@@ -645,7 +366,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			),
 			apply_changes=False,
 			is_sync=False,
-			leader_public_data=_leader_public_data(gvm_calldata.encode({})),
+			leader_public_data=encode_leader_public_data(gvm_calldata.encode({})),
 		)
 		assert bogus.result_kind == host_fns.ResultCode.VM_ERROR, bogus
 
@@ -676,7 +397,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name=f'lvs-{suffix}',
 			line=line,
 			address=caller,
-			calldata=_calldata('call', callee),
+			calldata=encode_call('call', callee),
 			resolve_hook=lambda address, _state, _major: (
 				self._route(major) if address == callee else None
 			),
@@ -685,7 +406,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		for label, run in runs:
 			assert run.result_kind == host_fns.ResultCode.RETURN, (suffix, label, run)
 			assert len(run.execution_hash) == 32, (suffix, label, run.execution_hash)
-		_assert_hashes_agree(f'nested call, {suffix}', runs)
+		assert_hashes_agree(f'nested call, {suffix}', runs)
 
 	async def _assert_unhooked_stays_in_process(self):
 		"""
@@ -702,7 +423,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name='unhooked-cross-major',
 			line=3,
 			address=ADDR_CALLER_V03,
-			calldata=_calldata('call', ADDR_CALLEE_V02),
+			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
 			is_init=False,
 			resolve_hook=resolve,
@@ -725,7 +446,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name='route-in-process',
 			line=3,
 			address=ADDR_CALLER_V03,
-			calldata=_calldata('call', ADDR_CALLEE_V03),
+			calldata=encode_call('call', ADDR_CALLEE_V03),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda _address, _state, _major: None,
@@ -735,7 +456,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name='route-nested',
 			line=3,
 			address=ADDR_CALLER_V03,
-			calldata=_calldata('call', ADDR_CALLEE_V03),
+			calldata=encode_call('call', ADDR_CALLEE_V03),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
@@ -748,7 +469,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		assert in_process.result_data == nested.result_data == 303, (in_process, nested)
 		# The parent's own execution hash folds the callee's small hash, which
 		# commits to the outcome and to nothing about where the callee ran.
-		_assert_hashes_agree(
+		assert_hashes_agree(
 			'the route is consensus-visible',
 			[('in process', in_process), ('nested', nested)],
 		)
@@ -777,7 +498,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 				name=f'state-mode-{"final" if final else "nonfinal"}-{nested}',
 				line=3,
 				address=ADDR_STATE_CALLER_V03,
-				calldata=_calldata('call', ADDR_CALLEE_V03, final),
+				calldata=encode_call('call', ADDR_CALLEE_V03, final),
 				code=None,
 				is_init=False,
 				resolve_hook=resolve,
@@ -812,7 +533,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name='deep-chain',
 			line=3,
 			address=ADDR_CHAIN_V03,
-			calldata=_calldata('hop', depth, ADDR_CHAIN_V02),
+			calldata=encode_call('hop', depth, ADDR_CHAIN_V02),
 			resolve_hook=self._chain_resolve,
 		)
 		# The chain alternates v0.3, v0.2, ..., so it sums 3 and 2 in turn.
@@ -838,7 +559,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name=f'starved-fuel-{fuel}',
 			line=3,
 			address=ADDR_CALLER_V03,
-			calldata=_calldata('call', ADDR_CALLEE_V02),
+			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
@@ -852,7 +573,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name=f'starved-fuel-{fuel}-again',
 			line=3,
 			address=ADDR_CALLER_V03,
-			calldata=_calldata('call', ADDR_CALLEE_V02),
+			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
@@ -885,7 +606,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			name=f'canonical-{label}',
 			line=line,
 			address=caller,
-			calldata=_calldata('call', callee),
+			calldata=encode_call('call', callee),
 			code=None,
 			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
@@ -941,6 +662,10 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			(ADDR_LOOP_V03, 0),
 			(ADDR_LOOP_V02, 0),
 		], resolved
+
+
+class CrossMajorCase(cross_major.CrossMajorCase):
+	step_type = CrossMajorStep
 
 
 def collect(

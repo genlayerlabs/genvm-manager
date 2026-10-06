@@ -19,6 +19,56 @@ fn test_ctx(retention: &str, permits: usize) -> Ctx {
     }
 }
 
+async fn test_app_ctx() -> sync::DArc<crate::manager::AppContext> {
+    let manifest_path =
+        std::env::temp_dir().join(format!("genvm-run-test-{}.yaml", rand::random::<u128>()));
+    std::fs::write(&manifest_path, "executor_versions: {}\n").unwrap();
+    let config: sync::DArc<crate::manager::Config> = sync::DArc::new(
+        serde_json::from_value(serde_json::json!({
+            "threads": 1,
+            "blocking_threads": 1,
+            "log_disable": "",
+            "manifest_path": manifest_path,
+        }))
+        .unwrap(),
+    );
+    let ver_ctx = crate::manager::versioning::Ctx::new(config.clone()).await;
+    std::fs::remove_file(manifest_path).unwrap();
+    let (cancel, _) = cancellation::make();
+    sync::DArc::new(crate::manager::AppContext {
+        mod_ctx: crate::manager::modules::Ctx::new(cancel.clone()),
+        cancel,
+        config,
+        run_ctx: test_ctx("5m", 2),
+        ver_ctx: ver_ctx.unwrap(),
+    })
+}
+
+fn module_request() -> Request {
+    let message = genvm_modules_interfaces::MessageData {
+        contract_address: calldata::Address::from([0; 20]),
+        sender_address: calldata::Address::from([0; 20]),
+        origin_address: calldata::Address::from([0; 20]),
+        signer_address: calldata::Address::from([0; 20]),
+        chain_id: 0.into(),
+        value: 0.into(),
+        is_init: false,
+        transaction_timestamp: chrono::Utc::now(),
+    };
+    serde_json::from_value(serde_json::json!({
+        "selector": genvm_modules_interfaces::ExecutorSelector::MajorOverride { major: 0 },
+        "message": message,
+        "is_sync": false,
+        "bucket_totals": {},
+        "host_data": "",
+        "timestamp": message.transaction_timestamp,
+        "host": "",
+        "calldata": [],
+        "initial_time_units_allocation": 0,
+    }))
+    .unwrap()
+}
+
 fn fake_execution(
     genvm_id: GenVMId,
     finished_at: Option<chrono::DateTime<chrono::Utc>>,
@@ -54,6 +104,7 @@ fn fake_execution_with_host_id(
         log_sink: Arc::new(LogSinkInner::new(false)),
         consumed_result: tokio::sync::OnceCell::new(),
         process_handle: tokio::sync::Mutex::new(None),
+        spawned: AtomicBool::new(false),
         cancel_requested: AtomicBool::new(false),
         cancel_notify: tokio::sync::Notify::new(),
         finish_cause: std::sync::Mutex::new(None),
@@ -446,6 +497,75 @@ async fn cancel_while_queued_consumes_no_permit() {
 }
 
 #[tokio::test]
+async fn permit_queued_run_allows_module_stop_and_rechecks_modules() {
+    use crate::manager::modules::{StartRequest, Type};
+
+    let ctx = test_app_ctx().await;
+    let config = serde_json::json!({
+        "threads": 1,
+        "blocking_threads": 1,
+        "log_disable": "",
+        "lua_script_path": "",
+        "vm_count": 1,
+        "lua_path": "",
+        "signer_url": "",
+        "signer_headers": {},
+        "data_dir": "",
+        "backends": {},
+        "prompt_templates": {
+            "eq_comparative": null,
+            "eq_non_comparative_leader": null,
+            "eq_non_comparative_validator": null,
+        },
+        "webdriver_host": "",
+        "extra_tld": [],
+        "always_allow_hosts": [],
+    });
+    for module_type in [Type::Llm, Type::Web] {
+        ctx.mod_ctx
+            .start(StartRequest {
+                module_type,
+                config: config.clone(),
+                allow_empty_backends: true,
+                user_error: true,
+            })
+            .await
+            .unwrap();
+    }
+    let occupied = ctx
+        .run_ctx
+        .permits
+        .clone()
+        .acquire_many_owned(2)
+        .await
+        .unwrap();
+    let exec = fake_execution(GenVMId(1), None);
+    let run = supervise_genvm(ctx.clone(), exec.clone(), module_request());
+    tokio::pin!(run);
+    assert!(futures_util::poll!(run.as_mut()).is_pending());
+    assert!(matches!(*exec.events.borrow(), Snapshot::Queued { .. }));
+
+    for module_type in [Type::Llm, Type::Web] {
+        let stop = ctx.mod_ctx.stop(module_type);
+        tokio::pin!(stop);
+        assert!(matches!(
+            futures_util::poll!(stop.as_mut()),
+            std::task::Poll::Ready(Ok(true))
+        ));
+    }
+
+    drop(occupied);
+    assert!(futures_util::poll!(run.as_mut()).is_ready());
+    assert_eq!(ctx.run_ctx.permits.available_permits(), 2);
+    let snapshot = exec.events.borrow();
+    assert!(
+        matches!(&*snapshot, Snapshot::Event(Event::FailedToStart { error, .. })
+            if error == "modules are required but not running"),
+        "unexpected snapshot: {snapshot:?}"
+    );
+}
+
+#[tokio::test]
 async fn permits_cannot_drop_below_the_most_expensive_run() {
     let ctx = test_ctx("5m", 8);
     assert_eq!(ctx.min_permits(), 2);
@@ -455,6 +575,27 @@ async fn permits_cannot_drop_below_the_most_expensive_run() {
 
     assert_eq!(ctx.set_permits(2).await, 2);
     assert_eq!(ctx.get_current_permits(), 2);
+}
+
+#[tokio::test]
+async fn rejected_permits_preserve_throttling() {
+    let ctx = test_ctx("5m", 10);
+    assert_eq!(ctx.set_permits(5).await, 5);
+    let active = ctx.permits.clone().acquire_many_owned(3).await.unwrap();
+
+    for requested in [0, 1] {
+        assert_eq!(ctx.set_permits(requested).await, 5);
+        assert_eq!(ctx.get_current_permits(), 2);
+        let permits = ctx.max_permits.lock().await;
+        assert_eq!(permits.max, 5);
+        assert_eq!(permits.num_throttled, 5);
+        assert_eq!(permits.throttled.as_ref().unwrap().num_permits(), 5);
+    }
+
+    drop(active);
+    assert_eq!(ctx.get_current_permits(), 5);
+    assert_eq!(ctx.set_permits(10).await, 10);
+    assert_eq!(ctx.get_current_permits(), 10);
 }
 
 #[tokio::test]
@@ -752,6 +893,50 @@ async fn terminal_event_is_published_once() {
 }
 
 #[tokio::test]
+async fn a_failure_after_spawn_is_a_finished_not_a_failed_to_start() {
+    let error = || anyhow::anyhow!("stdin write task panicked");
+
+    let spawned = fake_execution(GenVMId(1), None);
+    spawned.mark_spawned();
+    let mut rx = spawned.events.subscribe();
+    report_run_failure(&spawned, error()).await;
+    match rx.borrow_and_update().clone() {
+        Snapshot::Event(Event::Finished {
+            exit_code, cause, ..
+        }) => {
+            assert_eq!(exit_code, None);
+            assert_eq!(cause, FinishCause::Exited);
+        }
+        other => panic!("spawned run reported {other:?}, expected a finished event"),
+    }
+
+    let never_spawned = fake_execution(GenVMId(2), None);
+    let mut rx = never_spawned.events.subscribe();
+    report_run_failure(&never_spawned, error()).await;
+    assert!(matches!(
+        rx.borrow_and_update().clone(),
+        Snapshot::Event(Event::FailedToStart { .. })
+    ));
+}
+
+#[tokio::test]
+async fn epipe_from_an_exited_executor_is_not_an_error() {
+    let mut child = tokio::process::Command::new("bash")
+        .args(["-c", "exit 3"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // Larger than any default pipe buffer, so the write must hit EPIPE
+    let data = bytes::Bytes::from(vec![0u8; 4 << 20]);
+    let writer = spawn_stdin_writer(child.stdin.take().unwrap(), data);
+
+    let write = writer.await;
+    assert!(matches!(&write, Ok(Err(e)) if e.kind() == std::io::ErrorKind::BrokenPipe));
+    check_stdin_write(GenVMId(1), write).unwrap();
+    child.wait().await.unwrap();
+}
+
+#[tokio::test]
 async fn process_completion_waits_for_final_logs_on_success_and_error() {
     use std::io::Write;
     use std::os::unix::process::ExitStatusExt;
@@ -985,10 +1170,8 @@ fn documented_properties(schema: &str) -> Vec<String> {
     names
 }
 
-/// A host implementing against the schema alone must see every field the
-/// manager accepts, and none it does not. Drift here is not cosmetic: an
-/// undocumented `permissions` silently grants the `wscn` default, and a
-/// documented-but-absent field makes a host send something that is ignored.
+/// An undocumented `permissions` field would silently grant the default `wscn`.
+/// Compares property names only; types, defaults and `required` are unchecked.
 #[test]
 fn request_schema_matches_the_rust_struct() {
     let mut accepted = request_field_names()
@@ -1000,7 +1183,7 @@ fn request_schema_matches_the_rust_struct() {
     assert_eq!(documented_properties("GenvmRunRequest"), accepted);
 }
 
-/// Same contract for the message the host builds by hand.
+/// Same name-only check for `MessageData`.
 #[test]
 fn message_schema_matches_the_rust_struct() {
     #[allow(unused_variables)]
