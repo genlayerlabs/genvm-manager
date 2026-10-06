@@ -76,7 +76,8 @@ pub async fn handle_genvm_run(
     let res: super::run::Request = calldata::decode_obj(data)?;
 
     let run_ctx = ctx.gep(|x| &x.run_ctx);
-    let id = run_ctx.start(ctx, res);
+    let start = run_ctx.start(ctx, res);
+    let id = start.genvm_id;
     let (snapshot, mut events) = run_ctx.attach(run_ctx.boot_id(), id)?;
 
     let start_event = match snapshot {
@@ -90,8 +91,10 @@ pub async fn handle_genvm_run(
     };
 
     if let run::Event::FailedToStart { error, .. } = start_event {
-        // The caller never learns the id, so nothing else would ack it
-        run_ctx.ack(id);
+        if start.reserved {
+            // The caller never learns the id of a newly reserved failure
+            run_ctx.ack(id);
+        }
         anyhow::bail!(error);
     }
 

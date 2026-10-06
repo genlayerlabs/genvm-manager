@@ -492,7 +492,7 @@ where
             }
         };
         let run_ctx = self.ctx.gep(|x| &x.run_ctx);
-        let genvm_id = run_ctx.start(self.ctx.clone(), req);
+        let genvm_id = run_ctx.start(self.ctx.clone(), req).genvm_id;
         let (snapshot, rx) = match run_ctx.attach(run_ctx.boot_id(), genvm_id) {
             Ok(result) => result,
             Err(e) => {

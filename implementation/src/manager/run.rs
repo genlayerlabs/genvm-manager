@@ -541,17 +541,17 @@ impl Ctx {
     pub async fn set_permits(&self, permits: usize) -> usize {
         let mut permits_lock = self.max_permits.lock().await;
 
-        permits_lock.max += permits_lock.num_throttled;
-        permits_lock.num_throttled = 0;
-        permits_lock.throttled = None;
-        // actually this causes drop of previous one, so we can enter more genvms than we have permits, but it's ok for now
-        // especially since this method is expected to be called before starting any genvms at all
-
         let min = self.min_permits();
         if permits < min {
             log_warn!(@operator, permits = permits, min = min; "cannot set permits below the most expensive run");
             return permits_lock.max;
         }
+
+        permits_lock.max += permits_lock.num_throttled;
+        permits_lock.num_throttled = 0;
+        permits_lock.throttled = None;
+        // actually this causes drop of previous one, so we can enter more genvms than we have permits, but it's ok for now
+        // especially since this method is expected to be called before starting any genvms at all
 
         if permits_lock.max > permits {
             let delta = permits_lock.max - permits;
@@ -2044,6 +2044,11 @@ enum Reservation {
     Reserved(sync::DArc<SingleGenVMContext>),
 }
 
+pub struct StartResult {
+    pub genvm_id: GenVMId,
+    pub reserved: bool,
+}
+
 async fn wait_for_process_stop(
     exec_ctx: &SingleGenVMContext,
     caller_stream: Option<&ManagerHostStreamState>,
@@ -2098,7 +2103,11 @@ impl Ctx {
         Reservation::Reserved(exec_ctx)
     }
 
-    pub fn start(&self, full_ctx: sync::DArc<crate::manager::AppContext>, req: Request) -> GenVMId {
+    pub fn start(
+        &self,
+        full_ctx: sync::DArc<crate::manager::AppContext>,
+        req: Request,
+    ) -> StartResult {
         let reservation = self.reserve_execution(req.host_genvm_id.as_deref(), |genvm_id| {
             let events = tokio::sync::watch::Sender::new(Snapshot::Queued {
                 genvm_id,
@@ -2139,14 +2148,22 @@ impl Ctx {
         });
 
         let exec_ctx = match reservation {
-            Reservation::Existing(genvm_id) => return genvm_id,
+            Reservation::Existing(genvm_id) => {
+                return StartResult {
+                    genvm_id,
+                    reserved: false,
+                };
+            }
             Reservation::Reserved(exec_ctx) => exec_ctx,
         };
         let genvm_id = exec_ctx.id;
 
         tokio::spawn(supervise_genvm(full_ctx, exec_ctx, req));
 
-        genvm_id
+        StartResult {
+            genvm_id,
+            reserved: true,
+        }
     }
 
     async fn start_nested(

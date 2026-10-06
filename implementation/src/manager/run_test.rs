@@ -459,6 +459,27 @@ async fn permits_cannot_drop_below_the_most_expensive_run() {
 }
 
 #[tokio::test]
+async fn rejected_permits_preserve_throttling() {
+    let ctx = test_ctx("5m", 10);
+    assert_eq!(ctx.set_permits(5).await, 5);
+    let active = ctx.permits.clone().acquire_many_owned(3).await.unwrap();
+
+    for requested in [0, 1] {
+        assert_eq!(ctx.set_permits(requested).await, 5);
+        assert_eq!(ctx.get_current_permits(), 2);
+        let permits = ctx.max_permits.lock().await;
+        assert_eq!(permits.max, 5);
+        assert_eq!(permits.num_throttled, 5);
+        assert_eq!(permits.throttled.as_ref().unwrap().num_permits(), 5);
+    }
+
+    drop(active);
+    assert_eq!(ctx.get_current_permits(), 5);
+    assert_eq!(ctx.set_permits(10).await, 10);
+    assert_eq!(ctx.get_current_permits(), 10);
+}
+
+#[tokio::test]
 async fn nested_run_does_not_consume_parent_permit() {
     let ctx = test_ctx("5m", 1);
     let exec = fake_execution(GenVMId(1), None);
