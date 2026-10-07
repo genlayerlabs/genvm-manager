@@ -88,6 +88,12 @@ def _normalize_message_fee_allocation(
 	allocation: fees.MessageAllocationNode,
 ) -> fees.MessageAllocationNode:
 	allocation = allocation.copy()
+	raw_allocation = typing.cast(dict[str, typing.Any], allocation)
+	external_params = raw_allocation['fee_params'].get('External')
+	if external_params is not None and isinstance(external_params['max_gas_price'], str):
+		external_params = external_params.copy()
+		external_params['max_gas_price'] = int(external_params['max_gas_price'])
+		raw_allocation['fee_params'] = {'External': external_params}
 	if isinstance(allocation['recipient'], str):
 		allocation['recipient'] = Address(allocation['recipient'])
 	if isinstance(allocation['subtree'], list):

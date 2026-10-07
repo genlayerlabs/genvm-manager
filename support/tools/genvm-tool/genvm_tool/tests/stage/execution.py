@@ -110,6 +110,7 @@ class _ExecutionContext:
 	success_count: int = 0
 	skipped: int = 0
 	running_services: dict[str, Handle] = field(default_factory=dict)
+	failed_services: dict[str, str] = field(default_factory=dict)
 	# Per-test completion tracking for test-to-test dependencies
 	test_completed: dict[str, asyncio.Event] = field(default_factory=dict)
 	test_passed: dict[str, bool] = field(default_factory=dict)
@@ -167,6 +168,11 @@ async def _start_service(ctx: _ExecutionContext, service: Service) -> None:
 	"""Start a service and track its handle."""
 	ctx.shared.logger.info('Starting service', service_name=service.name)
 	try:
+		for dependency in service.depends_on or []:
+			if dependency.name in ctx.failed_services:
+				raise RuntimeError(
+					f'Service {dependency.name} failed: {ctx.failed_services[dependency.name]}'
+				)
 		async with asyncio.timeout(SPAWN_TIMEOUT):
 			handle = await service.manager.start()
 		await handle.await_startup()
@@ -174,12 +180,12 @@ async def _start_service(ctx: _ExecutionContext, service: Service) -> None:
 		ctx.running_services[service.name] = handle
 		ctx.shared.logger.info('Service started', service_name=service.name)
 	except Exception as e:
+		ctx.failed_services[service.name] = str(e)
 		ctx.shared.logger.error(
 			'Failed to start service',
 			service_name=service.name,
 			error=e,
 		)
-		raise
 
 
 async def _stop_service(ctx: _ExecutionContext, service: Service) -> None:
@@ -346,6 +352,11 @@ async def _run_case_locked(ctx: _ExecutionContext, case: genvm_tool.tests.test.C
 		)
 
 	try:
+		for service in case.description.needed_services:
+			if service.name in ctx.failed_services:
+				raise RuntimeError(
+					f'Service {service.name} failed: {ctx.failed_services[service.name]}'
+				)
 		run_shared.logger.debug(
 			'Running test case',
 			case_name=case.description.name,

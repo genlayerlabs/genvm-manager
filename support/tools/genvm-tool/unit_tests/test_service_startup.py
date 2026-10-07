@@ -1,9 +1,13 @@
 """A service that never comes up must not wedge the run."""
 
 import asyncio
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, Mock
 
 import pytest
+from genvm_tool.tests import SharedContext, test
 from genvm_tool.tests.exec import service
+from genvm_tool.tests.stage import collection, execution, scheduling
 
 
 class _Handle(service.Handle):
@@ -77,3 +81,50 @@ def test_a_wedged_probe_cannot_outlive_the_deadline():
 	with pytest.raises(RuntimeError, match='not healthy within'):
 		asyncio.run(asyncio.wait_for(handle.await_startup(), timeout=5))
 	assert handle.interrupted
+
+
+@pytest.mark.parametrize('failure', ['spawn', 'dead', 'timeout'])
+def test_startup_failure_fails_dependents_and_continues(tmp_path, failure):
+	handle = _Handle(reason='exited with code 1' if failure == 'dead' else None)
+	start = AsyncMock(return_value=handle)
+	if failure == 'spawn':
+		start.side_effect = RuntimeError('could not spawn')
+	failed = collection.Service('failed', service.FunctionService(start))
+	dependent_start = AsyncMock()
+	dependent = collection.Service(
+		'dependent', service.FunctionService(dependent_start), depends_on=[failed]
+	)
+	healthy = _Handle(healthy_after=1)
+	unrelated = collection.Service(
+		'unrelated', service.FunctionService(AsyncMock(return_value=healthy))
+	)
+	cases = []
+	for name, needed in [
+		('direct-1', failed),
+		('direct-2', failed),
+		('transitive', dependent),
+		('unrelated', unrelated),
+	]:
+		case = test.StepsCase(
+			test.Description(name, needed_services=frozenset({needed})),
+			[test.CONST_PASSED],
+		)
+		case.into_steps = AsyncMock(wraps=case.into_steps)
+		cases.append(case)
+	shared = SharedContext(tmp_path, logger=Mock(), printer=Mock(), watchdog=Mock())
+	plan = scheduling.run(
+		shared, collection.Env(cases=cases, args=SimpleNamespace(max_concurrent=2))
+	)
+	result = asyncio.run(asyncio.wait_for(execution.run(shared, plan), timeout=5))
+	assert set(result.failed) == {'direct-1', 'direct-2', 'transitive'}
+	assert result.success_count == 1
+	assert len(result.results) == 4
+	for record in result.results:
+		if record.name != 'unrelated':
+			assert not record.passed
+			assert 'Service failed failed:' in record.failure_message
+	for case in cases[:3]:
+		case.into_steps.assert_not_called()
+	dependent_start.assert_not_called()
+	assert healthy.interrupted
+	assert all(s.handle is None for s in [failed, dependent, unrelated])

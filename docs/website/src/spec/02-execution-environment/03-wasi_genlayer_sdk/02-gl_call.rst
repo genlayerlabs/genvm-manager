@@ -26,6 +26,29 @@ Requirements
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
 
+Semantics
+~~~~~~~~~
+
+External messages are emitted for finalization. GenVM derives their call key from
+the first four calldata bytes, padded with zeros to 32 bytes; calldata shorter than
+four bytes uses the all-zero key
+
+GenVM orders matching candidates from the non-zero exact ``(address, call key)``
+allocation through the same address's call-key wildcard to host-provided recipient
+wildcards. A zero-budget exact allocation is absent and therefore permits broader
+candidates. GenVM selects the first candidate that can fund the reservation. If
+candidates exist but none can fund it, the :term:`sub-VM` exits with
+:ref:`gvm-def-str-trie-detail-vm-error-out-of-message-fee-allocation-budget-external`
+
+If no candidate matches, the message uses the legacy unallocated path and consumes
+only its receipt cost. Hosts MUST append an exhausted external recipient and
+call-key wildcard to every pinned allocation tree, and supply that wildcard alone
+for a closed tree. It has zero budget, ``finalized`` phase, unit gas limit, maximum
+gas price, zero child budget and an empty subtree. This ordinary exhausted candidate
+makes an otherwise unmatched external message exit with the allocation-budget error
+above, as required when consensus marks the execution as having allocations. Hosts
+MUST NOT supply this guard for open-pool or allocation-absent executions
+
 ``ExternalCall`` Message
 ------------------------
 
@@ -122,7 +145,8 @@ Payload
        "value": U256,           // Wei to transfer
        "on": String,            // "finalized" or "decided"
        "use_balance": Bool,     // optional (default false), see below
-       "fee_params": FeeParams  // optional (default absent), required iff use_balance
+       "fee_params": FeeParams, // optional (default absent), required iff use_balance
+       "descendants": Descendants // optional (default absent), see below
      }
    }
 
@@ -133,6 +157,7 @@ Requirements
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
 #. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
+#. ``descendants`` is absent unless ``use_balance`` is set
 #. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
 Allocation-funded fees
@@ -175,26 +200,90 @@ transaction's fee configuration and mirrors the chain's
      "receipt_fee_max_gas_price": U256        // receipt price cap (revert guard)
    }
 
+``descendants`` configures the emitted child's descendant funding policy:
+
+.. code-block::
+
+   Descendants = Null | U256 | [Allocation]
+   InternalAllocation {
+     "parent_index": U256,
+     "recipient": Address,
+     "call_key": Bytes32,
+     "budget": U256,
+     "fee_params": FeeParams,
+     "on": String
+   }
+   ExternalAllocation {
+     "parent_index": U256,
+     "recipient": Address,
+     "call_key": Bytes32,
+     "budget": U256,
+     "fee_params": {
+       "gas_limit": U256,
+       "max_gas_price": U256
+     }
+   }
+
+Absent, null, zero and an empty list select Closed and emit no grant bytes. A
+positive integer selects Open with that descendant budget. A non-empty list
+selects Pinned; its descendant budget is the checked sum of root budgets.
+The list is flat and preserves authored order. A root's ``parent_index`` is
+the maximum U256 value; other indices must refer to an earlier Internal
+allocation. ``children`` is not a wire field. ``"decided"`` maps to acceptance-phase
+authorization and ``"finalized"`` to finalization-phase authorization
+
+These Closed spellings apply to balance-funded messages. On sender-funded
+messages, the field must be absent or null; a raw present zero or empty list is
+rejected with ``Inval``
+
+A Pinned grant obeys all of the following:
+
+#. Every node has a non-zero ``budget``
+#. The tree contains at most 24 nodes and has depth at most 24. An internal
+   node's encoded fee parameters are at most 1,024 bytes, which permits at most
+   22 ``rotations`` entries
+#. External allocations occur only at the root. Their ``gas_limit`` and
+   ``max_gas_price`` are non-zero, and their budget is a positive multiple of
+   ``gas_limit * max_gas_price``. They authorize only finalization-phase
+   emission
+#. Siblings have unique ``(message type, recipient, call_key)`` keys. The
+   ``on`` phase is not part of the key; the same key under different parents is
+   permitted
+#. For each internal node *i*, let *P_i* be its primary fee quote and *C_i* the
+   sum of its direct children's budgets. Its budget is at least
+   ``(P_i + C_i) * mult_i``. ``mult_i`` is the parent allocation's appeal-round
+   count plus 1 when ``on`` is ``"decided"``, and 1 otherwise. For a root, the
+   emitted child's appeal-round count is used
+
 Semantics:
 
-- The fee is metered from ``fee_params`` and that metered amount becomes the child
-  transaction's ``declaredBudget`` — the contract balance is the only bound. The
+- The fee is metered from ``fee_params``. The child transaction's
+  ``declaredBudget`` is that primary reserve plus the descendant budget; the
+  contract balance is the only bound. The
   consensus term is charged at the guest's ``max_price_gen_per_time_unit`` cap
   (matching the chain's ``minMessagePrimaryFees``), not the node's live
   ``genPerTimeUnit``, so the fee scales with the cap. The consensus developer and
   DAO gross-up applies to this time-unit portion but not the execution budget
 - The message is excluded from allocation matching, so no matching node is
   required (and none is consulted).
-- The contract must be able to cover ``value + metered_fee`` from its balance;
+- The contract must be able to cover ``value + declaredBudget`` from its balance;
   otherwise the call fails with ``InsufficientBalance``.
-- The emitted allocation subtree is **empty**: nesting is fail-closed, so a child
-  message must itself set ``use_balance`` or it fails to fund.
+- Closed is fail-closed. Open and Pinned carry a canonical grant in the emitted
+  allocation subtree
+- A zero ``declaredBudget`` is rejected with
+  :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum`; this applies exactly
+  when the primary reserve plus descendant budget is zero
 
 ``fee_params`` is validated before metering. The following are rejected with
 ``Inval``:
 
 - ``use_balance`` without ``fee_params``, or ``fee_params`` without ``use_balance``.
+- Non-null ``descendants`` without ``use_balance``, malformed allocation shapes, and
+  internal allocation fee parameters that fail the checks below
 - Empty ``rotations`` (``appealRounds`` would underflow).
+- Exactly one of ``leader_time_units_allocation`` and
+  ``validator_time_units_allocation`` being zero. Both zero and both non-zero
+  are valid shapes; later metering still enforces configured timeout bounds
 - A zero ``max_price_gen_per_time_unit``, ``storage_fee_max_gas_price`` or
   ``receipt_fee_max_gas_price`` (the chain reverts ``FeeValueMustBeNonZero`` at
   reveal).
@@ -205,14 +294,26 @@ Semantics:
   ``validator_time_units_allocation``, each ``rotations`` entry) below
   2\ :sup:`32`. These bounds keep the metered floor within ``U256``.
 
+Pinned node/depth limits, external-child placement and duplicate sibling keys use
+:ref:`gvm-def-str-trie-value-vm-error-fee-descendant-grant-tree`. Zero node
+budgets, arithmetic overflow and a failure of the internal-node budget
+inequality use
+:ref:`gvm-def-str-trie-value-vm-error-fee-descendant-grant-budget`. Invalid
+external allocation parameters use
+:ref:`gvm-def-str-trie-value-vm-error-fee-descendant-grant-external`.
+Validation completes before fee consumption, balance reservation or emission
+
 Metering additionally enforces node-configured bounds, surfaced as ``VMError``\ s:
 
-- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — either a non-zero
-  ``execution_budget_per_round`` below ``node.messageBudgetFloor`` (the chain's
-  ``BudgetTooLow``), or — unless both time-unit allocations are zero — a leader
-  allocation outside ``node.minProposeTimeout`` through
+- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — for the emitted
+  child's own fee parameters, either a non-zero ``execution_budget_per_round``
+  below ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``), or — unless
+  both time-unit allocations are zero — a leader allocation outside
+  ``node.minProposeTimeout`` through
   ``node.maxProposeTimeout`` or a validator allocation outside
-  ``node.minCommitTimeout`` through ``node.maxCommitTimeout``.
+  ``node.minCommitTimeout`` through ``node.maxCommitTimeout``. Internal grant
+  nodes use the same local primary quote but skip the unavailable
+  transaction-pinned budget-floor admission check
 - :ref:`gvm-def-str-trie-value-vm-error-fee-too-many-rounds` — ``rotations``
   implies more consensus rounds than the
   node's validator table supports (on-chain ``MAX_ROUNDS``).
@@ -235,7 +336,8 @@ Payload
        "on": String,            // "finalized" or "decided"
        "salt_nonce": U256,      // Salt for CREATE2-style deterministic addressing
        "use_balance": Bool,     // optional (default false)
-       "fee_params": FeeParams  // optional (default absent), required iff use_balance
+       "fee_params": FeeParams, // optional (default absent), required iff use_balance
+       "descendants": Descendants // optional (default absent), see balance-funded fees
      }
    }
 
@@ -249,7 +351,8 @@ Requirements
 #. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
 Supports CREATE2-style deployment with salt nonce for deterministic addressing.
-``use_balance`` / ``fee_params`` behave as for :ref:`gvm-gl-call-balance-fees`.
+``use_balance`` / ``fee_params`` / ``descendants`` behave as for
+:ref:`gvm-gl-call-balance-fees`.
 
 .. _gvm-def-gl-call-run-nondet:
 
