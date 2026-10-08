@@ -88,6 +88,12 @@ def _normalize_message_fee_allocation(
 	allocation: fees.MessageAllocationNode,
 ) -> fees.MessageAllocationNode:
 	allocation = allocation.copy()
+	raw_allocation = typing.cast(dict[str, typing.Any], allocation)
+	external_params = raw_allocation['fee_params'].get('External')
+	if external_params is not None and isinstance(external_params['max_gas_price'], str):
+		external_params = external_params.copy()
+		external_params['max_gas_price'] = int(external_params['max_gas_price'])
+		raw_allocation['fee_params'] = {'External': external_params}
 	if isinstance(allocation['recipient'], str):
 		allocation['recipient'] = Address(allocation['recipient'])
 	if isinstance(allocation['subtree'], list):
@@ -657,6 +663,12 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		# Set up paths
 		rel_path = jsonnet_path.relative_to(self._test_case.cases_dir)
 		mock_sock_path = Path('/tmp', 'genvm-test', rel_path.with_suffix(f'.sock{suff}'))
+		# sun_path is 104 bytes on macOS, 108 on Linux
+		if len(os.fsencode(mock_sock_path)) > 100:
+			path_hash = genvm_tool.gvm32.encode(
+				hashlib.sha3_256(os.fsencode(mock_sock_path)).digest()
+			)
+			mock_sock_path = Path('/tmp', f'genvm-{path_hash}.sock')
 		mock_sock_path.parent.mkdir(exist_ok=True, parents=True)
 
 		is_leader = single_conf.get('mode') == 'l'

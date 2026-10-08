@@ -389,6 +389,21 @@ Param: i32
 ``fee too_many_rounds``
 ~~~~~~~~~~~~~~~~~~~~~~~
 
+.. _gvm-def-str-trie-value-vm-error-fee-descendant-grant-budget:
+
+``fee descendant_grant budget``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-fee-descendant-grant-tree:
+
+``fee descendant_grant tree``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-fee-descendant-grant-external:
+
+``fee descendant_grant external``
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
 .. _gvm-def-str-trie-value-vm-error-forbidden:
 
 ``forbidden``
