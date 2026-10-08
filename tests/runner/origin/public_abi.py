@@ -224,6 +224,17 @@ class _VmErrorFeeNoMatchingAllocation:
 	def external() -> 'VmError':
 		return VmError('fee no_matching_allocation # external')
 
+class _VmErrorFeeDescendantGrant:
+	@staticmethod
+	def budget() -> 'VmError':
+		return VmError('fee descendant_grant budget')
+	@staticmethod
+	def tree() -> 'VmError':
+		return VmError('fee descendant_grant tree')
+	@staticmethod
+	def external() -> 'VmError':
+		return VmError('fee descendant_grant external')
+
 class _VmErrorFee:
 	@staticmethod
 	def below_minimum() -> 'VmError':
@@ -234,6 +245,9 @@ class _VmErrorFee:
 	@staticmethod
 	def no_matching_allocation() -> '_VmErrorFeeNoMatchingAllocation':
 		return _VmErrorFeeNoMatchingAllocation()
+	@staticmethod
+	def descendant_grant() -> '_VmErrorFeeDescendantGrant':
+		return _VmErrorFeeDescendantGrant()
 
 class _VmErrorEvm:
 	@staticmethod

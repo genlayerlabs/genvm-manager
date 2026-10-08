@@ -51,6 +51,23 @@ class MessageAllocationNode(typing.TypedDict):
 	subtree: bytes
 
 
+# Hosts append this to pinned trees and send it alone for closed trees.
+UNMATCHED_EXTERNAL_GUARD_ALLOC: MessageAllocationNode = {
+	'budget': 0,
+	'recipient': None,
+	'call_key': None,
+	'on': 'finalized',
+	'fee_params': {
+		'External': {
+			'gas_limit': 1,
+			'max_gas_price': 2**256 - 1,
+		},
+	},
+	'children_budget': 0,
+	'subtree': b'',
+}
+
+
 DEFAULT_EXTERNAL_MESSAGE_ALLOC: MessageAllocationNode = {
 	'budget': 2**200,
 	'recipient': None,
