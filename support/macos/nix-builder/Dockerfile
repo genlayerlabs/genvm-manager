@@ -1,4 +1,4 @@
-FROM nixos/nix:2.32.8 AS base
+FROM nixos/nix:2.35.2 AS base
 
 ENV PATH=/nix/var/nix/profiles/default/bin:/nix/var/nix/profiles/default/sbin:/usr/local/bin:/usr/bin:/bin
 
