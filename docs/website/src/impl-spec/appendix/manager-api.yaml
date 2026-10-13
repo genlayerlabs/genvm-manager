@@ -1081,8 +1081,13 @@ components:
             unchanged and meters their length. External and open allocations without a
             committed subtree use empty bytes. children_budget and subtree are required
             on every entry, including allocations without descendants.
-            Omit allocations absent on-chain. Recipient wildcards are
-            synthetic entries for open-pool or view execution, not chain allocations
+            Omit allocations absent on-chain. Recipient wildcards are synthetic entries,
+            not chain allocations. The host MUST append an unmatched-external guard to
+            every pinned tree and send it alone for a closed tree: recipient and call_key
+            null, budget zero, on finalized, External gas_limit one and max_gas_price the
+            maximum uint256, children_budget zero and an empty subtree. It is an ordinary
+            exhausted candidate. Open-pool and allocation-absent executions MUST omit the
+            guard; open-pool and view execution may use ordinary wildcards
         record_actions:
           type: array
           items:
