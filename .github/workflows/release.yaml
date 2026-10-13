@@ -153,3 +153,17 @@ jobs:
           body_path: artifacts/notes/${{ needs.build-and-test.outputs.notes_file }}
           draft: false
           prerelease: ${{ contains(needs.build-and-test.outputs.tag, '-') }}
+
+  docs-dispatch:
+    needs: [build-and-test, release-publish]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch release docs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.build-and-test.outputs.tag }}
+        run: gh workflow run docs_nightly.yaml --ref "$TAG" -f version="$TAG"

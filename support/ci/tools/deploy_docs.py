@@ -5,8 +5,7 @@ Place a built docs tree into a checkout of the sdk.genlayer.com site repo.
 That repo publishes `_site/` to GitHub Pages, one directory per docs version
 (`_site/main`, `_site/v0.3.x`, ...) plus a root `_site/versions.json` that feeds
 the version switcher every built page links to. This tool only rewrites those
-files; committing and pushing is left to the caller, so a nightly run and a
-local `--site ../sdk.genlayer.com` do exactly the same thing.
+files by default; `--push` publishes from a disposable, clean site checkout.
 
 The version directory is replaced wholesale rather than merged, so pages deleted
 upstream do not linger.
@@ -21,6 +20,8 @@ import json
 import pathlib
 import re
 import shutil
+import subprocess
+import time
 
 import ci_lib
 
@@ -101,6 +102,11 @@ class DeployDocs(ci_lib.Tool):
 			help='built docs tree to publish (default: build/doc/html)',
 		)
 		parser.add_argument(
+			'--push',
+			action='store_true',
+			help='commit and push to origin/main, retrying races (disposable clean checkout only)',
+		)
+		parser.add_argument(
 			'--preferred',
 			action='store_true',
 			help='make this the version the switcher highlights',
@@ -128,6 +134,12 @@ class DeployDocs(ci_lib.Tool):
 			print(f'{site} does not exist; is --site an sdk.genlayer.com checkout?')
 			return 1
 
+		if args.push:
+			return self.publish(args, html, site)
+		self.stage(args, html, site)
+		return 0
+
+	def stage(self, args, html, site):
 		target = site / args.version
 		if target.exists():
 			shutil.rmtree(target)
@@ -136,7 +148,37 @@ class DeployDocs(ci_lib.Tool):
 		print(f'published {html} -> {target}')
 
 		update_versions(site / VERSIONS_JSON, args.version, args.preferred)
-		return 0
+
+	def publish(self, args, html, site):
+		def git(*command, **kwargs):
+			return subprocess.run(['git', *command], cwd=site.parent, check=True, **kwargs)
+
+		if git('status', '--porcelain', capture_output=True, text=True).stdout:
+			print('--push requires a clean, disposable site checkout')
+			return 1
+		git('config', 'user.email', 'ci@genlayerlabs.com')
+		git('config', 'user.name', 'CI worker')
+		for attempt in range(5):
+			git('fetch', 'origin', 'refs/heads/main')
+			git('reset', '--hard', 'FETCH_HEAD')
+			# Reapply to the latest tree so concurrent versions.json edits survive.
+			self.stage(args, html, site)
+			git('add', '-A', '_site')
+			if not git(
+				'diff', '--cached', '--name-only', capture_output=True, text=True
+			).stdout:
+				print('docs are unchanged; nothing to deploy')
+				return 0
+			git('commit', '-m', f'Deploy documentation version {args.version}')
+			try:
+				git('push', 'origin', 'HEAD:refs/heads/main')
+				return 0
+			except subprocess.CalledProcessError:
+				if attempt == 4:
+					print('docs push failed after 5 attempts')
+					return 1
+				print(f'docs push failed; retrying publication (attempt {attempt + 2}/5)')
+				time.sleep(2**attempt)
 
 
 COMMANDS = [DeployDocs()]

@@ -41,10 +41,30 @@ The site is `sdk.genlayer.com` — GitHub Pages out of
 `_site/versions.json` driving the version switcher; pushing that repo deploys
 it
 
-`.github/workflows/docs_nightly.yaml` republishes `main` nightly and takes a
-version/preferred pair on `workflow_dispatch` for a release train. It needs the
-`DOCS_DEPLOY_KEY` secret, and — since GitHub schedules only from the default
-branch — the workflow file must reach that branch before the cron can fire
+`.github/workflows/docs_nightly.yaml` publishes these versions:
+
+| Trigger | Source | Site Directory |
+|---|---|---|
+| Successful release publication | Exact release tag | Exact release tag |
+| Push to `v0.6` | Pushed commit | `v0.6.x` |
+| Push to `v0.6-dev` | Pushed commit | `v0.6-dev` |
+| Nightly schedule | `main` | `main` |
+| Manual dispatch | Selected ref | `version` input (default `main`) |
+
+The release workflow dispatches docs only after its final publishing job
+succeeds, using `actions: write` on that dispatch job. A docs failure can be
+retried by dispatching the docs workflow at the release tag with the same
+`version`, without republishing the release
+
+Concurrency is per target version and cancels the previous run for that version
+Different versions may publish together: `deploy-docs --push` retries a rejected
+push up to 5 attempts, each time reapplying the built tree and version entry to
+the latest site `main`. This preserves concurrent changes to other versions and
+`versions.json`; unchanged output produces no commit
+
+The workflow needs `DOCS_DEPLOY_KEY` with write access to the site repo
+Schedules and manual dispatch require the workflow on the repository's default
+branch; push triggers require it on the pushed branch
 
 By hand, into a checkout of the site repo:
 
@@ -55,7 +75,9 @@ By hand, into a checkout of the site repo:
 
 The version directory is replaced wholesale, so deleted pages do not linger;
 `_site/versions.json` keeps its curated order, a missing version is inserted
-after `main`. Committing and pushing the site repo is left to you
+after `main`. Committing and pushing the site repo is left to you unless you
+pass `--push`, which requires a clean, disposable checkout and resets it to the
+site repo's `origin/main` on each attempt
 
 ## ADRs
 
