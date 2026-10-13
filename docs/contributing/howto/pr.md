@@ -78,6 +78,7 @@ does fixing a defect you find in your own diff
 | --- | --- |
 | Panel does nothing | missing `ci-safe` |
 | `full tests have not run` | tick *Force run full tests* or comment `/genvm-run-tests` |
+| *GenVM full* still red or cancelled after `/genvm-run-tests` | expected: the command runs in its own check suite and cancels the automatic run; follow the linked run instead |
 | `... commit(s) behind base` | rebase, `push --force-with-lease` |
 | `pinned commit ... is not on the executor repo` | push it, or tick *Provision executor PRs* |
 | Approval revoked | re-request approval for the current head |
