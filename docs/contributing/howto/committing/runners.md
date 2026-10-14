@@ -14,6 +14,8 @@ Before committing:
 2. Set every `"test"` hash in `current.nix` to `null`
 3. Stage the runner changes and run pre-commit; fix and restage them before
 	 hash discovery so the hooks and Nix inspect the same source tree
+	 Ensure linters and formatters have passed before regenerating hashes;
+	 any later source edits invalidate the hashes and require regeneration
 4. Run `runners/support/versions/hash-updater.py`, from anywhere inside the
 	 repo. It builds the umbrella's `#runners-all` with `--keep-going`, writes
 	 every reported `got:` value back into `current.nix`, and repeats until a
