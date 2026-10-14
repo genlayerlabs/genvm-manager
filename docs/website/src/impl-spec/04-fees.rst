@@ -68,7 +68,8 @@ Name                 ``attrs`` keys
                      ``rotationsCount``, ``calldataLength``, ``codeLength``,
                      ``subtreeLength``
 ``nondet_output``    ``outputLength``
-``message_fee``      ``isInternal``, ``matchedFeeParams``: an object with
+``message_fee``      ``isInternal``, ``skipBudgetFloor``, ``matchedFeeParams``:
+                     an object with
                      ``leaderTimeunitsAllocation``,
                      ``validatorTimeunitsAllocation``, ``executionBudgetPerRound``,
                      ``rotations`` (array)
@@ -290,9 +291,9 @@ phase mismatch on an exact allocation does not fall through to a wildcard. Chain
 keys are unique across phases; only synthetic recipient-wildcard entries may
 select different fee parameters by phase. For
 external messages, an exact allocation without room for the reservation spills to
-the per-recipient ``call_key`` wildcard. If neither key has a present allocation, the external message uses
-the legacy unallocated path and consumes only its receipt cost. Existing but exhausted
-candidates yield an allocation-budget error.
+the per-recipient ``call_key`` wildcard. If no candidate matches, the external
+message uses the legacy unallocated path and consumes only its receipt cost.
+Existing but exhausted candidates yield an allocation-budget error.
 
 The default v0.3 fee expressions reject external reservations and receipts with
 ``fee below_minimum`` unless ``node.lockedReceiptGasPrice`` is positive, including
@@ -310,12 +311,20 @@ unallocated path. Synthetic recipient wildcards match independently of ``budget`
 zero there means an exhausted allocation. ``null`` removes the per-allocation cap
 while keeping the execution's fee buckets.
 
-The host must preserve every existing pinned key and must not add recipient
-wildcards to a pinned tree. An empty list restricts internal
-pool-funded emissions. Open-pool and view executions may supply synthetic recipient
-wildcards with concrete fee parameters and phase, and optionally uncapped budgets.
-The executor conservatively treats each emission as novel; remaining allowances
-alone do not identify previously delivered occurrences.
+The host MUST preserve every existing pinned key and MUST NOT add recipient
+wildcards to a pinned tree, except for the unmatched-external guard. It MUST append
+that guard to every pinned tree and send it alone for a closed tree. The guard is an
+ordinary external recipient and call-key wildcard with zero budget, ``finalized``
+phase, unit gas limit, maximum gas price, zero ``children_budget`` and an empty
+``subtree``. An unmatched external message therefore resolves the guard as an
+exhausted candidate and fails with
+:ref:`gvm-def-str-trie-detail-vm-error-out-of-message-fee-allocation-budget-external`
+instead of reaching the receipt-only path that consensus rejects when
+``hasAllocations`` is true. Open-pool and allocation-absent executions MUST NOT
+receive this guard. They may use ordinary synthetic recipient wildcards with
+concrete fee parameters and phase, and optionally uncapped budgets. The executor
+conservatively treats each emission as novel; remaining allowances alone do not
+identify previously delivered occurrences.
 
 Funding modes
 ~~~~~~~~~~~~~~
@@ -333,21 +342,47 @@ An outgoing internal message is funded one of two ways:
   ``EmitInternalDeployMessage``
   sets ``use_balance`` (the chain's ``useBalance``, gated on
   :ref:`gvm-perm-use-balance-for-message-fees`), allocation matching is skipped
-  entirely. The fee is metered from the guest-supplied ``fee_params`` and that
-  metered amount is the child's ``declaredBudget``, reserved from the emitting
+  entirely. The primary fee is metered from the guest-supplied ``fee_params``.
+  A positive ``descendants`` integer emits an Open grant; a non-empty allocation
+  list emits a Pinned grant whose budget is the checked sum of root budgets.
+  The child's ``declaredBudget`` is the primary fee plus that descendant budget,
+  reserved once from the emitting
   contract's balance (jointly with ``value``; insufficient balance yields
   ``InsufficientBalance``). The ``message_fee`` bucket is **not** consumed (the message is
   excluded from the sender pool on-chain); only ``message_receipt`` is. The emitted
-  allocation subtree is empty, so nested child messages must each fund themselves.
+  allocation subtree contains the canonical grant envelope. Absent, null, zero
+  and empty-list descendants emit an empty subtree and the Closed policy.
 
-For either phase, an internal message therefore declares::
+For either phase, an internal message therefore declares ``P + D``, where
+``P`` is its minimum primary fee and ``D`` is its authored descendant budget::
 
-   minPrimaryFees(feeParams) + sum(directChildAllocation.budget)
+   minPrimaryFees(feeParams) + descendantBudget
 
-For balance funding the sum is zero. The primary fee already covers the child's
+For balance funding the sum is the authored descendant grant budget. The
+primary fee already covers the child's
 configured lifecycle, including appeals; the remainder becomes the child's
-message-fee bucket. An internal message whose declared amount is zero is rejected
-with ``fee below_minimum`` on both funding paths. External messages declare zero
+message-fee bucket. A zero declared budget is rejected with
+``fee below_minimum`` on both funding paths. External messages declare zero
+
+The v0.3 executor currently uses these local stand-ins for transaction-pinned
+host inputs that are not available yet:
+
+- The existing local primary-fee calculation supplies each child quote
+- The transaction-pinned minimum external gas limit and per-round allocation
+  budget floor are not available, so both grant-node admission checks are
+  skipped. The enclosing child's existing local floor check remains active
+- The descendant depth cap equals the 24-node cap
+
+The Python SDK takes ``use_balance: UseBalanceParams | None`` on calls,
+transfers and deploys. ``None`` selects sender funding; the dataclass holds
+required ``fee_params`` and optional ``descendants``. Its allocation objects
+retain ``children`` for authoring. The SDK walks that tree iteratively in
+pre-order and sends a flat array with backward ``parent_index`` references
+
+The Rust SDK decodes that array with ``LenLimitedVec<1024, AllocationNode>``
+before decoding its elements. The Python flattener has the same 1,024-element
+limit, including for cyclic input. Grant admission separately enforces the
+24-node limit, parent topology, duplicate sibling keys and budget inequalities
 
 The v0.3 primary reserve includes successful-appellant profit for each configured
 appeal slot. The bond is the next normal round's time-unit cost, including its

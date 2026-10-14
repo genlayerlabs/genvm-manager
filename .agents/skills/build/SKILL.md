@@ -10,8 +10,7 @@ read it first). Related: `building/runners.md`, `releasing/release-build.md`,
 Claude-specific:
 
 - Build binaries with
-  `bash .agents/skills/build/scripts/run-ninja.sh -C build all/bin` instead of
-  raw ninja — it is silent on success and prints output only on failure, which
-  saves tokens.
+  `bash -o pipefail -c 'ninja -C build all/bin 2>&1 | tee "$TMPDIR/ninja.log" | tail -n 40'`;
+  on failure grep the log for `error` instead of rebuilding to see it again
 - See also: `/submodules` (multi-repo commits, `?submodules=1`), `/test`,
   `/macos` (never build runners natively on macOS).
