@@ -1088,6 +1088,24 @@ components:
             maximum uint256, children_budget zero and an empty subtree. It is an ordinary
             exhausted candidate. Open-pool and allocation-absent executions MUST omit the
             guard; open-pool and view execution may use ordinary wildcards
+        message_fee_cascade:
+          type: object
+          nullable: true
+          default: null
+          additionalProperties: false
+          required: [min_primary_fee, budget_total]
+          properties:
+            min_primary_fee:
+              type: integer
+              format: uint256
+              description: Chain `minMessagePrimaryFeesForTx` of the open-pool internal fee params
+            budget_total:
+              type: integer
+              format: uint256
+              description: Chain `messageFeesBudgetTotal` of the transaction, not the remaining pool
+          description: |
+            Open-pool cascade, see the fees impl-spec. Send it only for an open-pool
+            execution; null leaves declared budgets as metered
         record_actions:
           type: array
           items:

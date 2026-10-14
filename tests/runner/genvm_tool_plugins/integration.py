@@ -782,6 +782,9 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					request_extra['permissions'] = case_permissions
 				if hook_calls:
 					request_extra['hook_cross_contract_calls'] = True
+				message_fee_cascade = single_conf.get('message_fee_cascade')
+				if message_fee_cascade is not None:
+					request_extra['message_fee_cascade'] = message_fee_cascade
 				bucket_totals = base_host.default_bucket_totals(self._test_case.executor_major)
 				bucket_totals.update(single_conf.get('bucket_totals', {}))
 
