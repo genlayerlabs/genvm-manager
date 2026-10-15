@@ -364,14 +364,8 @@ configured lifecycle, including appeals; the remainder becomes the child's
 message-fee bucket. A zero declared budget is rejected with
 ``fee below_minimum`` on both funding paths. External messages declare zero
 
-The v0.3 executor currently uses these local stand-ins for transaction-pinned
-host inputs that are not available yet:
-
-- The existing local primary-fee calculation supplies each child quote
-- The transaction-pinned minimum external gas limit and per-round allocation
-  budget floor are not available, so both grant-node admission checks are
-  skipped. The enclosing child's existing local floor check remains active
-- The descendant depth cap equals the 24-node cap
+The transaction-pinned primary quote is not in v0.3 host input yet, so the
+existing local primary-fee calculation supplies each child quote
 
 The Python SDK takes ``use_balance: UseBalanceParams | None`` on calls,
 transfers and deploys. ``None`` selects sender funding; the dataclass holds
