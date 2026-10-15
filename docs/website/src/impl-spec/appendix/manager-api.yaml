@@ -1024,7 +1024,12 @@ components:
           additionalProperties:
             type: string
           default: {}
-          description: Host-provided `node` fee constants
+          description: |
+            Host-provided `node` fee constants. `maxAllocationTreeDepth` is the
+            parent's pinned grant depth limit as a decimal uint256; v0.3 defaults
+            to 5 when absent (root depth is 1). `minExternalGasLimit` is the
+            parent's pinned external-node gas floor as a decimal uint256; 0 when
+            absent
         message_fee_allocation:
           type: array
           items:

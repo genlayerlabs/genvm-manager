@@ -418,6 +418,13 @@ addition smaller, never unbacked. ``E`` is ``external_fee_reserve`` times the
 number of external emissions: each reserves the full chain gas envelope at the
 locked receipt price. Floors still apply when the remaining budget is insufficient
 
+Pinned descendant grants enforce the parent's ``messageBudgetFloor``,
+``gas_data.maxAllocationTreeDepth`` (root depth 1) and
+``gas_data.minExternalGasLimit``. When the host omits the depth limit, the
+executor defaults to 5; an omitted gas floor is 0. Excess depth fails at emission
+with ``fee descendant_grant tree``; an external node whose ``gas_limit`` is below
+the floor fails with ``fee descendant_grant external``
+
 The parent allocation's aggregate capacity is a separate invariant. If
 ``L = appealRounds + 1`` novel executions may each emit a child carrying budget
 ``C``, preserving that descendant capacity for every execution requires::
