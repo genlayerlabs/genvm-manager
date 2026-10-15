@@ -1088,6 +1088,28 @@ components:
             maximum uint256, children_budget zero and an empty subtree. It is an ordinary
             exhausted candidate. Open-pool and allocation-absent executions MUST omit the
             guard; open-pool and view execution may use ordinary wildcards
+        message_fee_cascade:
+          type: object
+          nullable: true
+          default: null
+          additionalProperties: false
+          required: [min_primary_fee, budget_remaining, external_fee_reserve]
+          properties:
+            min_primary_fee:
+              type: integer
+              format: uint256
+              description: Chain `minMessagePrimaryFeesForTx` of the open-pool internal fee params
+            budget_remaining:
+              type: integer
+              format: uint256
+              description: Chain `getMessageFeesBudgetRemaining` at the pinned processing block
+            external_fee_reserve:
+              type: integer
+              format: uint256
+              description: Full external gas envelope times locked receipt gas price, per external emission
+          description: |
+            Open-pool cascade, see the fees impl-spec. Send it only for an open-pool
+            execution; null leaves declared budgets as metered
         record_actions:
           type: array
           items:

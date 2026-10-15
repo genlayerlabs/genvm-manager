@@ -1026,6 +1026,10 @@ pub struct Request {
     #[serde(default)]
     #[calldata(default = default_message_fee_allocation)]
     pub message_fee_allocation: Vec<genvm_modules_interfaces::fees::MessageAllocationNode>,
+    /// Open-bucket cascade inputs; absent means no cascade
+    #[serde(default)]
+    #[calldata(default = default_message_fee_cascade)]
+    pub message_fee_cascade: Option<genvm_modules_interfaces::fees::MessageFeeCascade>,
     /// Initial time-unit budget for this execution.
     pub initial_time_units_allocation: u32,
     /// Auditable supervisor action kinds to return in the execution result.
@@ -1060,6 +1064,10 @@ fn default_gas_data() -> std::collections::BTreeMap<String, String> {
 
 fn default_message_fee_allocation() -> Vec<genvm_modules_interfaces::fees::MessageAllocationNode> {
     Vec::new()
+}
+
+fn default_message_fee_cascade() -> Option<genvm_modules_interfaces::fees::MessageFeeCascade> {
+    None
 }
 
 fn default_record_actions() -> Vec<String> {
@@ -1998,6 +2006,7 @@ fn execution_data_from_request(
         bucket_totals: req.bucket_totals.clone(),
         gas_data: req.gas_data.clone(),
         message_fee_allocation: req.message_fee_allocation.clone(),
+        message_fee_cascade: req.message_fee_cascade,
         initial_time_units_allocation: req.initial_time_units_allocation,
         record_actions: req.record_actions.clone(),
         remaining_recursion: if req.debug_mode >= genvm_common::DebugMode::Unsafe {
@@ -2229,6 +2238,7 @@ impl Ctx {
             leader_public_data: None,
             gas_data: parent_req.gas_data.clone(),
             message_fee_allocation: Vec::new(),
+            message_fee_cascade: None,
             initial_time_units_allocation: 0,
             record_actions: Vec::new(),
             host_genvm_id: None,
@@ -2243,6 +2253,7 @@ impl Ctx {
         execution_data.leader_public_data = None;
         execution_data.record_actions.clear();
         execution_data.message_fee_allocation.clear();
+        execution_data.message_fee_cascade = None;
         execution_data.remaining_recursion =
             Some(cross_major_recursion(envelope.remaining_recursion));
         execution_data.nested = Some(genvm_modules_interfaces::NestedExecutionData {
