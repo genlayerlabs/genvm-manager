@@ -47,6 +47,10 @@ pub struct ExecutionData {
     pub gas_data: std::collections::BTreeMap<String, String>,
     /// Flat allocations with host-encoded subtree payloads.
     pub message_fee_allocation: Vec<fees::MessageAllocationNode>,
+    /// Present only for a top-level open-bucket execution
+    #[serde(default)]
+    #[calldata(default = default_none)]
+    pub message_fee_cascade: Option<fees::MessageFeeCascade>,
     /// Initial time-unit budget for this execution.
     pub initial_time_units_allocation: u32,
     /// Auditable supervisor action kinds to return in the execution result.

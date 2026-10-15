@@ -116,3 +116,23 @@ impl MessageAllocationNode {
         .then_some(*params)
     }
 }
+
+/// Open-bucket cascade: sender-pool internal messages are raised to
+/// `min_primary_fee`, then share half of what `budget_total` has left beyond them
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    genlayer_calldata::Encode,
+    genlayer_calldata::Decode,
+)]
+pub struct MessageFeeCascade {
+    /// Chain `minMessagePrimaryFeesForTx` of the open-bucket internal fee params
+    pub min_primary_fee: U256,
+    /// Chain `messageFeesBudgetTotal`, not the remaining bucket
+    pub budget_total: U256,
+}
