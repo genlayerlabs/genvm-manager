@@ -31,6 +31,17 @@ Security and Compliance
 -  URL pattern matching and validation
 -  Execution time limits and timeouts
 
+Lua HTTP Redirects
+~~~~~~~~~~~~~~~~~~
+
+Ordinary Lua web requests enforce the port and TLD checks on each redirect,
+including configured extra TLDs. DNS filtering still applies to each connection;
+redirects to private IP literals and HTTPS-to-HTTP downgrades are rejected
+
+Requests starting at an ``always_allow_hosts`` entry intentionally use the
+unfiltered client for the whole redirect chain. The WebDriver sidecar connection
+also uses the unfiltered client
+
 Webdriver Egress
 ~~~~~~~~~~~~~~~~
 

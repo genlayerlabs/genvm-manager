@@ -97,12 +97,15 @@ pub fn create_global(
 
     dflt.set(
         "sleep_seconds",
-        vm.create_async_function(|vm: mlua::Lua, data: mlua::Value| async move {
-            let as_seconds: f32 = vm.from_value(data)?;
-            tokio::time::sleep(tokio::time::Duration::from_secs_f32(as_seconds)).await;
+        scripting::cancellation::create_async_function(
+            vm,
+            |vm: mlua::Lua, data: mlua::Value| async move {
+                let as_seconds: f32 = vm.from_value(data)?;
+                tokio::time::sleep(tokio::time::Duration::from_secs_f32(as_seconds)).await;
 
-            Ok(())
-        })?,
+                Ok(())
+            },
+        )?,
     )?;
 
     dflt.set(
@@ -238,7 +241,8 @@ pub fn create_global(
 
     dflt.set(
         "request",
-        vm.create_async_function(
+        scripting::cancellation::create_async_function(
+            vm,
             |vm: mlua::Lua, args: (mlua::Table, mlua::Value)| async move {
                 let (zelf, req) = args;
 
