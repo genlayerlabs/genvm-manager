@@ -25,6 +25,17 @@ npm test -- src/render.test.ts   # omit the file to run all of them
 npm run typecheck
 ```
 
+The egress proxy tests use local TCP fixtures and controlled DNS answers
+To also run real Chromium coverage for DNS rebinding, private destinations,
+HTTP, HTTPS, redirects and WebSockets, provide a Chromium executable and
+`openssl` on `PATH`:
+
+```bash
+GVM_WEBDRIVER_CHROME_EXECUTABLE=/usr/bin/chromium npm test -- src/egress-browser.test.ts
+```
+
+Without that variable, the Chromium test is reported as skipped
+
 ## Extra Tags
 
 Same marker as Rust ([rust.md](rust.md)), parsed by the shared
