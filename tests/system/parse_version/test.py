@@ -14,6 +14,7 @@ from pathlib import Path
 
 import genvm_tool.tests
 from genvm_tool.tests.test import Result
+from gvm_extra import wat2wasm
 
 
 def _default_env() -> dict[str, str]:
@@ -55,13 +56,7 @@ def _add_case(
 	# Compile WAT to WASM
 	steps.append(
 		genvm_tool.tests.exec.step.Run(
-			args=[
-				'wat2wasm',
-				'--enable-annotations',
-				'-o',
-				str(wasm_file),
-				str(wat_file),
-			],
+			args=wat2wasm.command(str(wasm_file), str(wat_file)),
 			mode=genvm_tool.tests.exec.command.RunMode.SILENT,
 		)
 	)

@@ -29,6 +29,7 @@ import genvm_tool.io as gvm_io
 import genvm_tool.tests
 import genvm_tool_plugins.runners as runners
 import gvm_extra.case_inputs as case_inputs
+import gvm_extra.wat2wasm as wat2wasm
 import origin.base_host as base_host
 import origin.calldata as gvm_calldata
 import origin.fees as fees
@@ -614,14 +615,7 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 			if code_path.endswith('.wat'):
 				out_path = my_tmp_dir.joinpath(Path(code_path).with_suffix('.wasm').name)
 				cmd = Command(
-					args=[
-						'wat2wasm',
-						'--enable-tail-call',
-						'--enable-annotations',
-						'-o',
-						str(out_path),
-						code_path,
-					],
+					args=wat2wasm.command(str(out_path), code_path),
 					cwd=my_tmp_dir,
 					env=default_env,
 				)

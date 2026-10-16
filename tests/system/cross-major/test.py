@@ -11,7 +11,7 @@ import genvm_tool.io as gvm_io
 import genvm_tool.tests
 import genvm_tool.tests.stage.collection
 import origin.calldata as gvm_calldata
-from gvm_extra import cross_major
+from gvm_extra import cross_major, wat2wasm
 from gvm_extra.cross_major import (
 	TIMESTAMP,
 	assert_hashes_agree,
@@ -190,11 +190,7 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 		wasm_path = path / 'contract.wasm'
 		await gvm_io.write_file_text(wat_path, wat)
 		process = await asyncio.create_subprocess_exec(
-			'wat2wasm',
-			'--enable-annotations',
-			'-o',
-			str(wasm_path),
-			str(wat_path),
+			*wat2wasm.command(str(wasm_path), str(wat_path)),
 			stdout=asyncio.subprocess.PIPE,
 			stderr=asyncio.subprocess.PIPE,
 		)
