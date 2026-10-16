@@ -2,6 +2,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 
 import ci_lib
 from pipelines.tests import GithubStep, SubStep, step_nix_develop, step_run
@@ -238,6 +239,43 @@ def test_cells() -> list[dict]:
 	return [_cell_amd64_linux(), _cell_arm64_linux(), _cell_arm64_macos()]
 
 
+def check_release_version(version: str) -> bool:
+	ident = r'[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*'
+	semver = re.fullmatch(rf'v[0-9]+\.[0-9]+\.[0-9]+(-{ident})?(\+{ident})?', version)
+	if (
+		not semver
+		or subprocess.run(['git', 'check-ref-format', f'refs/tags/{version}']).returncode
+		!= 0
+	):
+		ci_lib.github_error(f'invalid version {version!r}')
+		return False
+	return True
+
+
+class ApplyReleaseVersion(ci_lib.Pipeline):
+	def name(self) -> str:
+		return 'apply-release-version'
+
+	def add_to(self, parser: argparse.ArgumentParser) -> None:
+		parser.add_argument(
+			'--version-override',
+			default='',
+			help='release version to write to .genvm-monorepo-root; empty leaves it unchanged',
+		)
+
+	def handler(self, args: argparse.Namespace) -> int:
+		if not args.version_override:
+			return 0
+		if not check_release_version(args.version_override):
+			return 1
+		path = ci_lib.ROOT_DIR / '.genvm-monorepo-root'
+		monorepo = json.loads(path.read_text())
+		if monorepo['version'] != args.version_override:
+			monorepo['version'] = args.version_override
+			path.write_text(json.dumps(monorepo, indent=4) + '\n')
+		return 0
+
+
 class PlanReleaseMatrix(ci_lib.Pipeline):
 	"""
 	Emit the release build/test matrices and the tag they are built at.
@@ -253,7 +291,7 @@ class PlanReleaseMatrix(ci_lib.Pipeline):
 		parser.add_argument(
 			'--version-override',
 			default='',
-			help='release tag; defaults to `version` from .genvm-monorepo-root',
+			help='release tag and embedded version; defaults to `version` from .genvm-monorepo-root',
 		)
 
 	def handler(self, args: argparse.Namespace) -> int:
@@ -263,8 +301,7 @@ class PlanReleaseMatrix(ci_lib.Pipeline):
 		# Shape only. Whether the tag is already taken depends on the remote and
 		# is the publisher's business — a PR-label run plans the same tag every
 		# time and must not care.
-		if not re.match(r'^v[0-9]+\.[0-9]+\.[0-9]+', tag):
-			ci_lib.github_error(f'invalid version {tag!r}')
+		if not check_release_version(tag):
 			return 1
 
 		builds = build_cells()
@@ -301,4 +338,4 @@ class PlanReleaseMatrix(ci_lib.Pipeline):
 		return 0
 
 
-COMMANDS = [PlanReleaseMatrix()]
+COMMANDS = [PlanReleaseMatrix(), ApplyReleaseVersion()]

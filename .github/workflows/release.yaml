@@ -24,7 +24,7 @@ on:
       version_override:
         type: string
         required: false
-        description: "Override release tag (e.g., v1.2.3). Defaults to `version` from .genvm-monorepo-root"
+        description: "Override release tag and embedded version (e.g., v1.2.3). Defaults to `version` from .genvm-monorepo-root"
 
 defaults:
   run:
