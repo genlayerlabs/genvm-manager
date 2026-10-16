@@ -8,7 +8,8 @@
  * The contract this file upholds: everything it *returns* is an observation
  * about the page, reported as a status the caller puts in `Resulting-Status`
  * alongside a `200`, which the module surfaces to the contract as a catchable
- * `WEBPAGE_LOAD_FAILED`. Everything it *throws* is this sidecar failing. The
+ * `WEBPAGE_LOAD_FAILED`. Except for cancellation when the caller disconnects,
+ * everything it *throws* is this sidecar failing. The
  * caller turns a throw into a `500`, which the module classifies as fatal, so
  * the validator abstains rather than voting on a page it never observed. "This
  * sidecar failing" includes the host it runs on: a machine with no network is
@@ -21,9 +22,11 @@
  */
 
 import type * as pup from 'puppeteer-core';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import * as logger from './logging.js';
 import * as ssrf from './ssrf.js';
+import { abortable } from './cancellation.js';
 import {
 	envDurationMs,
 	envInt,
@@ -244,23 +247,24 @@ async function withHeapMonitor<T>(
 	page: pup.Page,
 	maxHeapMB: number,
 	fn: () => Promise<T>,
+	signal?: AbortSignal,
 ): Promise<T> {
-	let stopped = false;
-	let stopResolve: () => void;
-	const stopPromise = new Promise<void>((r) => {
-		stopResolve = r;
+	const stop = new AbortController();
+	const stopped = new Promise<void>((resolve) => {
+		stop.signal.addEventListener('abort', () => resolve(), { once: true });
 	});
 	const monitor = (async () => {
-		while (!stopped) {
-			await new Promise((r) => setTimeout(r, HEAP_CHECK_INTERVAL_MS));
-			if (stopped) break;
+		while (!stop.signal.aborted) {
+			await delay(HEAP_CHECK_INTERVAL_MS, undefined, { signal: stop.signal });
 			let totalMB: number;
 			try {
-				totalMB = await page.evaluate(
-					() => (performance as any).memory?.totalJSHeapSize / 1024 / 1024,
+				totalMB = await abortable(stop.signal, () =>
+					page.evaluate(
+						() => (performance as any).memory?.totalJSHeapSize / 1024 / 1024,
+					),
 				);
 			} catch {
-				await stopPromise;
+				await stopped;
 				return;
 			}
 			logger.log('debug', 'heap monitor check', {
@@ -273,16 +277,18 @@ async function withHeapMonitor<T>(
 	})();
 
 	try {
-		const result = await Promise.race([
-			fn(),
-			monitor.then(() => undefined as never),
-		]);
+		const result = await abortable(signal, () =>
+			Promise.race([fn(), monitor.then(() => undefined as never)]),
+		);
 		let totalMB: number;
 		try {
-			totalMB = await page.evaluate(
-				() => (performance as any).memory?.totalJSHeapSize / 1024 / 1024,
+			totalMB = await abortable(signal, () =>
+				page.evaluate(
+					() => (performance as any).memory?.totalJSHeapSize / 1024 / 1024,
+				),
 			);
 		} catch {
+			signal?.throwIfAborted();
 			return result;
 		}
 		if (totalMB > maxHeapMB) {
@@ -290,8 +296,7 @@ async function withHeapMonitor<T>(
 		}
 		return result;
 	} finally {
-		stopped = true;
-		stopResolve!();
+		stop.abort();
 		await monitor.catch(() => {});
 	}
 }
@@ -310,15 +315,26 @@ export function statusIsGood(status: number): boolean {
  */
 async function newRenderTarget(
 	browserInstance: pup.Browser,
+	signal?: AbortSignal,
 ): Promise<{ context: pup.BrowserContext; page: pup.Page }> {
 	// Each render runs in its own browser context so cookies, localStorage,
 	// IndexedDB, service workers and HSTS state never leak between tenants
 	// sharing this long-lived browser.
-	const context = await browserInstance.createBrowserContext();
+	signal?.throwIfAborted();
+	const pendingContext = browserInstance.createBrowserContext();
+	let context: pup.BrowserContext;
 	try {
-		return { context, page: await context.newPage() };
+		context = await abortable(signal, () => pendingContext);
+	} catch (error) {
+		// CDP creation cannot be cancelled; dispose a context that arrives late.
+		void pendingContext.then((late) => late.close()).catch(() => {});
+		throw error;
+	}
+	try {
+		return { context, page: await abortable(signal, () => context.newPage()) };
 	} catch (error) {
 		await context.close().catch(() => {});
+		signal?.throwIfAborted();
 		// Logged here as well as re-raised: this is the last point that still
 		// knows the failure was ours rather than the page's, and the `500` the
 		// caller sends carries only a message.
@@ -335,6 +351,7 @@ export async function renderPageWithBrowser(
 	targetUrl: string,
 	mode: 'text' | 'html' | 'screenshot',
 	options: RenderOptions = {},
+	signal?: AbortSignal,
 ): Promise<{ status: number; body: any }> {
 	const {
 		loadTimeout = 30000,
@@ -351,10 +368,10 @@ export async function renderPageWithBrowser(
 	// the validator abstains instead of reporting a page outcome it never
 	// observed. It must NOT be folded into a `Resulting-Status`, which is the
 	// channel reserved for what actually happened to the page.
-	const { context, page } = await newRenderTarget(browserInstance);
+	const { context, page } = await newRenderTarget(browserInstance, signal);
 
 	try {
-		await ssrf.installSsrfGuard(page);
+		await abortable(signal, () => ssrf.installSsrfGuard(page));
 		// A render needs exactly one page, and a popup cannot be guarded after
 		// the fact: nothing holds its first navigation while an async handler
 		// installs an interceptor, so it could already have reached an internal
@@ -371,53 +388,61 @@ export async function renderPageWithBrowser(
 				}
 			})();
 		});
-		page.setViewport({ width: 1920 / 2, height: 1080 / 2 });
+		await abortable(signal, () =>
+			page.setViewport({ width: 1920 / 2, height: 1080 / 2 }),
+		);
 
-		return await withHeapMonitor(page, maxPageHeapMB, async () => {
-			const navigationResult = await navigateToPage(page, targetUrl, {
-				waitUntil,
-				timeout: loadTimeout,
-			});
+		return await withHeapMonitor(
+			page,
+			maxPageHeapMB,
+			async () => {
+				const navigationResult = await navigateToPage(page, targetUrl, {
+					waitUntil,
+					timeout: loadTimeout,
+				});
+				signal?.throwIfAborted();
 
-			if (navigationResult.error) {
-				return {
-					status: navigationResult.status,
-					body: navigationResult.error,
-				};
-			}
-
-			const statusCode = navigationResult.status;
-
-			if (statusIsGood(statusCode) && waitAfterLoaded > 0) {
-				let waitMs = Math.floor(waitAfterLoaded * 1000);
-				if (waitMs > MAX_WAIT_AFTER_LOADED_MS) {
-					logger.log('warn', 'waitAfterLoaded clamped to maximum', {
-						url: targetUrl,
-						requested: formatDurationMs(waitMs),
-						max: formatDurationMs(MAX_WAIT_AFTER_LOADED_MS),
-					});
-					waitMs = MAX_WAIT_AFTER_LOADED_MS;
+				if (navigationResult.error) {
+					return {
+						status: navigationResult.status,
+						body: navigationResult.error,
+					};
 				}
-				await new Promise((resolve) => setTimeout(resolve, waitMs));
-			}
 
-			let data;
-			switch (mode) {
-				case 'text':
-					data = await asText(page, maxResponseChars);
-					break;
-				case 'html':
-					data = await asHTML(page, maxResponseChars);
-					break;
-				case 'screenshot':
-					data = await asScreenshot(page, maxResponseChars);
-					break;
-				default:
-					data = 'Invalid mode';
-			}
+				const statusCode = navigationResult.status;
 
-			return { status: statusCode, body: data };
-		});
+				if (statusIsGood(statusCode) && waitAfterLoaded > 0) {
+					let waitMs = Math.floor(waitAfterLoaded * 1000);
+					if (waitMs > MAX_WAIT_AFTER_LOADED_MS) {
+						logger.log('warn', 'waitAfterLoaded clamped to maximum', {
+							url: targetUrl,
+							requested: formatDurationMs(waitMs),
+							max: formatDurationMs(MAX_WAIT_AFTER_LOADED_MS),
+						});
+						waitMs = MAX_WAIT_AFTER_LOADED_MS;
+					}
+					await delay(waitMs, undefined, { signal });
+				}
+
+				let data;
+				switch (mode) {
+					case 'text':
+						data = await asText(page, maxResponseChars);
+						break;
+					case 'html':
+						data = await asHTML(page, maxResponseChars);
+						break;
+					case 'screenshot':
+						data = await asScreenshot(page, maxResponseChars);
+						break;
+					default:
+						data = 'Invalid mode';
+				}
+
+				return { status: statusCode, body: data };
+			},
+			signal,
+		);
 	} catch (e) {
 		// Both limits are a property of the page rather than of this sidecar --
 		// the same document would exceed them anywhere -- so they belong on the

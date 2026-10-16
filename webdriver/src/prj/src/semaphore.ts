@@ -64,15 +64,15 @@ export class Semaphore {
 	 * @throws {SemaphoreAborted} if `signal` fired while waiting.
 	 */
 	acquire(timeoutMs: number, signal?: AbortSignal): Promise<void> {
+		if (signal?.aborted) {
+			return Promise.reject(new SemaphoreAborted());
+		}
 		if (this.available > 0) {
 			this.available -= 1;
 			return Promise.resolve();
 		}
 		if (this.waiters.length >= this.maxQueued) {
 			return Promise.reject(new SemaphoreQueueFull(this.maxQueued));
-		}
-		if (signal?.aborted) {
-			return Promise.reject(new SemaphoreAborted());
 		}
 
 		return new Promise<void>((resolve, reject) => {
