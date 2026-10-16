@@ -1,6 +1,7 @@
 pub mod pool;
 pub mod rat;
 
+pub(crate) mod cancellation;
 mod ctx;
 
 use anyhow::Context as _;
@@ -65,14 +66,12 @@ pub fn anyhow_to_lua_error(e: anyhow::Error) -> mlua::Error {
     }
 }
 
-/// `filter_dns`: when true, `client` resolves through the SSRF-filtering
-/// resolver (web module). `client_unfiltered` is always a plain client, used by
-/// requests that opt out (allowlisted hosts).
+/// `web_extra_tld`: enables the web DNS/redirect policy with these extra TLDs.
 pub fn create_ctx_part(
     hello: &Arc<genvm_modules_interfaces::GenVMHello>,
     base_config: &sync::DArc<common::ModuleBaseConfig>,
     metrics: sync::DArc<Metrics>,
-    filter_dns: bool,
+    web_extra_tld: Option<&[Box<str>]>,
 ) -> anyhow::Result<ctx::CtxPart> {
     let mut sign_vars = BTreeMap::new();
 
@@ -88,8 +87,8 @@ pub fn create_ctx_part(
     }
 
     let client_unfiltered = common::create_client_unfiltered()?;
-    let client = if filter_dns {
-        common::create_client_filtered()?
+    let client = if let Some(extra_tld) = web_extra_tld {
+        common::create_client_filtered_with_tlds(extra_tld)?
     } else {
         client_unfiltered.clone()
     };
@@ -133,7 +132,7 @@ pub fn create_default_ctx(
     vm: &mlua::Lua,
     table: &mlua::Table,
 ) -> anyhow::Result<sync::DArc<ctx::CtxPart>> {
-    let ctx_part = sync::DArc::new(create_ctx_part(hello, &base_config, metrics, false)?);
+    let ctx_part = sync::DArc::new(create_ctx_part(hello, &base_config, metrics, None)?);
     setup_lua_default_ctx(ctx_part.clone(), vm, table)?;
     Ok(ctx_part)
 }
@@ -202,6 +201,7 @@ impl<T, R, E> UserVM<T, R, E> {
     where
         RR: mlua::FromLuaMulti,
     {
+        let _operations = cancellation::Guard::enter(&self.vm)?;
         let res = f.call_async(args).await;
 
         match res {
@@ -223,6 +223,7 @@ pub async fn load_script<P>(vm: &mlua::Lua, path: P) -> anyhow::Result<()>
 where
     P: AsRef<std::path::Path> + Into<String> + std::fmt::Debug,
 {
+    let _operations = cancellation::Guard::enter(vm)?;
     let script_contents = std::fs::read_to_string(&path)
         .with_context(|| format!("reading script from {:?}", path))?;
     let chunk = vm.load(script_contents);
@@ -257,9 +258,16 @@ pub struct ResponseJSON {
 
 /// Map a failed `send()` to a module error. A request rejected because the
 /// filtering resolver dropped every resolved address (SSRF guard) becomes a
-/// **non-fatal** `ADDRESS_FORBIDDEN`, so the contract can recover; anything else
-/// is a fatal `SENDING_REQUEST`.
+/// **non-fatal** `ADDRESS_FORBIDDEN`; redirect policy errors retain their cause.
+/// Other failures become fatal `SENDING_REQUEST` errors.
 fn map_send_error(url: &str, err: reqwest::Error) -> anyhow::Error {
+    let mut source: Option<&(dyn std::error::Error + 'static)> = Some(&err);
+    while let Some(error) = source {
+        if let Some(module_err) = error.downcast_ref::<ModuleError>() {
+            return module_err.clone().into();
+        }
+        source = error.source();
+    }
     let (causes, fatal) = if common::is_no_routable_address(&err) {
         (vec![common::ErrorKind::ADDRESS_FORBIDDEN.into()], false)
     } else {
