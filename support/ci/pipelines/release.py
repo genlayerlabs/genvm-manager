@@ -160,7 +160,7 @@ def _cell_amd64_linux() -> dict:
 			{'type': 'group-start', 'name': 'smoke test modules startup'},
 			_smoke_step('timeout'),
 			{'type': 'group-end'},
-			*stable_test_steps('.?submodules=1#mock-tests'),
+			*stable_test_steps('.?submodules=1#release-tests'),
 		],
 		runs_on='ubuntu-latest',
 	)

@@ -74,6 +74,13 @@
             withZig = false;
             withWasi = true;
           };
+          # Enough to build the integration tests' wasm contracts, nothing else.
+          release-test-rust = import ./support/rust.nix {
+            inherit pkgs deps system;
+            withZig = false;
+            withWasi = true;
+            withCross = false;
+          };
           custom-rust-builder = import ./support/compile-rust.nix {
             inherit pkgs system deps;
             zig = import ./support/zig.nix { inherit pkgs deps system; };
@@ -750,6 +757,16 @@
             # drives a `language: system` hook, so it needs no hook tooling.
             packages =
               packages-0 ++ packages-rust ++ packages-debug-test ++ [ pre-commit-check.config.package ];
+            shellHook = shell-hook-base;
+          };
+          # Integration tests against prebuilt release tarballs: no build or fuzz tooling.
+          devShells.release-tests = pkgs.mkShell {
+            packages = packages-0 ++ [
+              release-test-rust
+              pkgs.python312Packages.jsonnet
+              pkgs.python312Packages.aiohttp
+              pkgs.wabt
+            ];
             shellHook = shell-hook-base;
           };
           devShells.full = pkgs.mkShell {
