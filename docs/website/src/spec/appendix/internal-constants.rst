@@ -99,6 +99,13 @@ nondet_blocks
 
 Value: ``4096``
 
+.. _gvm-def-consts-value-top-limits-default-allocation-tree-depth:
+
+default_allocation_tree_depth
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``5``
+
 .. _gvm-def-consts-value-top-limits-locked-slots:
 
 locked_slots

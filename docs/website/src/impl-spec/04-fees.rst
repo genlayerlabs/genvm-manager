@@ -364,14 +364,8 @@ configured lifecycle, including appeals; the remainder becomes the child's
 message-fee bucket. A zero declared budget is rejected with
 ``fee below_minimum`` on both funding paths. External messages declare zero
 
-The v0.3 executor currently uses these local stand-ins for transaction-pinned
-host inputs that are not available yet:
-
-- The existing local primary-fee calculation supplies each child quote
-- The transaction-pinned minimum external gas limit and per-round allocation
-  budget floor are not available, so both grant-node admission checks are
-  skipped. The enclosing child's existing local floor check remains active
-- The descendant depth cap equals the 24-node cap
+The transaction-pinned primary quote is not in v0.3 host input yet, so the
+existing local primary-fee calculation supplies each child quote
 
 The Python SDK takes ``use_balance: UseBalanceParams | None`` on calls,
 transfers and deploys. ``None`` selects sender funding; the dataclass holds
@@ -402,6 +396,28 @@ includes the matched root; it is not merely an encoding of its descendants
 not the unspent allocation allowance or consumption from earlier generations.
 All v0.3 internal emissions reject zero time-unit, storage or receipt price caps
 with ``Inval`` before charging fees or appending an emission
+
+When the manager input carries ``message_fee_cascade``, a top-level execution
+rewrites its final emissions before the execution hash. Each sender-pool
+internal message (not ``use_balance``) gets ``fee = max(fee, min_primary_fee)``.
+With ``N`` such messages and ``spare = budget_remaining - Σ fee - E`` positive, each then
+gets ``floor(spare / (2 * N))`` more. Balance-funded and external messages are
+untouched, and buckets are not charged for the addition: the chain carves the
+child's own pool from its declared budget. A single floor is enough because the
+host gives every open-pool internal wildcard the same fee params
+
+``budget_remaining`` is read at the pinned processing block. It can still include
+a prior generation's charge the chain rolls back only later, which makes the
+addition smaller, never unbacked. ``E`` is ``external_fee_reserve`` times the
+number of external emissions: each reserves the full chain gas envelope at the
+locked receipt price. Floors still apply when the remaining budget is insufficient
+
+Pinned descendant grants enforce the parent's ``messageBudgetFloor``,
+``gas_data.maxAllocationTreeDepth`` (root depth 1) and
+``gas_data.minExternalGasLimit``. When the host omits the depth limit, the
+executor defaults to 5; an omitted gas floor is 0. Excess depth fails at emission
+with ``fee descendant_grant tree``; an external node whose ``gas_limit`` is below
+the floor fails with ``fee descendant_grant external``
 
 The parent allocation's aggregate capacity is a separate invariant. If
 ``L = appealRounds + 1`` novel executions may each emit a child carrying budget
