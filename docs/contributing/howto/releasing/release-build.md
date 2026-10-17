@@ -39,6 +39,12 @@ one install root, so a full install is one platform asset plus
 `genvm-universal`. The platform asset already carries every active executor
 line ([versioning.md](versioning.md))
 
+`version_override` sets both the release tag and the embedded manager version.
+The plan passes the resolved version to every build and test cell, which applies
+it to `.genvm-monorepo-root` before source setup. Nix reads that file for
+`GENVM_PROFILE`, so an override changes the build inputs and cache keys.
+Executor versions remain pinned by their own manifests
+
 ## Verifying an Asset
 
 The publisher uploads `SHA256SUMS` next to the tarballs and records a keyless

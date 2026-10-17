@@ -13,7 +13,7 @@ on:
   workflow_call:
     inputs:
       version_override:
-        description: "Release tag. Defaults to `version` from .genvm-monorepo-root"
+        description: "Release tag and embedded version. Defaults to `version` from .genvm-monorepo-root"
         required: false
         type: string
         default: ""
@@ -117,6 +117,7 @@ jobs:
       runs_on: ${{ matrix.runs_on }}
       artifact_name: ${{ matrix.artifact_name }}
       job_json: ${{ matrix.job_json }}
+      version_override: ${{ needs.plan.outputs.tag }}
     secrets: inherit
 
   test:
@@ -134,4 +135,5 @@ jobs:
       with_nix: ${{ matrix.with_nix }}
       setup_python: ${{ matrix.setup_python }}
       job_json: ${{ matrix.job_json }}
+      version_override: ${{ needs.plan.outputs.tag }}
     secrets: inherit

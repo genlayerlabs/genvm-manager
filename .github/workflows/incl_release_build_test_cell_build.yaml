@@ -11,6 +11,10 @@ name: Build one release artifact cell
 on:
   workflow_call:
     inputs:
+      version_override:
+        description: release version from the plan
+        required: true
+        type: string
       name:
         required: true
         type: string
@@ -40,6 +44,11 @@ jobs:
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Apply release version
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version_override }}
+        run: ./support/ci/run.sh pipeline apply-release-version --version-override "$VERSION_OVERRIDE"
 
       # Guards the "Job:" step below: every key must have a step, every step a key.
       - name: Check job keys
