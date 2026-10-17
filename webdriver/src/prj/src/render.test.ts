@@ -2,7 +2,7 @@
  * Failures of this sidecar must leave `renderPageWithBrowser` by being thrown,
  * and must not be dressed up as a page status.
  *
- * `handleRenderRequest` turns anything thrown out of here into a bare `500`,
+ * Except for disconnected callers, `handleRenderRequest` turns throws into a bare `500`,
  * and the module classifies a `500` from its own webdriver as a fatal
  * `WEBDRIVER_UNAVAILABLE`. That is the intended outcome: a validator whose own
  * sidecar is broken has no observation of the page, so it must abstain (the
@@ -35,6 +35,11 @@ import type * as pup from 'puppeteer-core';
 import { ProtocolError, TimeoutError } from 'puppeteer-core';
 
 import { renderPageWithBrowser, statusIsGood } from './render.js';
+import { Semaphore } from './semaphore.js';
+import { setImmediate as nextTurn } from 'node:timers/promises';
+import http from 'node:http';
+import { once } from 'node:events';
+import { disconnectSignal } from './cancellation.js';
 
 interface FakeContext {
 	closes: number;
@@ -78,6 +83,262 @@ function browserFailingOn(
 async function render(browser: pup.Browser) {
 	return renderPageWithBrowser(browser, 'https://example.com/', 'text');
 }
+
+for (const stage of [
+	'newPage',
+	'guard',
+	'viewport',
+	'navigation',
+	'wait',
+	'extraction',
+	'heap',
+	'finalHeap',
+	'screenshot',
+] as const) {
+	test(
+		`disconnect during ${stage} closes the target and releases its permit`,
+		{ timeout: 2000 },
+		async () => {
+			const controller = new AbortController();
+			const slots = new Semaphore({ permits: 1, maxQueued: 1 });
+			let entered!: () => void;
+			const ready = new Promise<void>((resolve) => {
+				entered = resolve;
+			});
+			const pending = () => {
+				entered();
+				return new Promise<never>(() => {});
+			};
+			const closes = { page: 0, context: 0 };
+			let extractions = 0;
+			const page = {
+				setRequestInterception: async () => {
+					if (stage === 'guard') await pending();
+				},
+				setViewport: async () => {
+					if (stage === 'viewport') await pending();
+				},
+				goto: async () => {
+					if (stage === 'navigation') await pending();
+					if (stage === 'wait') entered();
+					return { status: () => 200 };
+				},
+				evaluate: async (_fn: unknown, ...args: unknown[]) => {
+					if (args.length === 0) {
+						if (stage === 'heap' || stage === 'finalHeap') await pending();
+						return 0;
+					}
+					extractions++;
+					if (stage === 'extraction') await pending();
+					return { tooLarge: false, content: 'ok' };
+				},
+				close: async () => {
+					closes.page++;
+				},
+				screenshot: pending,
+				on: () => {},
+			};
+			const context = {
+				newPage: async () => {
+					if (stage === 'newPage') await pending();
+					return page;
+				},
+				close: async () => {
+					closes.context++;
+				},
+				on: () => {},
+			};
+			const browser = {
+				createBrowserContext: async () => context,
+			} as unknown as pup.Browser;
+			const result = slots.withPermit(
+				1000,
+				() =>
+					renderPageWithBrowser(
+						browser,
+						'https://example.com/',
+						stage === 'screenshot' ? 'screenshot' : 'text',
+						{ waitAfterLoaded: stage === 'wait' || stage === 'heap' ? 60 : 0 },
+						controller.signal,
+					),
+				controller.signal,
+			);
+			const rejected = assert.rejects(result, { name: 'AbortError' });
+			await ready;
+			// Let the navigation continuation enter its post-load delay.
+			await nextTurn();
+			const next = slots.acquire(1000);
+			assert.equal(slots.queued, 1);
+			controller.abort();
+			await rejected;
+			await next;
+			assert.deepEqual(closes, {
+				page: stage === 'newPage' ? 0 : 1,
+				context: 1,
+			});
+			assert.equal(
+				extractions,
+				stage === 'extraction' || stage === 'finalHeap' ? 1 : 0,
+			);
+			assert.equal(slots.queued, 0);
+			slots.release();
+			assert.equal(slots.inFlight, 0);
+		},
+	);
+}
+
+test(
+	'disconnect during context creation disposes a late context',
+	{ timeout: 2000 },
+	async () => {
+		const controller = new AbortController();
+		let created!: (context: pup.BrowserContext) => void;
+		const pending = new Promise<pup.BrowserContext>((resolve) => {
+			created = resolve;
+		});
+		const browser = {
+			createBrowserContext: () => pending,
+		} as unknown as pup.Browser;
+		const result = renderPageWithBrowser(
+			browser,
+			'https://example.com/',
+			'text',
+			{},
+			controller.signal,
+		);
+		const rejected = assert.rejects(result, { name: 'AbortError' });
+		controller.abort();
+		await rejected;
+		let closes = 0;
+		created({
+			close: async () => {
+				closes++;
+			},
+			newPage: () => assert.fail('cancelled render opened a page'),
+		} as unknown as pup.BrowserContext);
+		await nextTurn();
+		assert.equal(closes, 1);
+	},
+);
+
+test(
+	'HTTP disconnect frees an active render slot for the queued request',
+	{ timeout: 3000 },
+	async (t) => {
+		const slots = new Semaphore({ permits: 1, maxQueued: 1 });
+		let entered!: () => void;
+		const navigating = new Promise<void>((resolve) => {
+			entered = resolve;
+		});
+		let queued!: () => void;
+		const waiting = new Promise<void>((resolve) => {
+			queued = resolve;
+		});
+		let contexts = 0;
+		let closes = 0;
+		const browser = {
+			createBrowserContext: async () => {
+				const first = ++contexts === 1;
+				if (!first)
+					assert.equal(
+						closes,
+						1,
+						'dispose the first context before reusing its permit',
+					);
+				return {
+					newPage: async () => ({
+						setRequestInterception: async () => {},
+						setViewport: async () => {},
+						on: () => {},
+						goto: async () => {
+							if (first) {
+								entered();
+								await new Promise(() => {});
+							}
+							return { status: () => 200 };
+						},
+						evaluate: async (_fn: unknown, ...args: unknown[]) =>
+							args.length ? { tooLarge: false, content: 'ok' } : 0,
+						close: async () => {},
+					}),
+					close: async () => {
+						closes++;
+					},
+					on: () => {},
+				};
+			},
+		} as unknown as pup.Browser;
+		const errors: unknown[] = [];
+		const server = http.createServer(async (req, res) => {
+			const signal = disconnectSignal(res);
+			req.resume();
+			try {
+				const rendering = slots.withPermit(
+					2000,
+					() =>
+						renderPageWithBrowser(
+							browser,
+							'https://example.com/',
+							'text',
+							{},
+							signal,
+						),
+					signal,
+				);
+				if (slots.queued) queued();
+				const result = await rendering;
+				res.end(result.body);
+			} catch (error) {
+				if (!signal.aborted) errors.push(error);
+				res.destroy();
+			}
+		});
+		server.listen(0, '127.0.0.1');
+		await once(server, 'listening');
+		t.after(() => {
+			server.closeAllConnections();
+			server.close();
+		});
+		const address = server.address();
+		assert.ok(address && typeof address !== 'string');
+		const url = `http://127.0.0.1:${address.port}`;
+		const first = http.get(url, { agent: false });
+		first.on('error', () => {});
+		t.after(() => first.destroy());
+		await navigating;
+		const second = http.get(url, { agent: false });
+		t.after(() => second.destroy());
+		const response = once(second, 'response');
+		await waiting;
+		assert.equal(contexts, 1);
+		first.destroy();
+		const [incoming] = await response;
+		let body = '';
+		for await (const chunk of incoming) body += chunk;
+		assert.equal(body, 'ok');
+		assert.equal(contexts, 2);
+		assert.equal(closes, 2);
+		assert.equal(slots.inFlight, 0);
+		assert.equal(slots.queued, 0);
+		assert.deepEqual(errors, []);
+	},
+);
+
+test('an already disconnected caller never creates a context', async () => {
+	const browser = {
+		createBrowserContext: () => assert.fail('created a context'),
+	} as unknown as pup.Browser;
+	await assert.rejects(
+		renderPageWithBrowser(
+			browser,
+			'https://example.com/',
+			'text',
+			{},
+			AbortSignal.abort(),
+		),
+		{ name: 'AbortError' },
+	);
+});
 
 // -- a broken sidecar raises, it does not report ----------------------
 

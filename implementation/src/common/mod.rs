@@ -299,23 +299,16 @@ pub(crate) fn module_error_to_wire<R>(
 
 async fn loop_one_inner<T, R, S>(
     handler: &mut impl MessageHandler<T, R>,
+    messages: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
     stream: &mut S,
     genvm_id: genvm_modules_interfaces::GenVMId,
 ) -> anyhow::Result<()>
 where
     T: calldata::codec::Decode + 'static,
     R: calldata::codec::Encode<Vec<u8>, Error = std::convert::Infallible> + Send + 'static,
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    S: tokio::io::AsyncWrite + Unpin,
 {
-    loop {
-        let Some(data) = read_message(stream)
-            .await
-            .context("reading module message")?
-        else {
-            // Stream closed
-            return Ok(());
-        };
-
+    while let Some(data) = messages.recv().await {
         let res = loop_one_inner_handle(handler, &data).await;
         let res = match res {
             Ok(res) => genvm_modules_interfaces::Result::Ok(res),
@@ -328,6 +321,7 @@ where
             .await
             .context("writing message")?;
     }
+    Ok(())
 }
 
 async fn read_hello<S>(
@@ -361,17 +355,48 @@ where
 {
     let genvm_id = exec_ctx.genvm_id();
 
-    let mut handler = handler_provider
-        .new_handler(exec_ctx)
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    let (messages_tx, mut messages_rx) = tokio::sync::mpsc::channel(1);
+    let read = async {
+        while let Some(data) = read_message(&mut reader)
+            .await
+            .context("reading module message")?
+        {
+            // Never wait for queue space: that would hide EOF during a request.
+            messages_tx
+                .try_send(data)
+                .context("too many pending module requests")?;
+        }
+        Ok(())
+    };
+    let mut handler = None;
+    let work = async {
+        handler = Some(
+            handler_provider
+                .new_handler(exec_ctx)
+                .await
+                .context("creating handler")?,
+        );
+        loop_one_inner(
+            handler.as_mut().unwrap(),
+            &mut messages_rx,
+            &mut writer,
+            genvm_id,
+        )
         .await
-        .context("creating handler")?;
+        .context("handling")
+    };
+    let res = tokio::select! {
+        result = read => result,
+        result = work => result,
+    };
 
-    let res = loop_one_inner(&mut handler, stream, genvm_id)
-        .await
-        .context("handling");
-
-    if let Err(close) = handler.cleanup().await {
-        log_error_into!(@operator, &LoggerWithId, error:ah = &close, genvm_id:id = genvm_id.0; "cleanup error");
+    if let Some(handler) = handler {
+        // Preserve synchronous Teardown telemetry without starting another wait after disconnect.
+        use futures_util::FutureExt as _;
+        if let Some(Err(close)) = handler.cleanup().now_or_never() {
+            log_error_into!(@operator, &LoggerWithId, error:ah = &close, genvm_id:id = genvm_id.0; "cleanup error");
+        }
     }
 
     res
@@ -843,7 +868,12 @@ const MAX_REDIRECTS: usize = 10;
 /// receivers) onto a plaintext hop observable and replayable by on-path
 /// attackers.
 pub fn redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(|attempt| {
+    redirect_policy_with_tlds(&[])
+}
+
+pub fn redirect_policy_with_tlds(extra_tld: &[Box<str>]) -> reqwest::redirect::Policy {
+    let extra_tld = extra_tld.to_vec();
+    reqwest::redirect::Policy::custom(move |attempt| {
         if attempt.previous().len() >= MAX_REDIRECTS {
             return attempt.error("too many redirects");
         }
@@ -864,6 +894,28 @@ pub fn redirect_policy() -> reqwest::redirect::Policy {
         if downgrade {
             log_warn!(@user, url = attempt.url().as_str(); "HTTPS->HTTP downgrade redirect rejected");
             return attempt.error(SchemeDowngrade);
+        }
+        let url = attempt.url();
+        let host = url.host_str().unwrap_or_default();
+        let tld = host.rsplit('.').next().unwrap_or_default();
+        let cause = if !matches!(url.scheme(), "http" | "https") {
+            Some("SCHEMA_FORBIDDEN")
+        } else if !matches!(url.port(), None | Some(80 | 443)) {
+            Some("PORT_FORBIDDEN")
+        } else if !crate::web::domains::DOMAINS.contains(&tld)
+            && !extra_tld.iter().any(|allowed| allowed.as_ref() == tld)
+        {
+            Some("TLD_FORBIDDEN")
+        } else {
+            None
+        };
+        if let Some(cause) = cause {
+            let url = url.as_str().to_owned();
+            return attempt.error(ModuleError {
+                causes: vec![cause.to_owned()],
+                fatal: false,
+                ctx: BTreeMap::from([("url".to_owned(), url.into())]),
+            });
         }
         attempt.follow()
     })
@@ -886,9 +938,13 @@ impl std::error::Error for SchemeDowngrade {}
 /// [`FilteringResolver`]) and whose redirect policy rejects non-routable
 /// IP-literal hops (see [`redirect_policy`]). For contract-controlled web URLs.
 pub fn create_client_filtered() -> anyhow::Result<reqwest::Client> {
+    create_client_filtered_with_tlds(&[])
+}
+
+pub fn create_client_filtered_with_tlds(extra_tld: &[Box<str>]) -> anyhow::Result<reqwest::Client> {
     base_client_builder()
         .dns_resolver(Arc::new(FilteringResolver::new()?))
-        .redirect(redirect_policy())
+        .redirect(redirect_policy_with_tlds(extra_tld))
         .build()
         .map_err(Into::into)
 }

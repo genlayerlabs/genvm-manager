@@ -5,6 +5,9 @@ use genvm_modules_interfaces::web as web_iface;
 use mlua::LuaSerdeExt as _;
 use tokio::io::AsyncWriteExt as _;
 
+#[path = "cancellation_test.rs"]
+mod cancellation;
+
 type TestVM = scripting::UserVM<ctx::VMData, Arc<ctx::CtxPart>, WebSubContext>;
 
 /// Absolute path of `<repo>/<rel>`. Tests run with the crate
@@ -207,9 +210,7 @@ async fn create_test_vm(config: &sync::DArc<config::Config>) -> TestVM {
     .unwrap()
 }
 
-/// Same context as `HandlerProvider::create_execution_context`, including
-/// `filter_dns = true` -- the webdriver host is an IP literal, which reqwest
-/// never sends through the resolver, so the SSRF guard stays out of the way.
+/// Same filtering context as `HandlerProvider::create_execution_context`.
 fn create_test_ctx(config: &sync::DArc<config::Config>) -> sync::DArc<WebSubContext> {
     let hello = common::tests::get_hello();
     let metrics = sync::DArc::new(Metrics::default());
@@ -218,7 +219,7 @@ fn create_test_ctx(config: &sync::DArc<config::Config>) -> sync::DArc<WebSubCont
         &hello,
         &config.gep(|x| &x.mod_base),
         metrics.gep(|x| &x.scripting),
-        true,
+        Some(&config.extra_tld),
     )
     .unwrap();
 

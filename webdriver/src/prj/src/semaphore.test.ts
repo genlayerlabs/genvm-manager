@@ -8,6 +8,12 @@ import {
 	SemaphoreTimeout,
 } from './semaphore.js';
 
+it('an already aborted caller cannot take a free permit', async () => {
+	const s = new Semaphore({ permits: 1, maxQueued: 0 });
+	await assert.rejects(s.acquire(1000, AbortSignal.abort()), SemaphoreAborted);
+	assert.equal(s.inFlight, 0);
+});
+
 const NEVER = 60_000;
 
 /** Queue depth is irrelevant to most cases, so default it out of the way. */

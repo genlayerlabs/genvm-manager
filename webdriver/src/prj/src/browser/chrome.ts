@@ -11,6 +11,11 @@ import {
 	formatDurationMs,
 } from '../duration.js';
 import type * as browser from './index.js';
+import {
+	createEgressProfile,
+	egressProxyArgs,
+	startEgressProxy,
+} from '../egress-proxy.js';
 
 class BrowserHolder {
 	browser: pup.Browser;
@@ -89,33 +94,58 @@ const PROTOCOL_TIMEOUT_MS = envDurationMs(
 );
 
 async function newBrowser(): Promise<BrowserHolder> {
-	const args = [
-		'--no-sandbox',
-		'--disable-dev-shm-usage',
-		'--disable-accelerated-2d-canvas',
-		'--no-first-run',
-		'--no-zygote',
-		'--disable-gpu',
-		// No popup can be SSRF-guarded before its first navigation, so none is
-		// allowed to exist -- see the `targetcreated` handler in `render.ts`.
-		'--block-new-web-contents',
-		'--enable-precise-memory-info',
-		`--js-flags=--max-old-space-size=${RENDERER_MAX_OLD_SPACE_MB}`,
-		`--renderer-process-limit=${RENDERER_PROCESS_LIMIT}`,
-		...CHROME_EXTRA_ARGS,
-	];
-	const realBrowser = await puppeteer.launch({
-		headless: CHROME_HEADLESS,
-		args,
-		executablePath: CHROME_EXECUTABLE,
-		protocolTimeout: PROTOCOL_TIMEOUT_MS,
-	});
+	const proxy = await startEgressProxy({ timeoutMs: PROTOCOL_TIMEOUT_MS });
+	let profile: Awaited<ReturnType<typeof createEgressProfile>> | undefined;
+	let realBrowser: pup.Browser;
+	try {
+		profile = await createEgressProfile();
+		const args = [
+			'--no-sandbox',
+			'--disable-dev-shm-usage',
+			'--disable-accelerated-2d-canvas',
+			'--no-first-run',
+			'--no-zygote',
+			'--disable-gpu',
+			// No popup can be SSRF-guarded before its first navigation, so none is
+			// allowed to exist -- see the `targetcreated` handler in `render.ts`.
+			'--block-new-web-contents',
+			'--enable-precise-memory-info',
+			`--js-flags=--max-old-space-size=${RENDERER_MAX_OLD_SPACE_MB}`,
+			`--renderer-process-limit=${RENDERER_PROCESS_LIMIT}`,
+			...egressProxyArgs(proxy.url, CHROME_EXTRA_ARGS),
+		];
+		realBrowser = await puppeteer.launch({
+			headless: CHROME_HEADLESS,
+			args,
+			executablePath: CHROME_EXECUTABLE,
+			protocolTimeout: PROTOCOL_TIMEOUT_MS,
+			userDataDir: profile.path,
+		});
+	} catch (error) {
+		await proxy.close();
+		await profile?.close();
+		throw error;
+	}
 
 	logger.log('info', 'created new raw browser', {
 		pid: realBrowser.process()?.pid,
 	});
 
 	realBrowser.on('disconnected', () => {
+		void proxy.close();
+		const cleanup = () => {
+			void profile!
+				.close()
+				.catch((error) =>
+					logger.log('warn', 'could not remove browser profile', { error }),
+				);
+		};
+		const process = realBrowser.process();
+		if (process && process.exitCode === null && process.signalCode === null) {
+			process.once('exit', cleanup);
+		} else {
+			cleanup();
+		}
 		logger.log('info', 'browser disconnected');
 	});
 
