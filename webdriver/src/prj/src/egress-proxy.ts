@@ -182,7 +182,9 @@ export function egressProxyArgs(
 		'--guest',
 	]);
 	for (const arg of extraArgs) {
-		if (protectedFlags.has(arg.split('=')[0]!)) {
+		// Chromium also accepts single-dash switches.
+		const name = arg.split('=')[0]!.toLowerCase().replace(/^-+/, '--');
+		if (protectedFlags.has(name)) {
 			throw new Error(
 				`Chrome argument conflicts with the egress guard: ${arg}`,
 			);

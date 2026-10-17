@@ -287,6 +287,9 @@ test('extra Chrome flags cannot override the egress guard', () => {
 		'--user-data-dir=/tmp/unguarded',
 		'--profile-directory=unguarded',
 		'--guest',
+		'-proxy-server=direct://',
+		'-no-proxy-server',
+		'--Proxy-Server=direct://',
 	]) {
 		assert.throws(
 			() => egressProxyArgs('socks5://127.0.0.1:1080', [flag]),
