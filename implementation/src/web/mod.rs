@@ -10,7 +10,7 @@ type WebSubContext = crate::manager::execution_context::WebSubContext;
 
 pub(crate) mod config;
 mod ctx;
-mod domains;
+pub(crate) mod domains;
 mod handler;
 
 #[derive(serde::Serialize, Debug, Default)]

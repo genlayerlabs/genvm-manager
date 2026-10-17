@@ -62,7 +62,7 @@ fn create_test_ctx() -> sync::DArc<TestCtx> {
         signer_url: Arc::from(""),
         data_dir: String::new(),
     });
-    let scripting = scripting::create_ctx_part(&hello, &conf, metrics, false).unwrap();
+    let scripting = scripting::create_ctx_part(&hello, &conf, metrics, None).unwrap();
     sync::DArc::new(TestCtx { scripting })
 }
 

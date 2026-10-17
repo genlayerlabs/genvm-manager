@@ -4,6 +4,7 @@ import { Command } from 'commander';
 
 import * as logger from './logging.js';
 import * as chromeBrowser from './browser/chrome.js';
+import { abortable, disconnectSignal } from './cancellation.js';
 import {
 	renderPageWithBrowser,
 	statusIsGood,
@@ -104,7 +105,11 @@ async function renderPage(
 	}
 
 	try {
-		const browserManager = await chromeBrowser.INSTANCE;
+		const browserManager = await abortable(
+			signal,
+			() => chromeBrowser.INSTANCE,
+		);
+		signal?.throwIfAborted();
 		const browserInstance = browserManager.getBrowser();
 		try {
 			return await renderPageWithBrowser(
@@ -112,6 +117,7 @@ async function renderPage(
 				targetUrl,
 				mode,
 				options,
+				signal,
 			);
 		} finally {
 			browserInstance.close();
@@ -121,29 +127,13 @@ async function renderPage(
 	}
 }
 
-/**
- * Fires when the caller goes away before it has been answered, so a request
- * nobody is waiting for stops occupying a queue slot.
- */
-function disconnectSignal(
-	req: http.IncomingMessage,
-	res: http.ServerResponse,
-): AbortSignal {
-	const controller = new AbortController();
-	req.on('close', () => {
-		if (!res.writableEnded) {
-			controller.abort();
-		}
-	});
-	return controller.signal;
-}
-
 async function handleRenderRequest(
 	parsedUrl: URL,
 	req: http.IncomingMessage,
 	res: http.ServerResponse,
 ) {
 	const query = parsedUrl.searchParams;
+	const signal = disconnectSignal(res);
 
 	try {
 		const targetUrl = query.get('url') ?? '';
@@ -176,12 +166,7 @@ async function handleRenderRequest(
 				: {}),
 		};
 
-		const result = await renderPage(
-			targetUrl,
-			mode,
-			options,
-			disconnectSignal(req, res),
-		);
+		const result = await renderPage(targetUrl, mode, options, signal);
 
 		if (statusIsGood(result.status)) {
 			updateLastSuccessfulRenderTime();
@@ -196,8 +181,8 @@ async function handleRenderRequest(
 		}
 		res.end(result.body);
 	} catch (error) {
-		if (error instanceof SemaphoreAborted) {
-			// The caller hung up while queued; there is nobody left to answer.
+		if (signal.aborted || error instanceof SemaphoreAborted) {
+			// The caller hung up; there is nobody left to answer.
 			return;
 		}
 		// How loaded this host happens to be is not a property of the page, so it
@@ -275,13 +260,9 @@ async function handleHealthcheck(
 		sinceLast: formatDurationMs(sinceLastSuccessMs),
 		cacheDuration: formatDurationMs(HEALTHCHECK_CACHE_DURATION_MS),
 	});
+	const signal = disconnectSignal(res);
 	try {
-		const result = await renderPage(
-			targetUrl,
-			mode,
-			{},
-			disconnectSignal(req, res),
-		);
+		const result = await renderPage(targetUrl, mode, {}, signal);
 		if (statusIsGood(result.status)) {
 			updateLastSuccessfulRenderTime();
 			logger.log('info', 'healthcheck ok', { status: result.status });
@@ -293,7 +274,7 @@ async function handleHealthcheck(
 			res.end('unhealthy');
 		}
 	} catch (error) {
-		if (error instanceof SemaphoreAborted) {
+		if (signal.aborted || error instanceof SemaphoreAborted) {
 			return;
 		}
 		// Saturation lands here too, and reporting unhealthy is right: the probe

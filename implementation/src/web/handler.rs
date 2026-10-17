@@ -110,7 +110,7 @@ impl common::MessageHandlerProvider<genvm_modules_interfaces::web::Message, Rend
             &hello,
             &self.config.gep(|x| &x.mod_base),
             metrics.gep(|x| &x.scripting),
-            true,
+            Some(&self.config.extra_tld),
         )?;
         Ok(sync::DArc::new(WebSubContext { scripting }))
     }
