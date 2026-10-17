@@ -1,0 +1,88 @@
+name: docs / deploy
+
+# Builds the docs site and publishes it to the sdk.genlayer.com Pages repo,
+# which serves one directory per version out of `_site/` and lists them in
+# `_site/versions.json` (the switcher every page links to). Nightly runs
+# refresh `main`; branch pushes refresh their train, and releases dispatch
+# this workflow at the exact release tag.
+#
+# GitHub only schedules workflows from the DEFAULT branch, so this file has to
+# reach it before the cron fires — merging it into a dev branch is not enough.
+#
+# Needs the `DOCS_DEPLOY_KEY` secret: a deploy key with write access to
+# genlayerlabs/sdk.genlayer.com. Pushing there triggers that repo's own
+# deploy-pages workflow, which is what actually publishes and purges the CDN.
+
+on:
+  push:
+    branches: [v0.6, v0.6-dev]
+  schedule:
+    # 03:17 UTC — off the hour, where scheduling backlogs are smaller.
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "directory to publish under (e.g. main, v0.6.x)"
+        required: false
+        default: main
+      preferred:
+        description: "make it the version the switcher highlights"
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: docs-deploy-${{ inputs.version || (github.event_name == 'push' && (github.ref_name == 'v0.6' && 'v0.6.x' || github.ref_name)) || 'main' }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  SITE_REPO: genlayerlabs/sdk.genlayer.com
+  DOCS_VERSION: ${{ inputs.version || (github.event_name == 'push' && (github.ref_name == 'v0.6' && 'v0.6.x' || github.ref_name)) || 'main' }}
+
+# GitHub's stock `bash -e {0}` has no `pipefail`.
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'main' || github.sha }}
+
+      # The docs build spans the manager and every active executor line, each
+      # in its own `gen-docs` nix shell, so it needs submodules and nix.
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "true"
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
+
+      - name: Build docs
+        run: ./support/ci/run.sh pipeline docs
+
+      - name: Checkout the site repo
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: ${{ env.SITE_REPO }}
+          # The site repo is private, and `ref` is what keeps checkout from
+          # asking the REST API for the default branch with this repo's token,
+          # which cannot see it. The deploy key covers the clone itself.
+          ref: main
+          path: build/site
+          ssh-key: ${{ secrets.DOCS_DEPLOY_KEY }}
+
+      - name: Publish the built docs
+        run: |
+          ./support/ci/run.sh tool deploy-docs \
+            --site build/site \
+            --version "$DOCS_VERSION" \
+            --push \
+            ${{ inputs.preferred && '--preferred' || '' }}

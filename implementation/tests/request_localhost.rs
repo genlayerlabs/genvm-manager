@@ -1,3 +1,5 @@
+// genvm-tool-test-tags: feature-web-request, needs-web
+
 use genvm_common::*;
 use genvm_modules::common;
 use genvm_modules::scripting::{self, send_request_get_lua_compatible_response_bytes, Metrics};

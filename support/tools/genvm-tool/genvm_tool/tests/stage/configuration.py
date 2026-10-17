@@ -15,7 +15,8 @@ type Reporter = typing.Callable[
 
 
 def eval_module(file: Path, root_dir: Path) -> types.ModuleType:
-	"""Compile and exec ``file`` as a throwaway module, returning it.
+	"""
+	Compile and exec ``file`` as a throwaway module, returning it.
 
 	The module is registered in ``sys.modules`` (under a dotted name derived from
 	its path relative to ``root_dir``) so its own relative imports resolve. Used

@@ -7,11 +7,11 @@ expression evaluator lives in ``executor/crates/common/src/expr/``.
 
 Three independent moving parts are involved:
 
-#. **Buckets** — opaque integer reservoirs (``U256``) that GenVM debits during
-   execution. Their initial totals come from the host (typically the consensus
-   layer) on a per-call basis.
+#. **Buckets** — named ``U256`` reservoirs that GenVM debits during execution.
+   Their initial totals come from the host (typically the consensus layer) on a
+   per-call basis.
 #. **Bucket configs** — operator-provided rules that bind a *named* charge (storage
-   pages, message receipts, nondet output bytes, message fees) to a *bucket number*
+   pages, message receipts, nondet output bytes, message fees) to a *bucket name*
    and an expression that computes the per-event cost.
 #. **Expressions** — a small typed lambda calculus used to write the cost rules. It
    is evaluated once at startup (for ``subtract_on_start_expr``) and once per
@@ -25,10 +25,11 @@ The ``fees`` block of the GenVM config (see ``doc/schemas/default-config.json``,
 
    "fees": {
      "expr_prelude": "<expression>",
-     "storage":         { "bucket_no": N, "subtract_on_start_expr": "...", "delta_expr": "..." },
-     "message_receipt": { "bucket_no": N, "subtract_on_start_expr": "...", "delta_expr": "..." },
-     "nondet_output":   { "bucket_no": N, "subtract_on_start_expr": "...", "delta_expr": "..." },
-     "message_fee":     { "bucket_no": N, "subtract_on_start_expr": "...", "delta_expr": "..." }
+     "storage":         { "buckets": "execution_data_gas", "subtract_on_start_expr": "...", "delta_expr": "..." },
+     "message_receipt": { "buckets": ["execution_data_gas", "submitted_messages", "submitted_messages_count"], "subtract_on_start_expr": "...", "delta_expr": "..." },
+     "nondet_output":   { "buckets": ["execution_data_gas", "nondet_outputs"], "subtract_on_start_expr": "...", "delta_expr": "..." },
+     "message_fee":     { "buckets": "message_fee", "subtract_on_start_expr": "...", "delta_expr": "..." },
+     "event":           { "buckets": "execution_data_gas", "subtract_on_start_expr": "...", "delta_expr": "..." }
    }
 
 ``expr_prelude``
@@ -36,43 +37,48 @@ The ``fees`` block of the GenVM config (see ``doc/schemas/default-config.json``,
    intended use is shared ``let`` bindings (or Y-combinator definitions) that the
    per-bucket expressions can reference.
 
-``bucket_no``
-   Either a single index, or an array of indices, into the ``Vec<U256>`` of bucket
-   totals the host passes to ``DataLimit::new``. With an array, a scalar ``delta_expr``
+``buckets``
+   Either a single name, or an array of names, in the bucket-total map the host
+   passes to ``DataLimit::new``. With an array, a scalar ``delta_expr``
    result is charged against every listed bucket, while an array result is charged
    element-wise (lengths must match); all debits in one charge are atomic
-   (all-or-nothing). Two bucket configs MAY share the same index; in that case both
+   (all-or-nothing). Two bucket configs MAY share the same name; in that case both
    charge against the same reservoir. The ``message_fee`` / ``message_receipt`` pair
-   has special atomic-debit behaviour when they share a bucket (``consume_message_fee``
-   in ``fees.rs:332``).
+   has special atomic-debit behaviour when they share a bucket
 
 ``subtract_on_start_expr``
-   A bare numeric expression. Evaluated once at startup with ``node`` bound to the
-   host-provided gas constants (see below). The resulting ``U256`` is debited from
-   the bucket immediately. Defaults to ``"0"`` if omitted.
+   A numeric expression or array of numeric expressions. It follows the same scalar
+   versus element-wise array rule as ``delta_expr``, including exact array-length
+   matching. Evaluated once at startup with ``node`` bound to the host-provided gas
+   constants (see below). The resulting ``U256`` values are debited immediately.
+   Defaults to ``"0"`` if omitted.
 
 ``delta_expr``
    A function ``\attrs = body`` (one or more ``\`` lambdas) whose ``attrs``
    parameter is an object containing the variables that the charge depends on.
    Evaluated once per charge; the resulting integer is debited from the bucket.
 
-The four named buckets and their ``attrs`` shape are:
+The five fee rules and their ``attrs`` shape are:
 
 ==================== ======================================================================
 Name                 ``attrs`` keys
 ==================== ======================================================================
 ``storage``          ``pages``: number of pages allocated
-``message_receipt``  ``isInternal``, ``isDeploy``, ``calldataLength``, ``codeLength``
+``message_receipt``  ``isFirstMessage``, ``isInternal``, ``isDeploy``,
+                     ``rotationsCount``, ``calldataLength``, ``codeLength``,
+                     ``subtreeLength``
 ``nondet_output``    ``outputLength``
-``message_fee``      ``isInternal``, ``onAcceptance`` (when internal),
-                     ``matchedFeeParams``: an object with
+``message_fee``      ``isInternal``, ``skipBudgetFloor``, ``matchedFeeParams``:
+                     an object with
                      ``leaderTimeunitsAllocation``,
                      ``validatorTimeunitsAllocation``, ``executionBudgetPerRound``,
                      ``rotations`` (array)
+``event``            ``blobSize``, ``topicsCount``
 ==================== ======================================================================
 
 The ground truth for these names is ``fees.rs`` (search for ``calculate_bucket``
-call sites).
+call sites). ``isFirstMessage`` is true until the first message emission is
+successfully accumulated; event emissions do not clear it.
 
 The Expression Language
 -----------------------
@@ -159,6 +165,17 @@ Bucket expressions reference these as e.g. ``node.gasPerChangedSlot`` and the
 node-provided values let consensus parameters drift independently of the executor
 binary.
 
+``node.overlaySplitBps`` carries the combined developer and DAO share of the
+time-unit fee pool. Internal-message primary reserves use::
+
+   timeUnitPool
+   + floor(timeUnitPool * overlaySplitBps / (10000 - overlaySplitBps))
+   + executionTerm
+
+This minimum primary fee is the same for messages emitted on acceptance and
+finalization. The execution term is not grossed up. Omitting the field makes
+internal-message fee evaluation fail rather than silently undercharge
+
 The closing of ``node`` happens at startup:
 ``\node = <prelude> <code>`` is parsed and applied to the resolved ``node`` object.
 The returned value (a number for ``subtract_on_start_expr``, a function for
@@ -185,21 +202,23 @@ Per process, per non-batched call:
 #. The evaluator parses ``expr_prelude + gas_data[i].value`` for every ``gas_data``
    entry and builds the ``node`` object. Parse or evaluation errors here surface as
    ``parsing gas_data constant 'X'`` / ``evaluating gas_data constant 'X'``.
-#. For each of the four buckets the evaluator builds ``\node = <prelude> <code>``
+#. For each of the five fee rules the evaluator builds ``\node = <prelude> <code>``
    for ``subtract_on_start_expr`` and ``delta_expr``, applies the ``node`` object,
    and stores the resulting ``Value`` (a rational and a function respectively).
-#. The startup cost is debited immediately. Underflow surfaces as the bucket's
-   configured OOM ``VmError`` (see the ``VmError::oom().*`` enum chain at the call
-   site).
+#. For top-level runs, the startup cost is debited immediately. Underflow surfaces
+   as the bucket's configured OOM ``VmError`` (see the ``VmError::oom().*`` enum
+   chain at the call site). Nested runs receive zero-valued bucket placeholders and
+   skip startup debits because their caller already paid them.
 #. During the run, every ``consume_*`` function in ``fees.rs`` packs the per-event
    ``attrs`` into an object, applies the bucket's ``delta`` function, converts the
    result to ``U256`` (rejecting non-integers and negatives), and debits the
    reservoir.
 
-Bucket totals are mutated under a single ``tokio::sync::Mutex<Vec<U256>>`` so the
-debits are sequentially consistent across concurrent sub-VMs. ``message_fee`` and
+Bucket totals are mutated under a single ``tokio::sync::Mutex<HashMap<String,
+U256>>`` so the debits are sequentially consistent across concurrent sub-VMs.
+``message_fee`` and
 ``message_receipt`` debits are atomic with respect to each other: when they share a
-``bucket_no``, the costs are summed and debited once; otherwise both reservoirs
+bucket name, the costs are summed and debited once; otherwise both reservoirs
 are checked before either is decremented. This avoids partial charges when a
 combined send-and-deliver flow runs out of fee budget mid-call.
 
@@ -230,25 +249,207 @@ A minimal, illustrative ``fees`` block::
      "expr_prelude":
        "let Y = \\f = (\\x = f (x x)) (\\x = f (x x)) in",
      "storage": {
-       "bucket_no": 0,
+       "buckets": "execution_data_gas",
        "subtract_on_start_expr": "node.gasPerStorageBootstrap",
        "delta_expr":              "\\a = a.pages * node.gasPerStoragePage"
      },
      "message_receipt": {
-       "bucket_no": 1,
+       "buckets": "message_fee",
        "delta_expr":
          "\\a = if a.isDeploy then node.gasPerDeployByte * (a.calldataLength + a.codeLength)\n         else node.gasPerCallByte * a.calldataLength"
      },
      "nondet_output": {
-       "bucket_no": 2,
+       "buckets": "nondet_outputs",
        "delta_expr": "\\a = a.outputLength * node.gasPerNondetByte"
      },
      "message_fee": {
-       "bucket_no": 1,
+       "buckets": "message_fee",
        "delta_expr":
-         "\\a = if a.isInternal\n        then (if a.onAcceptance then node.gasInternalAccept else node.gasInternalFinal)\n        else floor (a.matchedFeeParams.executionBudgetPerRound * arrayLen a.matchedFeeParams.rotations)"
+         "\\a = if a.isInternal\n        then node.gasInternal * arrayLen a.matchedFeeParams.rotations\n        else a.matchedFeeParams.gasLimit * a.matchedFeeParams.maxGasPrice"
+     },
+     "event": {
+       "buckets": "execution_data_gas",
+       "delta_expr": "\\a = (a.topicsCount + a.blobSize) * node.gasPerStoragePage"
      }
    }
 
-``message_fee`` and ``message_receipt`` share ``bucket_no = 1`` here, so an outbound
-message debits both costs atomically against bucket 1.
+``message_fee`` and ``message_receipt`` share the ``message_fee`` bucket here, so an
+outbound message debits both costs atomically against it.
+
+Message-Fee Allocation Matching
+-------------------------------
+
+The ``a.matchedFeeParams`` above is selected per outbound message from the call's
+allocation list (``accumulator.message_fee_allocation``). Kind is matched first
+(``External`` for ``EmitExternalMessage``, else ``Internal``), followed by exact
+``recipient`` and ``call_key``. A per-recipient ``call_key`` wildcard is tried only
+after the exact key; executor-only open-bucket recipient wildcards are less specific
+than either. List order therefore cannot make a wildcard shadow an exact allocation.
+
+For internal messages, ``on`` is checked after the allocation key is resolved, so a
+phase mismatch on an exact allocation does not fall through to a wildcard. Chain
+keys are unique across phases; only synthetic recipient-wildcard entries may
+select different fee parameters by phase. For
+external messages, an exact allocation without room for the reservation spills to
+the per-recipient ``call_key`` wildcard. If no candidate matches, the external
+message uses the legacy unallocated path and consumes only its receipt cost.
+Existing but exhausted candidates yield an allocation-budget error.
+
+The default v0.3 fee expressions reject external reservations and receipts with
+``fee below_minimum`` unless ``node.lockedReceiptGasPrice`` is positive, including
+external messages without a matching allocation
+
+Chain entries, those with a concrete ``recipient``, carry the budget stored on
+chain. For internal messages, presence alone resolves a key: an entry whose
+``budget`` is zero still shadows broader keys and, when its phase matches, fails
+emission with ``out_of message_fee allocation_budget internal``, as does a key
+exhausted by this execution's own emissions, tracked separately; neither falls
+through. For external messages, consensus resolves only chain keys with a nonzero
+budget, so a zero-budget entry is absent: the message falls through to the
+per-recipient ``call_key`` wildcard, and with no wildcard left takes the
+unallocated path. Synthetic recipient wildcards match independently of ``budget``;
+zero there means an exhausted allocation. ``null`` removes the per-allocation cap
+while keeping the execution's fee buckets.
+
+The host MUST preserve every existing pinned key and MUST NOT add recipient
+wildcards to a pinned tree, except for the unmatched-external guard. It MUST append
+that guard to every pinned tree and send it alone for a closed tree. The guard is an
+ordinary external recipient and call-key wildcard with zero budget, ``finalized``
+phase, unit gas limit, maximum gas price, zero ``children_budget`` and an empty
+``subtree``. An unmatched external message therefore resolves the guard as an
+exhausted candidate and fails with
+:ref:`gvm-def-str-trie-detail-vm-error-out-of-message-fee-allocation-budget-external`
+instead of reaching the receipt-only path that consensus rejects when
+``hasAllocations`` is true. Open-pool and allocation-absent executions MUST NOT
+receive this guard. They may use ordinary synthetic recipient wildcards with
+concrete fee parameters and phase, and optionally uncapped budgets. The executor
+conservatively treats each emission as novel; remaining allowances alone do not
+identify previously delivered occurrences.
+
+Funding modes
+~~~~~~~~~~~~~~
+
+An outgoing internal message is funded one of two ways:
+
+- **Allocation-matched (default).** The fee is matched against the allocation
+  list as above. After the expression computes the primary reserve, the executor
+  adds the host-supplied ``children_budget``; deeper budgets are already
+  contained by their direct parent. A declared budget exceeding the
+  matched node's remaining ``budget`` is rejected with an allocation-budget
+  error; otherwise it consumes ``message_fee`` atomically with the
+  ``message_receipt`` charge.
+- **Balance-funded (``use_balance``).** When an ``EmitInternalMessage`` /
+  ``EmitInternalDeployMessage``
+  sets ``use_balance`` (the chain's ``useBalance``, gated on
+  :ref:`gvm-perm-use-balance-for-message-fees`), allocation matching is skipped
+  entirely. The primary fee is metered from the guest-supplied ``fee_params``.
+  A positive ``descendants`` integer emits an Open grant; a non-empty allocation
+  list emits a Pinned grant whose budget is the checked sum of root budgets.
+  The child's ``declaredBudget`` is the primary fee plus that descendant budget,
+  reserved once from the emitting
+  contract's balance (jointly with ``value``; insufficient balance yields
+  ``InsufficientBalance``). The ``message_fee`` bucket is **not** consumed (the message is
+  excluded from the sender pool on-chain); only ``message_receipt`` is. The emitted
+  allocation subtree contains the canonical grant envelope. Absent, null, zero
+  and empty-list descendants emit an empty subtree and the Closed policy.
+
+For either phase, an internal message therefore declares ``P + D``, where
+``P`` is its minimum primary fee and ``D`` is its authored descendant budget::
+
+   minPrimaryFees(feeParams) + descendantBudget
+
+For balance funding the sum is the authored descendant grant budget. The
+primary fee already covers the child's
+configured lifecycle, including appeals; the remainder becomes the child's
+message-fee bucket. A zero declared budget is rejected with
+``fee below_minimum`` on both funding paths. External messages declare zero
+
+The transaction-pinned primary quote is not in v0.3 host input yet, so the
+existing local primary-fee calculation supplies each child quote
+
+The Python SDK takes ``use_balance: UseBalanceParams | None`` on calls,
+transfers and deploys. ``None`` selects sender funding; the dataclass holds
+required ``fee_params`` and optional ``descendants``. Its allocation objects
+retain ``children`` for authoring. The SDK walks that tree iteratively in
+pre-order and sends a flat array with backward ``parent_index`` references
+
+The Rust SDK decodes that array with ``LenLimitedVec<1024, AllocationNode>``
+before decoding its elements. The Python flattener has the same 1,024-element
+limit, including for cyclic input. Grant admission separately enforces the
+24-node limit, parent topology, duplicate sibling keys and budget inequalities
+
+The v0.3 primary reserve includes successful-appellant profit for each configured
+appeal slot. The bond is the next normal round's time-unit cost, including its
+rotations, multiplied by the child's price cap. Its profit reserve is
+``bond + floor(bond / 2)``; the developer/DAO overlay applies only to time-unit
+work, never to this profit reserve
+
+The manager input ``message_fee_allocation`` contains only the allocations matched
+by this execution. Each carries a required ``children_budget`` and opaque
+``subtree`` bytes. The host sums the direct descendants' budgets and encodes
+the matched subtree with any proof required by the transaction's pinned
+storage mode. Both executors forward those bytes unchanged; v0.3 charges their
+full length against receipt gas, submitted-message bytes and memory. The subtree
+includes the matched root; it is not merely an encoding of its descendants
+
+``children_budget`` funds onward messages per emission; it is
+not the unspent allocation allowance or consumption from earlier generations.
+All v0.3 internal emissions reject zero time-unit, storage or receipt price caps
+with ``Inval`` before charging fees or appending an emission
+
+When the manager input carries ``message_fee_cascade``, a top-level execution
+rewrites its final emissions before the execution hash. Each sender-pool
+internal message (not ``use_balance``) gets ``fee = max(fee, min_primary_fee)``.
+With ``N`` such messages and ``spare = budget_remaining - Σ fee - E`` positive, each then
+gets ``floor(spare / (2 * N))`` more. Balance-funded and external messages are
+untouched, and buckets are not charged for the addition: the chain carves the
+child's own pool from its declared budget. A single floor is enough because the
+host gives every open-pool internal wildcard the same fee params
+
+``budget_remaining`` is read at the pinned processing block. It can still include
+a prior generation's charge the chain rolls back only later, which makes the
+addition smaller, never unbacked. ``E`` is ``external_fee_reserve`` times the
+number of external emissions: each reserves the full chain gas envelope at the
+locked receipt price. Floors still apply when the remaining budget is insufficient
+
+Pinned descendant grants enforce the parent's ``messageBudgetFloor``,
+``gas_data.maxAllocationTreeDepth`` (root depth 1) and
+``gas_data.minExternalGasLimit``. When the host omits the depth limit, the
+executor defaults to 5; an omitted gas floor is 0. Excess depth fails at emission
+with ``fee descendant_grant tree``; an external node whose ``gas_limit`` is below
+the floor fails with ``fee descendant_grant external``
+
+The parent allocation's aggregate capacity is a separate invariant. If
+``L = appealRounds + 1`` novel executions may each emit a child carrying budget
+``C``, preserving that descendant capacity for every execution requires::
+
+   allocationBudget >= L * (minPrimaryFees + C)
+
+The lifecycle multiplier therefore belongs to this parent allocation-capacity
+check, not to one emitted child's declared budget
+
+The current minimum ``L * minPrimaryFees + C`` reserves ``C`` only once. Whether
+an allocation promises descendant capacity once or once per accepted execution
+remains unspecified; this does not change the per-message formula
+
+  Because ``fee_params`` is guest-supplied, it is validated before it reaches the
+  fee evaluator (``validate_balance_fee``): empty ``rotations`` and any zero price
+  cap (``max_price_gen_per_time_unit`` / ``storage_fee_max_gas_price`` /
+  ``receipt_fee_max_gas_price``) are rejected with ``Inval``, matching the chain's
+  reveal-time ``FeeValueMustBeNonZero`` checks. Magnitudes are bounded too
+  (prices/budgets below 2\ :sup:`96`, counts — time units and rotations
+  entries — below 2\ :sup:`32`) so the worst-case metered floor provably fits
+  in ``U256`` without saturating.
+
+  The floor replicates the chain's ``minMessagePrimaryFees``: the consensus term
+  is charged at the guest's ``max_price_gen_per_time_unit`` funding cap, then the
+  developer and DAO overlay is grossed up on that time-unit pool. Two further
+  node-configured floors fire as
+  ``VMError``\ s: ``fee below_minimum`` when a non-zero ``execution_budget_per_round``
+  is below ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``), and
+  ``fee too_many_rounds`` when ``rotations`` implies more rounds than the validator
+  table (``node.validatorsPerRound``) covers. Unless both allocations are zero,
+  the leader and validator time units must also fit the host-provided
+  ``minProposeTimeout`` / ``maxProposeTimeout`` and ``minCommitTimeout`` /
+  ``maxCommitTimeout`` ranges; violations produce
+  ``fee phase_timeout_out_of_bounds`` on both funding paths.

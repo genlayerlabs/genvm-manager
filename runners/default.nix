@@ -25,7 +25,4 @@ in
     list
     forExecutor
     ;
-
-  # We always build all of them: { uid -> derivation } over the full list.
-  universal = import ./views/universal.nix args list;
 }

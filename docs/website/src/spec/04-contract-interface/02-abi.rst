@@ -7,6 +7,12 @@ contracts interact with each other. The ABI provides a standardized way
 to encode method calls, handle parameters, and manage contract schemas
 while supporting both deterministic and non-deterministic operations.
 
+The public ABI includes the stable values listed in
+:doc:`../appendix/constants`. Values listed in
+:doc:`../appendix/internal-constants` bound what a run may do, but they are not
+part of that surface: a contract cannot read them, and nothing in the ABI is
+required to keep them stable
+
 .. _gvm-def-contract-call-conv:
 
 Method Calling Convention
@@ -32,12 +38,29 @@ Method calls use :ref:`gvm-def-calldata-encoding` format with following conventi
 The method name is carried under the empty key ``""``. Because calldata maps
 are encoded with sorted keys, the empty key always sorts first.
 
+This shape is enforced by :term:`GenVM` before any runner is loaded, so a
+malformed call fails identically in every runner language. The payload must
+decode as :ref:`gvm-def-calldata-encoding` and yield a Map whose every key is
+one of ``""``, ``"args"`` or ``"kwargs"``, with ``""`` a String, ``"args"`` an
+Array and ``"kwargs"`` a Map. On a deployment the ``""`` key must be **absent**.
+
+The key set is **closed**: unknown keys are rejected rather than ignored, so two
+byte-different payloads can never describe the same call. The extension point of
+the convention is the *value* of ``""`` (see `Special Methods`_), not the key
+set. Element types inside ``args``/``kwargs`` are matched against the method
+signature by the runner, not here.
+
+Violations are reported as
+:ref:`gvm-def-str-trie-value-vm-error-malformed-entry`; where that
+surfaces depends on the entry point, see :ref:`gvm-vm-startup-entry-validation`
+and :ref:`gvm-def-gl-call-call-contract`.
+
 .. _gvm-def-call-key:
 
 Call Key
 --------
 
-Every emitted message (see :ref:`gvm-def-post-message`) carries a ``call_key``:
+Every emitted message (see :ref:`gvm-def-emit-internal-message`) carries a ``call_key``:
 a 256-bit unsigned integer that identifies which method the message targets.
 It serves the same role as a function selector in EVM, but is derived
 differently and is not truncated.

@@ -1,8 +1,8 @@
 ``gl_call`` Messages
 ====================
 
-``EthSend`` Message
--------------------
+``EmitExternalMessage`` Message
+-------------------------------
 
 Sends transaction to Ethereum address with optional value transfer.
 
@@ -12,7 +12,7 @@ Payload
 .. code-block::
 
    {
-     "EthSend": {
+     "EmitExternalMessage": {
        "address": Address,      // 20-byte target address
        "calldata": Bytes,       // EVM calldata
        "value": U256            // Wei to transfer
@@ -26,8 +26,31 @@ Requirements
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
 
-``EthCall`` Message
--------------------
+Semantics
+~~~~~~~~~
+
+External messages are emitted for finalization. GenVM derives their call key from
+the first four calldata bytes, padded with zeros to 32 bytes; calldata shorter than
+four bytes uses the all-zero key
+
+GenVM orders matching candidates from the non-zero exact ``(address, call key)``
+allocation through the same address's call-key wildcard to host-provided recipient
+wildcards. A zero-budget exact allocation is absent and therefore permits broader
+candidates. GenVM selects the first candidate that can fund the reservation. If
+candidates exist but none can fund it, the :term:`sub-VM` exits with
+:ref:`gvm-def-str-trie-detail-vm-error-out-of-message-fee-allocation-budget-external`
+
+If no candidate matches, the message uses the legacy unallocated path and consumes
+only its receipt cost. Hosts MUST append an exhausted external recipient and
+call-key wildcard to every pinned allocation tree, and supply that wildcard alone
+for a closed tree. It has zero budget, ``finalized`` phase, unit gas limit, maximum
+gas price, zero child budget and an empty subtree. This ordinary exhausted candidate
+makes an otherwise unmatched external message exit with the allocation-budget error
+above, as required when consensus marks the execution as having allocations. Hosts
+MUST NOT supply this guard for open-pool or allocation-absent executions
+
+``ExternalCall`` Message
+------------------------
 
 Calls Ethereum contract method (read-only operation).
 
@@ -37,7 +60,7 @@ Payload
 .. code-block::
 
    {
-     "EthCall": {
+     "ExternalCall": {
        "address": Address,      // 20-byte target contract address
        "calldata": Bytes        // EVM calldata
      }
@@ -48,6 +71,8 @@ Requirements
 
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-call-others`
+
+.. _gvm-def-gl-call-call-contract:
 
 ``CallContract`` Message
 ------------------------
@@ -63,34 +88,49 @@ Payload
      "CallContract": {
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
-       "state": Number          // Storage type: 0=default, 1=latest_final, 2=latest_non_final
+       "storage_view": Number,  // Storage view: 0=default, 1=latest_finalized, 2=latest_decided
+       "catch_vm_error": Bool   // optional (default false): take a VM error as the result
      }
    }
-
-When ``state`` is ``0`` (``default``) :term:`GenVM` resolves it to ``latest_non_final``.
-The motivation is that the caller has already observed (and possibly modified)
-non-final state in the current transaction, so reading anything older than
-``latest_non_final`` for an in-transaction call would expose stale data and
-break causality between the caller and callee.
 
 Requirements
 ~~~~~~~~~~~~
 
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-call-others`
+#. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
-Creates new :term:`sub-VM` instance for contract execution. See :ref:`gvm-permissions` for permission inheritance details.
+Creates a :term:`sub-VM`. See :ref:`gvm-meta-property-derivation`.
 
-.. _gvm-def-post-message:
+A :term:`sub-VM` that ends in a :ref:`gvm-def-vm-error` normally ends its caller
+too. With *param* ``catch_vm_error`` set, the caller reads that error as the
+call's result instead. A fatal :ref:`gvm-def-vm-error` is never caught: the flag
+does not apply to it, and the caller ends regardless.
 
-``PostMessage`` Message
------------------------
+Before every call, :term:`GenVM` asks the :term:`host` whether to delegate the
+callee to another executor. A null answer preserves the local path, including
+:ref:`gvm-def-str-trie-value-vm-error-invalid-contract-major-mismatch`. A
+non-null answer executes the same derived :term:`sub-VM` in the selected
+executor. The call result and its contribution to the execution hash are the
+same kinds of observable output in either path. Routing cycles are permitted
+and remain bounded by :ref:`gvm-def-consts-value-top-limits-vm-recursion`.
+
+The calling convention is checked in the calling :term:`sub-VM`, before the
+callee is spawned. A violation is the caller's own malformed argument, so it is
+answered with ``Errno::Inval`` like the other argument checks and the caller can
+recover — unlike a top-level entry, where the same violation is the execution's
+result (:ref:`gvm-vm-startup-entry-validation`).
+
+.. _gvm-def-emit-internal-message:
+
+``EmitInternalMessage`` Message
+-------------------------------
 
 Posts message to GenLayer contract for later execution.
 
-When GenVM forwards this message it derives a :ref:`call_key <gvm-def-call-key>`
-from the ``method`` field of ``calldata`` and attaches it to the emitted
-message. The :ref:`call_key <gvm-def-call-key>` is the function-selector
+When GenVM forwards this message it derives :ref:`gvm-def-call-key` from the
+``method`` field of ``calldata`` and attaches it to the emitted message.
+:ref:`gvm-def-call-key` is the function-selector
 analog used to identify the target method.
 
 Payload
@@ -99,11 +139,14 @@ Payload
 .. code-block::
 
    {
-     "PostMessage": {
+     "EmitInternalMessage": {
        "address": Address,      // 20-byte target contract address
        "calldata": Calldata,    // Method call in calldata format
        "value": U256,           // Wei to transfer
-       "on": String             // "finalized" or "accepted"
+       "on": String,            // "finalized" or "decided"
+       "use_balance": Bool,     // optional (default false), see below
+       "fee_params": FeeParams, // optional (default absent), required iff use_balance
+       "descendants": Descendants // optional (default absent), see below
      }
    }
 
@@ -113,9 +156,170 @@ Requirements
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
+#. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
+#. ``descendants`` is absent unless ``use_balance`` is set
+#. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
-``DeployContract`` Message
---------------------------
+Allocation-funded fees
+~~~~~~~~~~~~~~~~~~~~~~
+
+For an allocation-funded internal message, ``declaredBudget`` is the metered
+primary reserve plus the budgets of the direct children in its emitted allocation
+subtree. The same amount is deducted from the matching allocation and the
+transaction's message-fee pool. Grandchild budgets are already contained within
+their direct parent's budget and are not added again. The primary reserve includes
+the consensus developer and DAO gross-up on its time-unit portion; the execution
+budget is not grossed up. This formula is identical for messages emitted on
+acceptance and finalization; the primary reserve already covers the child's
+configured lifecycle, including appeals
+
+.. _gvm-gl-call-balance-fees:
+
+Balance-funded fees
+~~~~~~~~~~~~~~~~~~~~
+
+By default an outgoing internal message's fee is drawn from the sender's
+prefunded message-fee pool and matched against the transaction's allocation
+tree. Setting ``use_balance`` (the chain's ``useBalance``) instead funds the fee
+from the **emitting contract's own balance**. ``fee_params`` carries the child
+transaction's fee configuration and mirrors the chain's
+``InternalMessageFeeParams``:
+
+.. code-block::
+
+   FeeParams {
+     "leader_time_units_allocation": U256,     // per-round leader time units
+     "validator_time_units_allocation": U256,  // per-round validator time units
+     "execution_budget_per_round": U256,      // unified budget per leader round
+     "rotations": [U256],                     // per-round rotations; non-empty.
+                                              // rotations[0] is the initial round,
+                                              // the rest are appeal rounds
+                                              // (appealRounds = len - 1)
+     "max_price_gen_per_time_unit": U256,     // GEN price cap; funding multiplier
+     "storage_fee_max_gas_price": U256,       // storage price cap (revert guard)
+     "receipt_fee_max_gas_price": U256        // receipt price cap (revert guard)
+   }
+
+``descendants`` configures the emitted child's descendant funding policy:
+
+.. code-block::
+
+   Descendants = Null | U256 | [Allocation]
+   InternalAllocation {
+     "parent_index": U256,
+     "recipient": Address,
+     "call_key": Bytes32,
+     "budget": U256,
+     "fee_params": FeeParams,
+     "on": String
+   }
+   ExternalAllocation {
+     "parent_index": U256,
+     "recipient": Address,
+     "call_key": Bytes32,
+     "budget": U256,
+     "fee_params": {
+       "gas_limit": U256,
+       "max_gas_price": U256
+     }
+   }
+
+Absent, null, zero and an empty list select Closed and emit no grant bytes. A
+positive integer selects Open with that descendant budget. A non-empty list
+selects Pinned; its descendant budget is the checked sum of root budgets.
+The list is flat and preserves authored order. A root's ``parent_index`` is
+the maximum U256 value; other indices must refer to an earlier Internal
+allocation. ``children`` is not a wire field. ``"decided"`` maps to acceptance-phase
+authorization and ``"finalized"`` to finalization-phase authorization
+
+These Closed spellings apply to balance-funded messages. On sender-funded
+messages, the field must be absent or null; a raw present zero or empty list is
+rejected with ``Inval``
+
+A Pinned grant obeys all of the following:
+
+#. Every node has a non-zero ``budget``
+#. The tree contains at most 24 nodes and has depth at most 24. An internal
+   node's encoded fee parameters are at most 1,024 bytes, which permits at most
+   22 ``rotations`` entries
+#. External allocations occur only at the root. Their ``gas_limit`` and
+   ``max_gas_price`` are non-zero, and their budget is a positive multiple of
+   ``gas_limit * max_gas_price``. They authorize only finalization-phase
+   emission
+#. Siblings have unique ``(message type, recipient, call_key)`` keys. The
+   ``on`` phase is not part of the key; the same key under different parents is
+   permitted
+#. For each internal node *i*, let *P_i* be its primary fee quote and *C_i* the
+   sum of its direct children's budgets. Its budget is at least
+   ``(P_i + C_i) * mult_i``. ``mult_i`` is the parent allocation's appeal-round
+   count plus 1 when ``on`` is ``"decided"``, and 1 otherwise. For a root, the
+   emitted child's appeal-round count is used
+
+Semantics:
+
+- The fee is metered from ``fee_params``. The child transaction's
+  ``declaredBudget`` is that primary reserve plus the descendant budget; the
+  contract balance is the only bound. The
+  consensus term is charged at the guest's ``max_price_gen_per_time_unit`` cap
+  (matching the chain's ``minMessagePrimaryFees``), not the node's live
+  ``genPerTimeUnit``, so the fee scales with the cap. The consensus developer and
+  DAO gross-up applies to this time-unit portion but not the execution budget
+- The message is excluded from allocation matching, so no matching node is
+  required (and none is consulted).
+- The contract must be able to cover ``value + declaredBudget`` from its balance;
+  otherwise the call fails with ``InsufficientBalance``.
+- Closed is fail-closed. Open and Pinned carry a canonical grant in the emitted
+  allocation subtree
+- A zero ``declaredBudget`` is rejected with
+  :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum`; this applies exactly
+  when the primary reserve plus descendant budget is zero
+
+``fee_params`` is validated before metering. The following are rejected with
+``Inval``:
+
+- ``use_balance`` without ``fee_params``, or ``fee_params`` without ``use_balance``.
+- Non-null ``descendants`` without ``use_balance``, malformed allocation shapes, and
+  internal allocation fee parameters that fail the checks below
+- Empty ``rotations`` (``appealRounds`` would underflow).
+- Exactly one of ``leader_time_units_allocation`` and
+  ``validator_time_units_allocation`` being zero. Both zero and both non-zero
+  are valid shapes; later metering still enforces configured timeout bounds
+- A zero ``max_price_gen_per_time_unit``, ``storage_fee_max_gas_price`` or
+  ``receipt_fee_max_gas_price`` (the chain reverts ``FeeValueMustBeNonZero`` at
+  reveal).
+- Out-of-bounds magnitudes: prices and budgets
+  (``max_price_gen_per_time_unit``, ``storage_fee_max_gas_price``,
+  ``receipt_fee_max_gas_price``, ``execution_budget_per_round``) must be below
+  2\ :sup:`96`; counts (``leader_time_units_allocation``,
+  ``validator_time_units_allocation``, each ``rotations`` entry) below
+  2\ :sup:`32`. These bounds keep the metered floor within ``U256``.
+
+Pinned node/depth limits, external-child placement and duplicate sibling keys use
+:ref:`gvm-def-str-trie-value-vm-error-fee-descendant-grant-tree`. Zero node
+budgets, arithmetic overflow and a failure of the internal-node budget
+inequality use
+:ref:`gvm-def-str-trie-value-vm-error-fee-descendant-grant-budget`. Invalid
+external allocation parameters use
+:ref:`gvm-def-str-trie-value-vm-error-fee-descendant-grant-external`.
+Validation completes before fee consumption, balance reservation or emission
+
+Metering additionally enforces node-configured bounds, surfaced as ``VMError``\ s:
+
+- :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` — for the emitted
+  child's own fee parameters, either a non-zero ``execution_budget_per_round``
+  below ``node.messageBudgetFloor`` (the chain's ``BudgetTooLow``), or — unless
+  both time-unit allocations are zero — a leader allocation outside
+  ``node.minProposeTimeout`` through
+  ``node.maxProposeTimeout`` or a validator allocation outside
+  ``node.minCommitTimeout`` through ``node.maxCommitTimeout``. Internal grant
+  nodes use the same local primary quote but skip the unavailable
+  transaction-pinned budget-floor admission check
+- :ref:`gvm-def-str-trie-value-vm-error-fee-too-many-rounds` — ``rotations``
+  implies more consensus rounds than the
+  node's validator table supports (on-chain ``MAX_ROUNDS``).
+
+``EmitInternalDeployMessage`` Message
+-------------------------------------
 
 Deploys new intelligent contract to blockchain.
 
@@ -125,12 +329,15 @@ Payload
 .. code-block::
 
    {
-     "DeployContract": {
+     "EmitInternalDeployMessage": {
        "calldata": Calldata,    // Constructor arguments in calldata format
        "code": Bytes,           // Contract bytecode
        "value": U256,           // Wei to transfer
-       "on": String,            // "finalized" or "accepted"
-       "salt_nonce": U256       // Salt for CREATE2-style deterministic addressing
+       "on": String,            // "finalized" or "decided"
+       "salt_nonce": U256,      // Salt for CREATE2-style deterministic addressing
+       "use_balance": Bool,     // optional (default false)
+       "fee_params": FeeParams, // optional (default absent), required iff use_balance
+       "descendants": Descendants // optional (default absent), see balance-funded fees
      }
    }
 
@@ -140,15 +347,21 @@ Requirements
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-send-messages`
 #. Sufficient contract balance for value transfer
+#. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
+#. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
 Supports CREATE2-style deployment with salt nonce for deterministic addressing.
+``use_balance`` / ``fee_params`` / ``descendants`` behave as for
+:ref:`gvm-gl-call-balance-fees`.
+
+.. _gvm-def-gl-call-run-nondet:
 
 ``RunNondet`` Message
 ---------------------
 
-Executes non-deterministic code with leader/validator consensus.
-Creates :ref:`gvm-def-non-det-mode` VM instance with restricted permissions.
-See :doc:`../../03-vm/04-determinism-mode-switching` and :ref:`gvm-permissions` for more details.
+Executes non-deterministic code with leader/validator consensus. See
+:doc:`../../03-vm/04-determinism-mode-switching` and
+:ref:`gvm-meta-property-derivation`.
 
 Payload
 ~~~~~~~
@@ -157,8 +370,11 @@ Payload
 
    {
      "RunNondet": {
-       "data_leader": Bytes,      // Code/data for leader execution
-       "data_validator": Bytes    // Code/data for validator execution
+       "data_leader": Bytes,       // Code/data for leader execution
+       "data_validator": Bytes,    // Code/data for validator execution
+       "runner": String,           // optional (default "contract"): runner to execute
+       "custom_runners": [String], // optional (default absent): custom runners to grant
+       "catch_vm_error": Bool      // optional (default false): take a VM error as the result
      }
    }
 
@@ -167,10 +383,25 @@ Requirements
 
 #. :ref:`gvm-perm-spawn-nondet`
 
+Semantics
+~~~~~~~~~
+
+Creates a non-deterministic :term:`sub-VM`. Derivation of its meta-properties,
+including the *param* ``runner`` and *param* ``custom_runners`` semantics, is
+specified in :ref:`gvm-meta-property-derivation`.
+
+A :term:`sub-VM` that ends in a :ref:`gvm-def-vm-error` normally ends its caller
+too. With *param* ``catch_vm_error`` set, the caller reads that error as the
+call's result instead. A fatal :ref:`gvm-def-vm-error` is never caught: the flag
+does not apply to it, and the caller ends regardless.
+
+.. _gvm-def-gl-call-sandbox:
+
 ``Sandbox`` Message
 -------------------
 
-Executes code in sandboxed environment with restricted permissions.
+Executes code in a sandboxed environment. See
+:ref:`gvm-meta-property-derivation`.
 
 Payload
 ~~~~~~~
@@ -179,23 +410,42 @@ Payload
 
    {
      "Sandbox": {
-       "data": Bytes,                  // Code/data for sandbox execution
-       "allow_write_storage": Bool,    // Whether to allow storage writes
-       "allow_send_messages": Bool,    // Whether to allow sending messages
-       "allow_register_runners": Bool  // Whether to allow registering runners
+       "data": Bytes,                   // Code/data for sandbox execution
+       "runner": String,                // runner to execute; becomes the child's "contract"
+       "allow_write_storage": Bool,     // Whether to allow storage writes
+       "allow_send_messages": Bool,     // Whether to allow sending messages
+       "custom_runners": [String],      // optional (default absent): custom runners to grant
+       "changes_on_error": String        // fate of the child's changes on a non-return
      }
    }
 
-Creates isolated VM instance. See :ref:`gvm-permissions` for permission inheritance details.
+Semantics
+~~~~~~~~~
+
+Creates a :term:`sub-VM` at the caller's determinism level. Derivation of its
+meta-properties, including the *param* ``runner`` and *param*
+``custom_runners`` semantics, is specified in
+:ref:`gvm-meta-property-derivation`.
+
+The caller receives the sandbox result (:ref:`gvm-def-subvm-result-encoding`)
+and may handle both :ref:`gvm-def-vm-error` and :ref:`gvm-def-user-error`.
+If the sandbox terminates with :ref:`gvm-def-fatal-vm-error`, the caller
+terminates with the same fatal VM error instead.
+
+*param* ``changes_on_error`` says what becomes of the storage writes and
+emissions of a sandbox that does not :ref:`gvm-def-return`. ``"inherit"`` is
+its only accepted value: the caller keeps them, exactly as it keeps the ones it
+made itself. Any other value is a malformed message
+
+.. _gvm-def-gl-call-register-runner:
 
 ``RegisterRunner`` Message
 --------------------------
 
 Registers a runner archive at runtime, making it available under the
 ``custom:<hash>`` runner id. The ``<hash>`` is the SHA3-256 of the supplied
-``code`` encoded with :doc:`../../04-contract-interface/06-gvm32`, and the parsed
-archive is charged against the memory limit. Returns the resulting runner id
-(calldata-encoded string).
+``code`` encoded with :doc:`../../04-contract-interface/06-gvm32`.
+See :ref:`gvm-def-custom-runner-visibility`.
 
 Payload
 ~~~~~~~
@@ -204,7 +454,7 @@ Payload
 
    {
      "RegisterRunner": {
-       "code": Bytes              // runner archive (ustar/zip or commented text)
+       "code": Bytes              // runner archive (zip, raw wasm or commented text)
      }
    }
 
@@ -212,13 +462,41 @@ Requirements
 ~~~~~~~~~~~~
 
 #. :ref:`gvm-perm-deterministic`
-#. :ref:`gvm-perm-register-runners`
+
+Semantics
+~~~~~~~~~
+
+``RegisterRunner`` performs a load action for ``custom:<hash>`` in the calling
+:term:`sub-VM`. If the runner is already loaded, registration is a free no-op
+that returns the same runner id. Otherwise
+:ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost` plus ``code`` length is charged against
+the caller's RAM budget before the archive is parsed; on success, the runner
+also incurs its :ref:`metadata charge <gvm-def-runner-load-charge>` and enters
+the caller's loaded set
+
+The outcomes are:
+
+#. Missing :ref:`gvm-def-det-mode`: the call fails with ``Forbidden``. Nothing
+   is charged and no state changes.
+#. Insufficient memory for the base cost and ``code`` length: the :term:`sub-VM`
+   exits with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`. Nothing is
+   charged and the runner is not registered
+#. Insufficient memory for metadata while loading: the :term:`sub-VM` exits
+   with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` and the runner is
+   not registered
+#. Malformed archive: the call fails with a deterministic invalid-contract
+   :ref:`gvm-def-vm-error`. The charge is retained until the :term:`sub-VM`
+   finishes, and the runner is not in the loaded set.
+#. Success: the runner id is returned and the runner is in the caller's loaded
+   set.
+
+.. _gvm-def-gl-call-map-file:
 
 ``MapFile`` Message
 -------------------
 
 Maps a file from a runner into the VM filesystem at runtime, behaving the same as
-the ``MapFile`` runner action (see :doc:`../../../python-sdk` runners). If
+the ``MapFile`` runner action (see the Python SDK runners documentation). If
 ``path_in_runner`` ends with ``/`` the whole directory subtree is mapped.
 
 Payload
@@ -234,13 +512,12 @@ Payload
      }
    }
 
-Mapping into ``/vm/`` is forbidden. Resolving a ``chain:`` runner reads another
-contract's storage, so this requires :ref:`gvm-perm-read-storage`.
+Mapping into ``/vm/`` is forbidden. See
+:ref:`gvm-def-custom-runner-visibility` for ``custom:`` runner resolution.
 
-Requirements
-~~~~~~~~~~~~
-
-#. :ref:`gvm-perm-read-storage`
+Resolving *param* ``runner`` performs a load action for that runner. The load is
+charged on first load in this :term:`sub-VM` and is free if the runner is
+already loaded.
 
 ``WebRender`` Message
 ---------------------
@@ -256,7 +533,7 @@ Payload
      "WebRender": {
        "mode": String,            // "text", "html", or "screenshot"
        "url": String,             // URL to render
-       "wait_after_loaded": String // Wait duration, e.g. "5s" or "500ms"
+       "post_load_wait": String // Wait duration, e.g. "5s" or "500ms"
      }
    }
 
@@ -435,7 +712,23 @@ Payload
      "Return": Calldata           // Return value in calldata format
    }
 
-Causes VM to exit with ``ContractReturn``. Encodes return value using :ref:`Calldata Encoded <gvm-def-calldata-encoding>` format.
+Causes VM to exit with ``ContractReturn``. Encodes return value using
+:ref:`gvm-def-calldata-encoding` format.
+
+.. _gvm-def-gl-call-observable-discretion:
+
+Implementation Discretion
+-------------------------
+
+Where a message below says an implementation may ignore it, that discretion
+covers only the side effect the message asks for — writing a log line,
+recording a timing. The **value returned to the guest** is never at an
+implementation's discretion: it is fixed by this specification for the mode the
+call is made in, and such a call MUST NOT fail. A message whose result differs
+between two conformant implementations would make
+:ref:`gvm-def-det-mode` execution diverge across validators; widening or
+narrowing what a message returns therefore requires a new
+:ref:`GenVM version <gvm-def-contract-version>`.
 
 ``Trace.Message`` Message
 -------------------------
@@ -459,21 +752,25 @@ Payload
 
 .. note::
 
-   Implementations may choose to ignore this message and return an error.
+   Whether anything is logged is implementation-defined (see
+   :ref:`gvm-def-gl-call-observable-discretion`); the call returns no value and
+   always succeeds.
 
 Requirements
 ~~~~~~~~~~~~
 
 #. GenVM version 0.1.10 or higher
-#. :term:`GenVM` implementation is allowed ignore this message
 
 .. _tracing-runtime-microsec:
 
-``Trace.RuntimeMicroSec`` Sub-Message
--------------------------------------
+``Trace.RuntimeMicroseconds`` Sub-Message
+-----------------------------------------
 
 In :ref:`gvm-def-non-det-mode` returns the elapsed execution time in microseconds since VM start.
-In :ref:`gvm-def-det-mode`, it returns ``0`` — exposing real elapsed time there would break determinism. The sole exception is the ``unsafe-tracing`` debug level (see the executor "Debug modes" section), which returns real elapsed time even in deterministic mode; that level is for local debugging only and must never be used on a consensus network.
+In :ref:`gvm-def-det-mode`, it returns ``0`` — exposing real elapsed time there
+would break determinism. An implementation MAY support a debug mode that
+returns real elapsed time instead; such a mode is for local debugging only and
+MUST NOT be used on a consensus network.
 
 Payload
 ~~~~~~~
@@ -481,18 +778,20 @@ Payload
 .. code-block::
 
    {
-     "Trace": "RuntimeMicroSec"
+     "Trace": "RuntimeMicroseconds"
    }
 
 .. note::
 
-   Implementations may choose to ignore this message and return an error.
+   The returned value is not at an implementation's discretion — in
+   :ref:`gvm-def-det-mode` it is exactly ``0`` unless an implementation's debug
+   mode permits real elapsed time, and the call never fails (see
+   :ref:`gvm-def-gl-call-observable-discretion`).
 
 Requirements
 ~~~~~~~~~~~~
 
 #. GenVM version 0.1.10 or higher
-#. :term:`GenVM` implementation is allowed ignore this message
 
 ``Yield`` Message
 -----------------
@@ -510,13 +809,14 @@ Payload
 
 .. note::
 
-   Implementations may choose to ignore this message.
+   Whether the implementation actually yields anything is implementation-defined
+   (see :ref:`gvm-def-gl-call-observable-discretion`); the call returns no value
+   and always succeeds.
 
 Requirements
 ~~~~~~~~~~~~
 
 #. GenVM version 0.3.0 or higher
-#. :term:`GenVM` implementation is allowed ignore this message
 
 .. _get-timestamp:
 
@@ -537,7 +837,7 @@ Payload
      "GetTimestamp": null
    }
 
-Returns the timestamp encoded as a :ref:`Calldata Encoded <gvm-def-calldata-encoding>` number.
+Returns the timestamp encoded as a :ref:`gvm-def-calldata-encoding` number.
 
 Requirements
 ~~~~~~~~~~~~

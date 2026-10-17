@@ -33,38 +33,9 @@ This is a monorepo for GenVM. It is composed of the following sub-projects:
 
 ## Install
 
-Required tools:
-
-- git
-- ruby (3.\*)
-- ninja
-- rustup (cargo + rustc)
-- (for runners) nix and an x86_64 system
-
-All of them (except git, for obvious reasons) are provided by the default shell in
-`build-scripts/devenv/flake.nix` (for direnv add `use flake ./build-scripts/devenv`).
-
-### Debug build
-
-1. `cd $PROJECT_DIR`
-2. `git submodule update --init --recursive --depth 1`
-3. `source env.sh` (not needed if you used the flake)
-4. `git third-party update --all`
-5. `genvm-tool configure` — scrapes and configures all targets (similar to CMake).
-   Outside the dev shell use `support/tools/genvm-tool/genvm-tool configure`.
-6. `ninja -C build` (or `ninja -C build all/bin`) — output is at `build/out` as a
-   root (`bin`, `share`)
-7. Get `genvm-runners.zip` from [GitHub][genvm-manager]
-8. Merge `build/out` and `genvm-runners.zip`
-
-### Production build
-
-> WARNING: currently supported only on x86_64 Linux hosts.
-
-1. `cd $PROJECT_DIR`
-2. `nix build -o build/out-universal -v -L .#all-for-platform.universal`
-3. `nix build -o build/out-amd64-linux -v -L .#all-for-platform.amd64-linux`
-4. Merge outputs
+See [docs/contributing/howto/setup.md](./docs/contributing/howto/setup.md) and
+[docs/contributing/howto/build.md](./docs/contributing/howto/building/build.md) for
+environment setup and debug/production build instructions.
 
 ## Usage
 
