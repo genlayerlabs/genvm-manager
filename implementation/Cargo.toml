@@ -69,7 +69,7 @@ unicode-width = "0.2.1"
 url = { version = "2.5.4", features = ["serde"] }
 # kept in sync with the version reqwest depends on, to avoid a duplicate hickory
 # in the tree
-hickory-resolver = { version = "0.25", features = ["tokio"] }
+hickory-resolver = { version = "0.26", features = ["tokio"] }
 
 [dependencies.chrono]
 default-features = false
