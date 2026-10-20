@@ -31,7 +31,7 @@ genvm_modules_interfaces = { path = "../executors/v0.3.x/executor/crates/modules
 anyhow = { version = "1.0.98", features = [] }
 async-trait = "0.1.88"
 axum = { version = "0.8", features = ["ws"] }
-base64 = "0.22.1"
+base64 = "0.23.0"
 bytes = "1.10.1"
 clap = { version = "4.5.35", features = ["derive"] }
 crossbeam = "0.8.4"
@@ -43,14 +43,14 @@ image = { version = "0.25.8", default-features = false, features = [
     "webp",
 ] }
 libc = "0.2"
-num-bigint = { version = "0.4.6", features = ["serde"] }
+num-bigint = { version = "0.5.0", features = ["serde"] }
 num-integer = { version = "0.1.46" }
 num-rational = { version = "0.4.2" }
 num-traits = { version = "0.2.19" }
 papaya = "0.2.3"
 png = { version = "0.18.1", default-features = false }
-primitive-types = { version = "0.13", features = ["impl-serde"] }
-rand = { version = "0.9.1", features = ["std_rng"] }
+primitive-types = { version = "0.14", features = ["impl-serde"] }
+rand = { version = "0.10.0", features = ["std_rng"] }
 regex = "1.11.1"
 
 ring = { version = "0.17.14", features = ["std"] }
@@ -60,10 +60,10 @@ serde_derive = "1.0.219"
 serde_json = { version = "1.0.140", features = ["preserve_order"] }
 serde_with = { version = "3.12.0", features = ["base64", "macros"] }
 serde_yaml = "0.9.34"
-sha3 = "0.10"
-signal-hook = "0.3.17"
+sha3 = "0.12"
+signal-hook = "0.4.0"
 
-tokio-tungstenite = "0.26.2"
+tokio-tungstenite = "0.30.0"
 unicode-normalization = "0.1.20"
 unicode-width = "0.2.1"
 url = { version = "2.5.4", features = ["serde"] }
@@ -79,7 +79,7 @@ version = "0.4.41"
 [dependencies.reqwest]
 default-features = false
 features = ["cookies", "gzip", "rustls-tls", "charset", "http2", "json"]
-version = "0.12.15"
+version = "0.13.0"
 
 [dependencies.tokio]
 default-features = false
@@ -106,16 +106,16 @@ features = [
     "error-send",
     "userdata-wrappers",
 ]
-version = "0.10.3"
+version = "0.12.0"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 
 [build-dependencies]
 cc = "1"
 
 [dev-dependencies]
-afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
+afl = { version = "0.18.0", features = ["no_cfg_fuzzing"] }
 
 [profile.dev]
 incremental = false
