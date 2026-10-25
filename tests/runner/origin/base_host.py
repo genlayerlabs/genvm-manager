@@ -1,6 +1,5 @@
 import abc
 import asyncio
-import base64
 import collections.abc
 import contextlib
 import json
@@ -543,10 +542,7 @@ class ConsumedResult:
 			return cls.internal_error('no_result')
 		empty = False
 		try:
-			# The socket sends bytes, the deprecated http shim sends base64.
-			as_bytes = (
-				base64.b64decode(raw, validate=True) if isinstance(raw, str) else bytes(raw)
-			)
+			as_bytes = bytes(raw)
 			empty = not as_bytes
 			if not empty:
 				result_kind = host_fns.ResultCode(as_bytes[0])

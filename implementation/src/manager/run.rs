@@ -257,33 +257,6 @@ pub struct SingleGenVMContextDone {
     pub exit_code: Option<i64>,
 }
 
-impl serde::Serialize for SingleGenVMContextDone {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use base64::Engine;
-        use serde::ser::SerializeStruct;
-
-        let mut state = serializer.serialize_struct("SingleGenVMContextDone", 8)?;
-        state.serialize_field("finished_at", &self.finished_at.timestamp_millis())?;
-        state.serialize_field("stdout", &self.stdout)?;
-        state.serialize_field("stderr", &self.stderr)?;
-        state.serialize_field("genvm_log", &self.genvm_log)?;
-        state.serialize_field("metrics", &self.metrics)?;
-        state.serialize_field(
-            "consumed_result",
-            &self
-                .consumed_result
-                .as_ref()
-                .map(|v| base64::engine::general_purpose::STANDARD.encode(v)),
-        )?;
-        state.serialize_field("version_major", &self.version_major)?;
-        state.serialize_field("version_minor", &self.version_minor)?;
-        state.end()
-    }
-}
-
 struct SingleGenVMContext {
     id: GenVMId,
     host_genvm_id: Option<String>,
@@ -2053,11 +2026,6 @@ enum Reservation {
     Reserved(sync::DArc<SingleGenVMContext>),
 }
 
-pub struct StartResult {
-    pub genvm_id: GenVMId,
-    pub reserved: bool,
-}
-
 async fn wait_for_process_stop(
     exec_ctx: &SingleGenVMContext,
     caller_stream: Option<&ManagerHostStreamState>,
@@ -2112,11 +2080,7 @@ impl Ctx {
         Reservation::Reserved(exec_ctx)
     }
 
-    pub fn start(
-        &self,
-        full_ctx: sync::DArc<crate::manager::AppContext>,
-        req: Request,
-    ) -> StartResult {
+    pub fn start(&self, full_ctx: sync::DArc<crate::manager::AppContext>, req: Request) -> GenVMId {
         let reservation = self.reserve_execution(req.host_genvm_id.as_deref(), |genvm_id| {
             let events = tokio::sync::watch::Sender::new(Snapshot::Queued {
                 genvm_id,
@@ -2157,22 +2121,14 @@ impl Ctx {
         });
 
         let exec_ctx = match reservation {
-            Reservation::Existing(genvm_id) => {
-                return StartResult {
-                    genvm_id,
-                    reserved: false,
-                };
-            }
+            Reservation::Existing(genvm_id) => return genvm_id,
             Reservation::Reserved(exec_ctx) => exec_ctx,
         };
         let genvm_id = exec_ctx.id;
 
         tokio::spawn(supervise_genvm(full_ctx, exec_ctx, req));
 
-        StartResult {
-            genvm_id,
-            reserved: true,
-        }
+        genvm_id
     }
 
     async fn start_nested(

@@ -9,7 +9,7 @@ use axum::{
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    routing::{get, post},
     Json, Router,
 };
 
@@ -346,14 +346,6 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
             ),
         )
         .route(
-            "/genvm/run",
-            post(
-                |State(ctx): State<sync::DArc<AppContext>>, body: Bytes| async move {
-                    unwrap_all_anyhow(handlers::handle_genvm_run(ctx, &body).await)
-                },
-            ),
-        )
-        .route(
             "/contract/detect-version",
             post(
                 |State(ctx): State<sync::DArc<AppContext>>,
@@ -406,39 +398,6 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                         Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(handlers::handle_set_permits(ctx, body).await)
-                },
-            ),
-        )
-        .route(
-            "/genvm/{genvm_id}",
-            delete(
-                |State(ctx): State<sync::DArc<AppContext>>,
-                 Path(raw_id): Path<String>,
-                 query: std::result::Result<Query<handlers::ShutdownRequest>, QueryRejection>| async move {
-                    let Some(genvm_id) = parse_genvm_id(&raw_id) else {
-                        return not_found().await;
-                    };
-                    let query = match parse_query(query) {
-                        Ok(query) => query,
-                        Err(error) => return bad_request(error),
-                    };
-                    unwrap_all_anyhow(handlers::handle_genvm_shutdown(ctx, genvm_id, query).await)
-                },
-            )
-            .get(
-                |State(ctx): State<sync::DArc<AppContext>>,
-                 Path(raw_id): Path<String>,
-                 query: std::result::Result<Query<handlers::StatusRequest>, QueryRejection>| async move {
-                    let Some(genvm_id) = parse_genvm_id(&raw_id) else {
-                        return not_found().await;
-                    };
-                    let query = match parse_query(query) {
-                        Ok(query) => query,
-                        Err(error) => return bad_request(error),
-                    };
-                    unwrap_all_anyhow(
-                        handlers::handle_genvm_status(ctx, genvm_id, query).await,
-                    )
                 },
             ),
         )

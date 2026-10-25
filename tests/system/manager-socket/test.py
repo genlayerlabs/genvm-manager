@@ -439,7 +439,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 		permits = body['permits']
 		assert permits['current'] == permits['max'], permits
 		assert permits['max'] % permits['per_sync_run'] == 0, permits
-		genvm_ids = []
+		runs: list[tuple[ManagerWsClient, int]] = []
 		host_tasks = []
 		cancel_host = asyncio.Event()
 		async with contextlib.AsyncExitStack() as stack:
@@ -457,7 +457,7 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					req['run']['code'] = (self.case.shared.root_dir / BUSY_CONTRACT).read_bytes()
 					req['run']['deadline'] = '120s'
 					await client.send(Methods.RUN, 1, req)
-					genvm_ids.append((await _read_reply(client, Methods.RUN, 1))['genvm_id'])
+					runs.append((client, (await _read_reply(client, Methods.RUN, 1))['genvm_id']))
 					await _wait_event(client, 'started')
 				status, body = await _http_json('GET', manager.uri, '/status')
 				assert status == 200, body
@@ -466,8 +466,9 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 			finally:
 				cancel_host.set()
 				try:
-					for genvm_id in genvm_ids:
-						await _http_json('DELETE', manager.uri, f'/genvm/{genvm_id}')
+					for client, genvm_id in runs:
+						await client.send(Methods.CANCEL, 2, {'cancel': {'genvm_id': genvm_id}})
+						await _wait_terminal(client)
 				finally:
 					for task in host_tasks:
 						task.cancel()
@@ -904,116 +905,6 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 					)
 					await _read_error(client, 111, Errors.UNKNOWN_ID)
 
-	async def _http_retry_preserves_socket_failure(self):
-		async with await self._manager('http-retry-socket-failure') as manager:
-			async with ManagerWsClient(manager.uri) as client:
-				boot_id = await _read_hello(client)
-				req = _run_request(self.case.shared.root_dir, manager.work_dir / 'unused.sock')
-				req['run'].update(
-					host_genvm_id='socket-failure', host_hello_data=[b'', b'injected']
-				)
-				await client.send(Methods.RUN, 1, req)
-				genvm_id = (await _read_reply(client, Methods.RUN, 1))['genvm_id']
-				variant, failure = await _wait_terminal(client, timeout=5)
-				assert variant == 'failed_to_start', failure
-				status, body = await _http_json(
-					'POST', manager.uri, '/genvm/run', data=gvm_calldata.encode(req['run'])
-				)
-				assert status == 500, body
-				await client.send(
-					Methods.ATTACH, 2, {'attach': {'boot_id': boot_id, 'genvm_id': genvm_id}}
-				)
-				snapshot = (await _read_reply(client, Methods.ATTACH, 2))['snapshot']
-				assert snapshot['failed_to_start'] == failure, snapshot
-
-	async def _http_and_socket_same_fixture(self):
-		async with await self._manager('http-socket-parity') as manager:
-			http_res = await self._run_fixture_over_http(manager, 'http')
-			socket_res = await self._run_fixture_over_socket(manager, 'socket')
-			assert http_res['stdout'] == socket_res.stdout
-			assert http_res['stderr'] == socket_res.stderr
-			assert http_res['result_kind'] == socket_res.result_kind
-			assert http_res['result_data'] == socket_res.result_data
-
-	async def _http_failure_releases_token(self):
-		async with await self._manager('http-failure-cleanup') as manager:
-			req = _run_request(self.case.shared.root_dir, manager.work_dir / 'unused.sock')
-			req['run'].update(
-				host_genvm_id='http-failure', host_hello_data=[b'', b'injected']
-			)
-			status, body = await _http_json(
-				'POST', manager.uri, '/genvm/run', data=gvm_calldata.encode(req['run'])
-			)
-			assert status == 500, body
-			await self._run_fixture_over_http(
-				manager, 'corrected', host_genvm_id='http-failure'
-			)
-
-	async def _run_fixture_over_http(
-		self, manager: _ManagerFixture, name: str, *, host_genvm_id: str | None = None
-	):
-		ctx = _TestContext(self.case.shared.logger)
-		host, host_path = _make_mock_host(manager, name, ctx)
-		cancel_host = asyncio.Event()
-		with host as mock_host:
-			host_task = asyncio.create_task(
-				base_host.host_loop(mock_host, cancel_host, ctx=ctx)
-			)
-			req = _run_request(self.case.shared.root_dir, host_path)['run']
-			req['host_genvm_id'] = host_genvm_id
-			async with aiohttp.request(
-				'POST',
-				f'{manager.uri}/genvm/run',
-				data=gvm_calldata.encode(req),
-			) as resp:
-				body = await resp.json()
-				assert resp.status == 200, body
-				genvm_id = body['id']
-			with contextlib.suppress(BaseException):
-				await host_task
-			for _ in range(30):
-				status, body = await _http_json('GET', manager.uri, f'/genvm/{genvm_id}')
-				assert status == 200
-				if body['status'] is not None:
-					result = body['status']
-					break
-				await asyncio.sleep(0.2)
-			else:
-				raise AssertionError('HTTP shim result did not become available')
-		assert isinstance(result['consumed_result'], str)
-		consumed = base_host.ConsumedResult.decode(result.get('consumed_result'))
-		return {
-			'stdout': result['stdout'],
-			'stderr': result['stderr'],
-			'result_kind': consumed.result_kind,
-			'result_data': consumed.result_data,
-		}
-
-	async def _run_fixture_over_socket(self, manager: _ManagerFixture, name: str):
-		ctx = _TestContext(self.case.shared.logger)
-		host, host_path = _make_mock_host(manager, name, ctx)
-		with host as mock_host:
-			async with base_host.ManagerClient(
-				manager.uri,
-				connect_timeout=ctx.get_manager_connect_timeout(),
-			) as manager_client:
-				return await base_host.run_genvm(
-					mock_host,
-					manager_uri=manager.uri,
-					manager_client=manager_client,
-					ctx=ctx,
-					is_sync=True,
-					message=FAKE_MESSAGE,
-					host_data='{"node_address":"test","tx_id":"test"}',
-					host='unix://' + str(host_path),
-					code=(self.case.shared.root_dir / HELLO_WORLD).read_bytes(),
-					calldata=gvm_calldata.encode({}),
-					timeout=30,
-					debug_mode='unsafe',
-					request_extra={'no_modules': True},
-					bucket_totals=base_host.default_bucket_totals(3),
-				)
-
 	async def _unix_parent_and_stale_socket(self):
 		async with await self._manager('unix-stale', use_unix_listener=True) as manager:
 			assert manager.socket_path is not None
@@ -1135,21 +1026,6 @@ def collect(
 			'retention-drain',
 			'_client_never_returns_ttl_drains',
 			{'execution_retention': '500ms'},
-			None,
-			genvm.ManagerService,
-		),
-		('http-parity', '_http_and_socket_same_fixture', {}, None, genvm.ManagerService),
-		(
-			'http-failure-cleanup',
-			'_http_failure_releases_token',
-			{},
-			None,
-			genvm.ManagerService,
-		),
-		(
-			'http-retry-socket-failure',
-			'_http_retry_preserves_socket_failure',
-			{},
 			None,
 			genvm.ManagerService,
 		),

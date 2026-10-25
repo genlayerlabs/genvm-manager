@@ -4,12 +4,7 @@ Manager API
 The GenVM Manager exposes an HTTP server for administration (status, modules,
 permits, log level, manifest, LLM checks, error descriptions, contract version
 detection) and a framed socket for driving executions
-(:doc:`manager-socket`).
-
-The execution endpoints below -- ``POST /genvm/run``, ``GET /genvm/{id}``,
-``DELETE /genvm/{id}`` -- are **deprecated**: they remain for one release
-train as a thin adapter over the same execution core the socket uses, then
-get removed. New host integrations MUST use the socket protocol.
+(:doc:`manager-socket`), which is the only way to drive one.
 
 Two endpoints below are tightly coupled with the runner manifest (the per-line
 available-runners listing, generated from ``runners-versions.json``, published on

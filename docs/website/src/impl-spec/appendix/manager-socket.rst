@@ -1,10 +1,10 @@
 Manager Socket Protocol
 =======================
 
-The manager exposes a long-lived WebSocket for driving executions. It replaces
-the HTTP run flow (``POST /genvm/run`` + poll + ``DELETE``), which remains
-available for one release train as a deprecated adapter over the same core
-(see :doc:`manager-api`). The admin HTTP endpoints are unaffected.
+The manager exposes a long-lived WebSocket for driving executions; it is the
+only way to start or cancel one and to subscribe to its events. Execution
+summaries in ``/status``, retained artifacts and the admin endpoints are HTTP
+routes listed in :doc:`manager-api`.
 
 Clients connect by upgrading ``GET /ws`` on the manager's HTTP listener, so the
 protocol is reachable wherever that listener is: over the unix socket when the
@@ -89,8 +89,7 @@ restart from 1 with the process, so the durable identity of a run is the pair
 ``run``
 -------
 
-Request payload: the same logical structure as the deprecated
-``POST /genvm/run`` body (``GenvmRunRequest`` in :doc:`manager-api`), plus:
+Request payload: ``GenvmRunRequest`` in :doc:`manager-api`, plus:
 
 - ``host_genvm_id`` (string, optional) -- client correlation token, echoed in
   events for this run. Also an idempotency key: a ``run`` repeated with the
