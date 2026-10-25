@@ -1,6 +1,5 @@
 use anyhow::Result;
 use axum::Json;
-use genlayer_calldata as calldata;
 use genvm_common::*;
 use std::collections::{BTreeMap, HashMap};
 use std::str::FromStr;
@@ -69,38 +68,6 @@ pub async fn handle_module_restart(
     Ok(Json(serde_json::json!({"result": "module_restarted"})))
 }
 
-pub async fn handle_genvm_run(
-    ctx: sync::DArc<AppContext>,
-    data: &[u8],
-) -> Result<Json<serde_json::Value>> {
-    let res: super::run::Request = calldata::decode_obj(data)?;
-
-    let run_ctx = ctx.gep(|x| &x.run_ctx);
-    let start = run_ctx.start(ctx, res);
-    let id = start.genvm_id;
-    let (snapshot, mut events) = run_ctx.attach(run_ctx.boot_id(), id)?;
-
-    let start_event = match snapshot {
-        run::Snapshot::Event(event) => event,
-        run::Snapshot::Queued { .. } => loop {
-            events.changed().await?;
-            if let run::Snapshot::Event(event) = events.borrow_and_update().clone() {
-                break event;
-            }
-        },
-    };
-
-    if let run::Event::FailedToStart { error, .. } = start_event {
-        if start.reserved {
-            // The caller never learns the id of a newly reserved failure
-            run_ctx.ack(id);
-        }
-        anyhow::bail!(error);
-    }
-
-    Ok(Json(serde_json::json!({"result": "started", "id": id})))
-}
-
 pub async fn handle_contract_detect_version(
     ctx: sync::DArc<AppContext>,
     contract_code: bytes::Bytes,
@@ -162,74 +129,6 @@ pub async fn handle_set_permits(
     Ok(Json(
         serde_json::json!({"result": "permits_set", "permits": new_permits}),
     ))
-}
-
-#[derive(Debug, serde::Deserialize)]
-pub struct ShutdownRequest {}
-
-pub async fn handle_genvm_shutdown(
-    ctx: sync::DArc<AppContext>,
-    genvm_id: run::GenVMId,
-    _req: ShutdownRequest,
-) -> Result<Json<serde_json::Value>> {
-    let result = async {
-        ctx.run_ctx.cancel(genvm_id).await?;
-        let _ = ctx.run_ctx.await_terminal(genvm_id).await?;
-        anyhow::Ok(())
-    }
-    .await;
-
-    match result {
-        Ok(()) => Ok(Json(serde_json::json!({
-            "result": "shutdown_completed",
-            "genvm_id": genvm_id
-        }))),
-        Err(e) => Ok(Json(serde_json::json!({
-            "error": format!("{}", e),
-            "genvm_id": genvm_id
-        }))),
-    }
-}
-
-const STATUS_WAIT_CAP: std::time::Duration = std::time::Duration::from_secs(120);
-
-#[derive(Debug, serde::Deserialize)]
-pub struct StatusRequest {
-    #[serde(default)]
-    pub wait: Option<String>,
-}
-
-fn parse_status_wait(req: &StatusRequest) -> Result<Option<std::time::Duration>> {
-    req.wait
-        .as_deref()
-        .map(run::ManagerDuration::try_from)
-        .transpose()
-        .map(|wait| {
-            wait.map(run::ManagerDuration::to_std)
-                .map(|wait| wait.min(STATUS_WAIT_CAP))
-        })
-}
-
-pub async fn handle_genvm_status(
-    ctx: sync::DArc<AppContext>,
-    genvm_id: run::GenVMId,
-    req: StatusRequest,
-) -> Result<Json<serde_json::Value>> {
-    if let Some(wait) = parse_status_wait(&req)? {
-        if ctx.run_ctx.status(genvm_id).is_none() {
-            let _ = tokio::time::timeout(wait, ctx.run_ctx.await_terminal(genvm_id)).await;
-        }
-    }
-
-    let status = ctx.run_ctx.status(genvm_id);
-    if status.is_some() {
-        ctx.run_ctx.ack(genvm_id);
-    }
-
-    Ok(Json(serde_json::json!({
-        "genvm_id": genvm_id,
-        "status": status
-    })))
 }
 
 #[derive(Debug, serde::Deserialize)]

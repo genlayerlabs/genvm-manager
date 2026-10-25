@@ -210,7 +210,7 @@ fn reserve_execution_is_atomic_for_shared_host_id() {
 }
 
 #[test]
-fn ack_removes_retained_result_but_status_is_not_destructive() {
+fn ack_removes_retained_result() {
     let ctx = test_ctx("5m", 2);
     let genvm_id = GenVMId(1);
     let host_genvm_id = "host-run-1";
