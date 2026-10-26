@@ -1,10 +1,13 @@
 import asyncio
 import collections.abc
+import contextlib
 import enum
+import functools
 import io
 import os
 import re
 import shlex
+import signal
 import sys
 import time
 from dataclasses import dataclass
@@ -13,6 +16,47 @@ from pathlib import Path
 from genvm_tool.tests import SharedContext
 
 _ANSI_ESCAPE_RE = re.compile(rb'\x1b\[[0-9;]*[A-Za-z]')
+
+# A command gets its own session, so a signal aimed at ours never reaches it: it
+# has to be killed by pid, and it outlives us if we die before doing that
+_KILL_GRACE = 5.0
+
+
+def _kill(pid: int, *, group: bool) -> None:
+	"""
+	Kill ``pid``, politely first.
+
+	Runs in the watchdog, which is not the parent and can reap nothing, so the
+	exit is waited for by looking rather than by `wait`.
+	"""
+	send = os.killpg if group else os.kill
+	for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
+		try:
+			send(pid, sig)
+		except OSError:
+			return
+		deadline = time.monotonic() + _KILL_GRACE
+		while time.monotonic() < deadline:
+			time.sleep(0.1)
+			try:
+				send(pid, 0)
+			except OSError:
+				return
+
+
+def kill_session_cleanup(pid: int) -> functools.partial:
+	"""
+	The picklable cleanup the watchdog runs for a command left behind.
+
+	The whole group goes, not the session leader alone: what leaks is the fleet
+	the command spawned.
+	"""
+	return functools.partial(_kill, pid, group=True)
+
+
+def kill_process_cleanup(pid: int) -> functools.partial:
+	"""Same, for a process sharing our own group, which must survive this."""
+	return functools.partial(_kill, pid, group=False)
 
 
 @dataclass
@@ -144,7 +188,19 @@ class Command:
 			os.close(stderr_writer)
 
 		ctx.logger.debug('process started', pid=process.pid, id=uid)
-		res = await process.wait()
+		# Registered for as long as it runs: a hard death of the tool leaves the
+		# watchdog to kill it, and a cancellation is handled right here
+		token = ctx.watchdog.register(kill_session_cleanup(process.pid))
+		try:
+			res = await process.wait()
+		except asyncio.CancelledError:
+			# Ask it to stop and leave the cleanup registered: whatever survives
+			# this is killed when the watchdog is stopped, or when it notices we
+			# are gone
+			with contextlib.suppress(OSError):
+				os.killpg(process.pid, signal.SIGINT)
+			raise
+		ctx.watchdog.unregister(token)
 		end = time.monotonic()
 		ctx.logger.debug('process ended', pid=process.pid, exit_code=res, id=uid)
 

@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use anyhow::{Context, Result};
+use genlayer_calldata as calldata;
 use genvm_common::*;
 
 use crate::{common, scripting};
@@ -9,7 +10,7 @@ type WebSubContext = crate::manager::execution_context::WebSubContext;
 
 pub(crate) mod config;
 mod ctx;
-mod domains;
+pub(crate) mod domains;
 mod handler;
 
 #[derive(serde::Serialize, Debug, Default)]
@@ -147,3 +148,6 @@ pub fn entrypoint(args: CliArgs) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

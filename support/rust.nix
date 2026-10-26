@@ -5,6 +5,7 @@
   withLinters ? false,
   withZig ? true,
   withWasi ? false,
+  withCross ? true,
   ...
 }@args:
 let
@@ -28,7 +29,7 @@ let
 
   is-macos = systemAsGenVM == "arm64-macos";
 
-  manifest-src = deps."rust-channel-stable-2026-03-05";
+  manifest-src = deps."rust-channel-stable-2026-09-03";
 
   manifest = builtins.fromTOML (builtins.readFile manifest-src);
 
@@ -44,12 +45,17 @@ let
     (simpleComponent manifest.pkg.cargo.target.${systemAsRust})
     (simpleComponent manifest.pkg.rustc.target.${systemAsRust})
     (simpleComponent manifest.pkg.rust-std.target.${systemAsRust})
-
-    # cross compilation
-    (simpleComponent manifest.pkg.rust-std.target.x86_64-unknown-linux-musl)
-    (simpleComponent manifest.pkg.rust-std.target.aarch64-unknown-linux-musl)
-    (simpleComponent manifest.pkg.rust-std.target.aarch64-apple-darwin)
   ]
+  ++ (
+    if !withCross then
+      [ ]
+    else
+      [
+        (simpleComponent manifest.pkg.rust-std.target.x86_64-unknown-linux-musl)
+        (simpleComponent manifest.pkg.rust-std.target.aarch64-unknown-linux-musl)
+        (simpleComponent manifest.pkg.rust-std.target.aarch64-apple-darwin)
+      ]
+  )
   ++ (
     if !withLinters then
       [ ]
@@ -88,9 +94,8 @@ pkgs.stdenvNoCC.mkDerivation rec {
   buildInputs = [
     pkgs.zlib
     pkgs.bash
-
-    zig
   ]
+  ++ pkgs.lib.optionals withZig [ zig ]
   ++ pkgs.lib.optionals pkgs.stdenv.hostPlatform.isLinux [
     pkgs.glibc
     pkgs.gcc.cc.lib
@@ -140,18 +145,18 @@ pkgs.stdenvNoCC.mkDerivation rec {
 
   installPhase = ''
     mkdir -p $out
-    for i in $(find . -type d -maxdepth 2 -mindepth 1) ;
+    # Each tarball is `<pkg>/<component>/...`; only the components belong in $out.
+    for i in $(find . -type d -maxdepth 2 -mindepth 2) ;
     do
     cp -r "$i/." $out/.
     done
 
     ls -l "$out"
-
-    cp ${rust-objcopy} $out/bin/rust-objcopy
   ''
   + (
     if withZig then
       ''
+        cp ${rust-objcopy} $out/bin/rust-objcopy
         wrapProgram $out/bin/cargo \
         --set CC_x86_64_unknown_linux_musl zig-cc-amd64-linux \
         --set CC_x86_64_unknown_linux_gnu zig-cc-amd64-linux-gnu \

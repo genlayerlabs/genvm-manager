@@ -20,7 +20,7 @@ executor installs no signal handlers and has no graceful-shutdown path, so it
 **can be killed at any moment**, between any two operations, without notice.
 
 Implications
------------
+------------
 
 - The executor keeps no durable state of its own. All persistent state lives in
   the host and is written only as part of delivering a result. A killed executor
@@ -41,9 +41,10 @@ Output **capture** is a derived property with three states:
 - ``disabled`` — nothing is captured into the result: the executor's
   stdout/stderr go to ``/dev/null`` and its logs are *forwarded to the manager's
   own log* (so they are not lost, just not returned in the response).
-- ``bounded`` — captured into the result, but bounded: at most the 128 most
-  recent log entries are kept (oldest dropped), and stdout/stderr are truncated
-  to a 4 MiB tail each.
+- ``bounded`` — captured into the result, but bounded: at most 128 log entries
+  are kept, evicted by audience first and by age second (see
+  :doc:`../appendix/log-record`), and stdout/stderr are truncated to a 4 MiB
+  tail each.
 - ``unbounded`` — captured into the result in full.
 
 When capture is ``disabled`` the result's log/stdout/stderr fields are empty
@@ -73,7 +74,7 @@ The levels are ordered; each *adds* to the previous one:
      - The ``:latest`` / ``:test`` runner ids may be resolved. **Unsafe across machines**: different nodes may resolve different code and diverge consensus, though a single node stays deterministic.
    * - ``unsafe-tracing``
      - ``unbounded``
-     - Real wall-clock time is exposed to the contract in deterministic mode (``RuntimeMicroSec`` returns actual elapsed time instead of ``0``; non-deterministic mode already returns real time regardless of debug level). **Can break determinism on a single machine.** Local debugging only.
+     - Real wall-clock time is exposed to the contract in deterministic mode (``RuntimeMicroseconds`` returns actual elapsed time instead of ``0``; non-deterministic mode already returns real time regardless of debug level). **Can break determinism on a single machine.** Local debugging only.
 
 Only ``unsafe`` and ``unsafe-tracing`` can affect determinism (across machines
 and on a single machine respectively); ``safe`` and ``safe-unbounded`` are fully

@@ -6,4 +6,5 @@ Appendix
 
    host-loop
    manager-api
-   available-runners
+   manager-socket
+   log-record

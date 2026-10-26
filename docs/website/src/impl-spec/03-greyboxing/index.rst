@@ -4,8 +4,6 @@ Greyboxing Documentation
 .. toctree::
    :maxdepth: 2
 
-   01-lua-api
-
 It refers to the technique of preventing attacks on LLMs. Implementing it is a responsibility of every node,
 as bundled presets can be attacked.
 
@@ -22,6 +20,18 @@ Retrieving Data from :term:`Host`
 
 Host can provide additional data to the :term:`Module` to help it make decisions,
 only transaction id and node address are required, as they are required for signing requests.
+
+Token Charges
+-------------
+
+The default Lua policy charges 1/4 time unit per 1,000 provider-reported total
+tokens, using the host's ``gas_data.genPerTimeUnit`` price. A model can override
+the rate with ``meta.time_units_per_1k_tokens``, a non-negative rational string
+such as ``"1/2"`` or ``"0"``. Invalid rates fail before calling that provider
+
+The charge is ``ceil(total_tokens * genPerTimeUnit * rate / 1000)`` in GEN-wei,
+computed with exact rational arithmetic. Missing or zero ``genPerTimeUnit``
+keeps the charge at zero
 
 Current Built-in Filters
 ------------------------
@@ -162,10 +172,3 @@ of the LLM module config and MUST contain the documented ``#{...}`` placeholders
 
 Missing placeholders are a config error and surface as :ref:`gvm-def-internal-error`
 at module startup.
-
-Generated Reference
--------------------
-
-The auto-generated signature reference for the Lua tables exposed to scripts
-(``lib.rs.*``, ``llm.rs.*``, ``web.rs.*``, the ``Prompt`` shape, etc.) lives in
-:doc:`01-lua-api`.

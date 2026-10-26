@@ -34,7 +34,7 @@ Interface Definition
    static const uint32_t error_io = 5
 
    static const uint32_t error_forbidden = 6
-   static const uint32_t error_inbalance = 7
+   static const uint32_t error_insufficient_balance = 7
 
    __attribute__((import_module("genlayer_sdk"))) uint32_t
    storage_read(char const* slot, uint32_t index, char* buf, uint32_t buf_len);
