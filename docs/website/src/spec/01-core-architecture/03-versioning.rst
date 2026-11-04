@@ -22,7 +22,9 @@ Minor
 A minor release adds new features and is backwards-compatible.
 
 #. The :ref:`gvm-def-execution-hash` of a transaction may change.
-#. New :term:`Runner`\s may be added; existing runners MUST NOT be removed.
+#. New :term:`Runner`\s may be added, gated by an
+   :ref:`availability time <gvm-def-runner-availability>`; existing runners
+   MUST NOT be removed.
 #. New ``gl_call`` methods and new parameters of existing methods may be added.
 #. Old code continues to work, unless it deliberately tried to be
    future-incompatible (e.g. by observing additions permitted by rule 3).

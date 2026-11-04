@@ -134,3 +134,6 @@ Changed
    :term:`Storage Slot` length instead of by ``u32`` overflow, so a slot's final
    octet is addressable; every access naming it was previously refused. See
    :doc:`02-execution-environment/03-wasi_genlayer_sdk/01-functions`
+#. A packaged runner may carry an availability time; a transaction timestamped
+   before it resolves the runner as malformed, as if it were not shipped. See
+   :ref:`gvm-def-runner-availability`

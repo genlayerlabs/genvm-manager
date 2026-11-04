@@ -53,6 +53,20 @@ A ``chain:`` id is code, but its resolution is an ordinary
 A resolution that finds no code, or code that is not a valid :term:`runner`,
 fails like any other malformed runner rather than falling back to another view.
 
+.. _gvm-def-runner-availability:
+
+Packaged Runner Availability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An executor ships a fixed set of packaged runners. Each may carry an
+availability time:
+
+#. A ``<human-readable-id>:<hash>`` the executor does not ship fails as a
+   malformed runner
+#. One whose availability time is later than the transaction timestamp fails
+   the same way, so executors that ship it agree with those that do not until
+   that time
+
 Hash Format
 ~~~~~~~~~~~
 
