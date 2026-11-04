@@ -172,6 +172,8 @@
             python312Packages.pytest-cov
             python312Packages.pytest-xdist
           ];
+          # The scanner `genvm-tool audit` drives
+          packages-audit = [ pkgs.osv-scanner ];
           shell-hook-base = ''
             export CARGO_LD_LIBRARY_PATH="${toString pkgs.xz.out}/lib:${toString pkgs.zlib.out}/lib:${pkgs.stdenv.cc.cc.lib}/lib:${toString pkgs.glibc}/lib"
             export LLVM_PROFILE_FILE=/dev/null
@@ -776,6 +778,7 @@
               ++ packages-py-test
               ++ packages-rust
               ++ packages-gen-docs
+              ++ packages-audit
               ++ [ pkgs.nodejs ]
               # pre-commit + the hook tools, so `pre-commit run` works in-shell.
               # (No rustfmt/cargo here — cargo-fmt is a custom hook — so the
@@ -786,6 +789,10 @@
             # The final fragment adds the stdin-aware outgoing-ref guard chained
             # by pre-commit's supported `.legacy` hook mechanism.
             shellHook = shell-hook-base + pre-commit-check.shellHook + install-manager-push-refs;
+          };
+          devShells.audit = pkgs.mkShell {
+            packages = packages-0 ++ packages-audit;
+            shellHook = shell-hook-base;
           };
           devShells.check-qemu = pkgs.mkShell {
             packages = packages-0 ++ [ pkgs.qemu ];

@@ -87,11 +87,7 @@ let
 
     dontFixup = true;
   };
-  lua-src = builtins.fetchGit {
-    url = "https://github.com/lua/lua.git";
-    rev = "75ea9ccbea7c4886f30da147fb67b693b2624c26";
-    shallow = true;
-  };
+  lua-src = deps."lua-5.3.6";
 in
 rec {
   inherit pkgs deps lua-src;
