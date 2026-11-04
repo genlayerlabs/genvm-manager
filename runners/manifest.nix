@@ -23,14 +23,15 @@ let
   ) api.list;
   compatible = api.forExecutor executorVersion;
 
-  latest = builtins.listToAttrs (
-    builtins.map (x: {
-      name = x.id;
-      value = hash32 x;
-    }) own
-  );
+  latest = builtins.foldl' (
+    acc: x:
+    if acc ? ${x.id} then
+      throw "runner ${x.id} ships 2 current runners for ${executorVersion}: ${acc.${x.id}} and ${hash32 x}"
+    else
+      acc // { ${x.id} = hash32 x; }
+  ) { } own;
 
-  timestampRe = "[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})";
+  timestampRe = "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])";
 
   meta =
     x:
@@ -65,9 +66,12 @@ builtins.mapAttrs (
     unlisted = builtins.filter (m: m.supersedes != null && !(vs ? ${m.supersedes})) (
       builtins.attrValues vs
     );
+    selfSuperseding = builtins.filter (h: vs.${h}.supersedes == h) (builtins.attrNames vs);
   in
   if !(latest ? ${id}) then
     throw "runner ${id} ships no current runner for ${executorVersion}"
+  else if selfSuperseding != [ ] then
+    throw "runner ${id}:${builtins.head selfSuperseding} supersedes itself"
   else if unlisted != [ ] then
     throw "runner ${id} supersedes unlisted ${(builtins.head unlisted).supersedes}"
   else
