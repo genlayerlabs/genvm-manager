@@ -13,6 +13,7 @@
     "GEMINIKEY",
     "ATOMAKEY",
     "LSQLITE3_SRC",
+    "SQLITE_SRC",
     "LUA_INCLUDE"
   ],
   "tags": {

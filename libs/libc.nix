@@ -6,7 +6,7 @@
   ...
 }:
 let
-  musl-src = deps."musl-1.2.5";
+  musl-src = deps."musl-1.2.6";
   aarch64-compiler-rt = deps."compiler-rt-aarch64-21.1.5-1";
 in
 pkgs.stdenvNoCC.mkDerivation {
