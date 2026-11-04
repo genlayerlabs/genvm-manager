@@ -21,6 +21,7 @@ from pathlib import Path
 import shtab
 
 from . import (
+	cmd_audit,
 	cmd_build_manifest,
 	cmd_codegen,
 	cmd_configure,
@@ -38,6 +39,7 @@ TOPLEVEL = [
 	cmd_build_manifest,
 	cmd_codegen,
 	cmd_docs,
+	cmd_audit,
 	cmd_fuzz_corpus,
 ]
 GROUPS = [git]

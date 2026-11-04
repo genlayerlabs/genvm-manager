@@ -78,13 +78,16 @@ def _load_registry(file: str) -> dict[str, list[str]]:
 
 	ret: dict[str, list[str]] = {}
 
+	# Frozen legacy lines ship `{id: [hash]}`, the others `{id: {versions: {hash: ...}}}`.
 	for k, v in contents.items():
 		if isinstance(v, str):
 			ret[k] = [v]
-		elif isinstance(v, list):
-			if not all([isinstance(x, str) for x in v]):
-				raise RuntimeError(f'registry value must be str | list[str] for {k}')
+		elif isinstance(v, dict) and isinstance(v.get('versions'), dict):
+			ret[k] = list(v['versions'])
+		elif isinstance(v, list) and all(isinstance(x, str) for x in v):
 			ret[k] = v
+		else:
+			raise RuntimeError(f'unexpected registry value for {k}')
 
 	for v in ret.values():
 		v.sort()

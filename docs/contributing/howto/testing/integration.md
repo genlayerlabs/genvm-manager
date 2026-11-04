@@ -85,7 +85,7 @@ because `reroute_to` — what points a case at its own line's executor — is
 honored only from `safe` up. Below `unsafe` a contract must name its runner by
 hash instead of `:test`. Write `@RUNNER_LATEST_<line>_<runner>@` for that hash,
 for example `py-genlayer:@RUNNER_LATEST_v0.3_py-genlayer@`: the harness replaces
-it with the uid in `build/out/executor/<version>/data/latest.json` before the
+it with the runner's `latest` in `build/out/executor/<version>/data/all.json` before the
 code reaches an executor, so a runner change needs no test edit. A literal uid
 still works and goes stale
 

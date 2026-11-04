@@ -210,7 +210,53 @@
       "manager-arm64-macos",
       "executor-arm64-macos"
     ],
-    "fetcher": "fetchzip"
+    "fetcher": "fetchzip",
+    "cpes": [
+      "cpe:2.3:a:gnu:libiconv:1.18:*:*:*:*:*:*:*"
+    ]
+  },
+  {
+    "name": "lua-5.3.6",
+    "nix_der_name": "source",
+    "original_url": "https://github.com/lua/lua/archive/75ea9ccbea7c4886f30da147fb67b693b2624c26.tar.gz",
+    "alternative_urls": [],
+    "hash": "sha256-5pIGFXxDh7/kYZjz4PNP6icAULit6ufqig+IvaLxYCU=",
+    "must_preload": false,
+    "needed-for": [
+      "x86_64-linux",
+      "aarch64-linux",
+      "aarch64-macos",
+      "manager-amd64-linux",
+      "executor-amd64-linux",
+      "manager-arm64-linux",
+      "executor-arm64-linux",
+      "manager-arm64-macos",
+      "executor-arm64-macos"
+    ],
+    "fetcher": "fetchzip",
+    "cpes": [
+      "cpe:2.3:a:lua:lua:5.3.6:*:*:*:*:*:*:*"
+    ]
+  },
+  {
+    "name": "musl-1.2.5",
+    "nix_der_name": "source",
+    "original_url": "https://github.com/kraj/musl/archive/0784374d561435f7c787a555aeab8ede699ed298.tar.gz",
+    "alternative_urls": [],
+    "hash": "sha256-xNKVsRfEK7TkSiYrxPho9ap8MWGix7nVHLecGW0D7kE=",
+    "must_preload": false,
+    "needed-for": [
+      "x86_64-linux",
+      "aarch64-linux",
+      "manager-amd64-linux",
+      "executor-amd64-linux",
+      "manager-arm64-linux",
+      "executor-arm64-linux"
+    ],
+    "fetcher": "fetchzip",
+    "cpes": [
+      "cpe:2.3:a:musl-libc:musl:1.2.5:*:*:*:*:*:*:*"
+    ]
   },
   {
     "name": "rust-channel-stable-2025-03-18",
@@ -289,6 +335,9 @@
     "fetcher": "fetchzip",
     "fetcher_args": {
       "extension": ".zip"
-    }
+    },
+    "cpes": [
+      "cpe:2.3:a:sqlite:sqlite:3.24.0:*:*:*:*:*:*:*"
+    ]
   }
 ]

@@ -91,7 +91,7 @@ routed to its own line's executor and silently runs another one).
 Lower it to `safe` when you need to be sure a divergence is the contract's and
 not a debug facility's — `safe` refuses both wall-clock exposure and the `:test`
 alias. Once `:test` no longer resolves the contract must name its runner by
-hash, read out of `build/out/executor/<version>/data/latest.json`, e.g.
+hash, the runner's `latest` in `build/out/executor/<version>/data/all.json`, e.g.
 `# { "Depends": "py-genlayer:9b8kjy…" }`. That hash changes whenever the SDK
 does, which is exactly why in-tree cases keep the alias and only probes give it
 up.
