@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 
 # `@RUNNER_LATEST_<line>_<runner>@`, where `<line>` is `v0.3` or `v0.3.x` and
-# `<runner>` is a key of that line's `latest.json`, e.g. `py-genlayer`.
+# `<runner>` is a runner id that line ships, e.g. `py-genlayer`.
 TOKEN = re.compile(rb'@RUNNER_LATEST_(v\d+\.\d+(?:\.x)?)_([A-Za-z0-9_.-]+)@')
 
 
@@ -21,16 +21,21 @@ def latest(root_dir: Path, line: str) -> dict[str, str]:
 	if version is None:
 		known = ', '.join(sorted(versions)) or '<none>'
 		raise KeyError(f'unknown executor line {line!r}, built lines are {known}')
-	path = root_dir / 'build' / 'out' / 'executor' / version / 'data' / 'latest.json'
+	data_dir = root_dir / 'build' / 'out' / 'executor' / version / 'data'
+	path = data_dir / 'all.json'
 	if not path.exists():
 		raise FileNotFoundError(
 			f'{path} is absent: build the runners before running this test'
 		)
-	return json.loads(path.read_text())
+	registry = json.loads(path.read_text())
+	# Frozen legacy lines list bare hashes and keep `latest` in its own file.
+	if any(isinstance(entry, list) for entry in registry.values()):
+		return json.loads((data_dir / 'latest.json').read_text())
+	return {runner: entry['latest'] for runner, entry in registry.items()}
 
 
 def uid(root_dir: Path, line: str, runner: str) -> str:
-	"""Uid of one runner, as `latest.json` has it after the last build."""
+	"""Uid of one runner, as the last build recorded it as latest."""
 	known = latest(root_dir, line)
 	if runner not in known:
 		raise KeyError(

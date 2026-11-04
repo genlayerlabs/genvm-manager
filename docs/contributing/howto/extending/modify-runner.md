@@ -15,3 +15,18 @@ Paths are relative to `executors/v0.3.x/`, the line that owns runner sources
 
 Step 4 in detail, and why a hash is never restored by hand:
 [committing/runners.md](../committing/runners.md)
+
+## Gating a Runner
+
+A pin in `current.nix` may set 2 optional attributes, which end up in the
+line's `data/all.json`:
+
+1. `available-after = "2026-12-01T00:00:00Z";` — transactions timestamped
+   earlier resolve the runner as malformed, the same as on an executor that does
+   not ship it ([spec](../../../website/src/spec/02-execution-environment/04-runners.rst)).
+   Pick a time by which every validator runs the new executor. A runner new to
+   a released minor must carry one ([versioning](../../../website/src/spec/01-core-architecture/03-versioning.rst))
+2. `supersedes = "<gvm32 hash>";` — the hash of the same id this one replaces.
+   The old hash must still be shipped, or evaluation fails
+
+`hash-updater.py` rewrites only `hash`, so both survive a re-pin

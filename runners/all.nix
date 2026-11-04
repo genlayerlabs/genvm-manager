@@ -1,6 +1,6 @@
 # The accumulated list of every runner across every active executor line, each
 # tagged with the `version` of the line it came from:
-#   [ { id; hash; uid; derivation; version; } ]
+#   [ { id; hash; uid; derivation; available-after; supersedes; version; } ]
 {
   host-system ? "x86_64-linux",
   deps ? null,

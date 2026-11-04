@@ -13,6 +13,7 @@ has no wrapper
 | `codegen` | render a data JSON into rust/python/rst/go |
 | `build-manifest` | write the manager's `data/manifest.yaml` |
 | `docs` | render the `docs/contributing/` indexes; `--write` splices them into `AGENTS.md` (`CLAUDE.md` is a symlink to it), `--check` fails when that copy is stale |
+| `audit` | list published advisories against tracked lockfiles (osv-scanner), vendored trees by pinned commit (OSV) and the `cpes` of `libs/deps/dependency-urls.json` entries (NVD); `--markdown` writes a report, `--sarif` feeds the nightly `audit / nightly` upload to Security → Code scanning |
 | `fuzz-corpus` | seed the fuzz corpora from a finished run ([testing/fuzzing.md](testing/fuzzing.md)) |
 | `git` | `ls`, `list-repo`, `create-branches`, `check-for-push` across the manager and every executor submodule ([submodules.md](committing/submodules.md)) |
 

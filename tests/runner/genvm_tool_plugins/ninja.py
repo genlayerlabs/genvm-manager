@@ -110,19 +110,17 @@ def is_subpath(path: Path, base: Path) -> bool:
 	return not relpath(path, base).startswith('..')
 
 
-# Nix expressions that evaluate a checkout's runner derivations to their
-# {id: hash} (latest.json) and {id: [hash]} (all.json) maps.
-def runner_manifest_expr(version: str, kind: str) -> str:
+def runner_manifest_expr(version: str) -> str:
 	"""
-	Nix expr for one executor's `latest`/`all` runner manifest.
+	Nix expr for one executor's ``all.json`` runner manifest.
 
-	The umbrella's ./runners owns this: `all` is every runner compatible up to
-	`version`, `latest` is that executor's own current runners. Evaluated with
-	cwd at the manager root (the nix_eval rule cds into ``$wd``).
+	The umbrella's ./runners owns this: every runner compatible up to
+	`version`, each id naming that executor's own current runner as `latest`.
+	Evaluated with cwd at the manager root (the nix_eval rule cds into ``$wd``).
 	"""
 	return (
 		f'(import ./runners/manifest.nix '
-		f'{{ executorVersion = "{version}"; host-system = builtins.currentSystem; }}).{kind}'
+		f'{{ executorVersion = "{version}"; host-system = builtins.currentSystem; }})'
 	)
 
 
@@ -500,23 +498,22 @@ class LineContext:
 
 	def nix_manifests(self) -> None:
 		"""
-		Derive this line's `latest`/`all` runner manifests via the nix machinery.
+		Derive this line's ``all.json`` runner manifest via the nix machinery.
 
-		Manifests are derived by the umbrella machinery (which imports every active
-		line's runners), so both the line's and the umbrella's nix inputs matter.
+		It is derived by the umbrella machinery (which imports every active line's
+		runners), so both the line's and the umbrella's nix inputs matter.
 		Requires the `nix_eval` rule.
 		"""
 		runners_nix_inputs = glob(self.exec_root / 'runners', '**/*.nix') + glob(
 			self.source_dir / 'runners', '**/*.nix'
 		)
-		for kind in ('latest', 'all'):
-			out = f'{self.out_exec}/data/{kind}.json'
-			edge = self.n.build('nix_eval', out)
-			edge.var('expr', runner_manifest_expr(self.real, kind))
-			edge.var('wd', self.source_dir)
-			edge.add_implicit_dependency(runners_nix_inputs)
-			edge.finish()
-			self.data_phony.add_dependency(out)
+		out = f'{self.out_exec}/data/all.json'
+		edge = self.n.build('nix_eval', out)
+		edge.var('expr', runner_manifest_expr(self.real))
+		edge.var('wd', self.source_dir)
+		edge.add_implicit_dependency(runners_nix_inputs)
+		edge.finish()
+		self.data_phony.add_dependency(out)
 
 	def install_tree(self) -> None:
 		"""`cp` this line's install tree into `out_exec` and register its binary."""

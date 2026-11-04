@@ -382,13 +382,14 @@ def _load_registry(file: str | Path) -> dict[str, list[str]]:
 
 	ret: dict[str, list[str]] = {}
 
+	# Frozen legacy lines ship `{id: [hash]}`, the others `{id: {versions: {hash: ...}}}`.
 	for k, v in sorted(contents.items()):
-		if isinstance(v, str):
-			ret[k] = [v]
-		elif isinstance(v, list):
-			if not all([isinstance(x, str) for x in v]):
-				raise RuntimeError(f'registry value must be str | list[str] for {k}')
+		if isinstance(v, dict) and isinstance(v.get('versions'), dict):
+			ret[k] = list(v['versions'])
+		elif isinstance(v, list) and all(isinstance(x, str) for x in v):
 			ret[k] = v
+		else:
+			raise RuntimeError(f'unexpected registry value for {k}')
 
 	for v in ret.values():
 		v.sort()
@@ -551,7 +552,7 @@ def process_executor_version(executor_version: str):
 for executor_version in all_executor_versions:
 	process_executor_version(executor_version)
 
-# Verify installed runners (present, correct hashes, latest ⊆ all) and, when
+# Verify installed runners (well-formed registry, present, correct hashes) and, when
 # requested, precompile them. This is delegated to the manager's `check-install`
 # subcommand, which fans out to each active executor's own `check` command
 # instead of the executor being precompiled inline above.
