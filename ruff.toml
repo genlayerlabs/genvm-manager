@@ -1,6 +1,6 @@
 indent-width = 2
 
-exclude = ["executors/**", "libs/unhardcoded-engine"]
+exclude = ["executors/**", "libs/unhardcoded-engine", "**/*.md"]
 
 [format]
 indent-style = "tab"
@@ -12,6 +12,7 @@ skip-magic-trailing-comma = false
 
 [lint]
 ignore = ["E741"]
+select = ["E4", "E7", "E9", "F"] # the defaults before ruff 0.17
 
 [lint.per-file-ignores]
 # contract assets: the v0.2 sdk is used through a star import
