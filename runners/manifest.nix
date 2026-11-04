@@ -18,7 +18,9 @@ let
 
   hash32 = x: builtins.head (builtins.tail (builtins.match "([^:]+):(.*)" x.uid));
 
-  own = builtins.filter (runner: runner.version == executorVersion) api.list;
+  own = builtins.filter (
+    runner: runner.version == executorVersion && !(runner.archived or false)
+  ) api.list;
   compatible = api.forExecutor executorVersion;
 
   latest = builtins.listToAttrs (
