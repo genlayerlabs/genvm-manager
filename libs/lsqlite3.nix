@@ -7,6 +7,7 @@
 }:
 let
   lsqlite3-src = deps."lsqlite3-0.9.6";
+  sqlite-src = deps."sqlite-amalgamation-3.54.1";
 
   isMacos = name-target == "arm64-macos";
 in
@@ -27,6 +28,8 @@ pkgs.stdenvNoCC.mkDerivation {
 
     export SOURCE_DATE_EPOCH=1609459200
 
+    # The amalgamation replaces the older SQLite bundled with lsqlite3
+    cp -f ${sqlite-src}/sqlite3.c ${sqlite-src}/sqlite3.h .
     zig-cc-${name-target} ${if isMacos then "-g0" else ""} -O2 -fPIC -DSQLITE_CORE -I. -fdebug-prefix-map=${toString zig}=/zig -no-canonical-prefixes -c sqlite3.c -o sqlite3.o
     zig-cc-${name-target} ${if isMacos then "-g0" else ""} -O2 -fPIC -I${lua-src} -I. -fdebug-prefix-map=${toString zig}=/zig -no-canonical-prefixes -c lsqlite3.c -o lsqlite3.o
 

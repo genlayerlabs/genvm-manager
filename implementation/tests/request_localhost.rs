@@ -12,6 +12,7 @@ async fn serve_once(body: &'static [u8]) -> std::net::SocketAddr {
 
     tokio::spawn(async move {
         let (mut client, _) = server.accept().await.unwrap();
+        common::tests::read_request_head(&mut client).await;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
             body.len()
@@ -31,6 +32,7 @@ async fn serve_redirect(location: &'static str) -> std::net::SocketAddr {
 
     tokio::spawn(async move {
         let (mut client, _) = server.accept().await.unwrap();
+        common::tests::read_request_head(&mut client).await;
         let response =
             format!("HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\n\r\n");
         client.write_all(response.as_bytes()).await.unwrap();

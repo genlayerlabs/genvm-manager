@@ -63,13 +63,11 @@ serde_yaml = "0.9.34"
 sha3 = "0.10"
 signal-hook = "0.3.17"
 
+hickory-resolver = { version = "0.26", features = ["tokio"] }
 tokio-tungstenite = "0.26.2"
 unicode-normalization = "0.1.20"
 unicode-width = "0.2.1"
 url = { version = "2.5.4", features = ["serde"] }
-# kept in sync with the version reqwest depends on, to avoid a duplicate hickory
-# in the tree
-hickory-resolver = { version = "0.25", features = ["tokio"] }
 
 [dependencies.chrono]
 default-features = false

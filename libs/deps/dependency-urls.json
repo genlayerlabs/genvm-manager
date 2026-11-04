@@ -239,11 +239,11 @@
     ]
   },
   {
-    "name": "musl-1.2.5",
+    "name": "musl-1.2.6",
     "nix_der_name": "source",
-    "original_url": "https://github.com/kraj/musl/archive/0784374d561435f7c787a555aeab8ede699ed298.tar.gz",
+    "original_url": "https://github.com/kraj/musl/archive/9fa28ece75d8a2191de7c5bb53bed224c5947417.tar.gz",
     "alternative_urls": [],
-    "hash": "sha256-xNKVsRfEK7TkSiYrxPho9ap8MWGix7nVHLecGW0D7kE=",
+    "hash": "sha256-vcI36q0+leXQBuGms1Uf0IF6U4KLGmW3Yz2t7cpNw5k=",
     "must_preload": false,
     "needed-for": [
       "x86_64-linux",
@@ -255,7 +255,7 @@
     ],
     "fetcher": "fetchzip",
     "cpes": [
-      "cpe:2.3:a:musl-libc:musl:1.2.5:*:*:*:*:*:*:*"
+      "cpe:2.3:a:musl-libc:musl:1.2.6:*:*:*:*:*:*:*"
     ]
   },
   {
@@ -335,9 +335,24 @@
     "fetcher": "fetchzip",
     "fetcher_args": {
       "extension": ".zip"
+    }
+  },
+  {
+    "name": "sqlite-amalgamation-3.54.1",
+    "nix_der_name": "source",
+    "original_url": "https://www.sqlite.org/2026/sqlite-amalgamation-3540100.zip",
+    "alternative_urls": [],
+    "hash": "sha256-NFLUmOWa5iXvBsM98QW3nw/PulG9H3iI6V9vMnpcBK4=",
+    "must_preload": false,
+    "needed-for": [
+      "lsqlite3"
+    ],
+    "fetcher": "fetchzip",
+    "fetcher_args": {
+      "extension": ".zip"
     },
     "cpes": [
-      "cpe:2.3:a:sqlite:sqlite:3.24.0:*:*:*:*:*:*:*"
+      "cpe:2.3:a:sqlite:sqlite:3.54.1:*:*:*:*:*:*:*"
     ]
   }
 ]

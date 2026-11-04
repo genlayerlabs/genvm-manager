@@ -813,8 +813,11 @@ impl FilteringResolver {
         // look up A and AAAA so "happy eyeballs" works, matching reqwest's own
         // hickory integration
         builder.options_mut().ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
+        let inner = builder
+            .build()
+            .map_err(|e| anyhow::anyhow!("building hickory resolver: {e}"))?;
         Ok(Self {
-            inner: Arc::new(builder.build()),
+            inner: Arc::new(inner),
         })
     }
 }
@@ -1265,6 +1268,18 @@ pub mod tests {
             };
             base_conf.setup_logging(std::io::stdout()).unwrap();
         });
+    }
+
+    /// Consumes a request head, as a server must before answering: hyper fails
+    /// a request whose response arrives before the request is written
+    pub async fn read_request_head(client: &mut tokio::net::TcpStream) {
+        use tokio::io::AsyncReadExt as _;
+
+        let mut head = Vec::new();
+        let mut byte = [0u8; 1];
+        while !head.ends_with(b"\r\n\r\n") && client.read(&mut byte).await.unwrap() == 1 {
+            head.push(byte[0]);
+        }
     }
 
     pub fn create_test_client() -> reqwest::Client {

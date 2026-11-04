@@ -32,6 +32,7 @@ async fn serve(head: &'static str, body: &'static [u8]) -> std::net::SocketAddr 
 
     tokio::spawn(async move {
         while let Ok((mut client, _)) = server.accept().await {
+            common::tests::read_request_head(&mut client).await;
             let response = format!("{head}Content-Length: {}\r\n\r\n", body.len());
             client.write_all(response.as_bytes()).await.unwrap();
             client.write_all(body).await.unwrap();

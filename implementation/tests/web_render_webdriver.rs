@@ -29,6 +29,7 @@ async fn serve_webdriver(body: &'static [u8]) -> std::net::SocketAddr {
 
     tokio::spawn(async move {
         let (mut client, _) = server.accept().await.unwrap();
+        common::tests::read_request_head(&mut client).await;
         let response = format!(
             "HTTP/1.1 200 OK\r\nresulting-status: 200\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n",
             body.len()
