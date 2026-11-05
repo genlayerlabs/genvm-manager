@@ -21,12 +21,27 @@ Step 4 in detail, and why a hash is never restored by hand:
 A pin in `current.nix` may set 2 optional attributes, which end up in the
 line's `data/all.json`:
 
-1. `available-after = "2026-12-01T00:00:00Z";` — transactions timestamped
-   earlier resolve the runner as malformed, the same as on an executor that does
-   not ship it ([spec](../../../website/src/spec/02-execution-environment/04-runners.rst)).
-   Pick a time by which every validator runs the new executor. A runner new to
-   a released minor must carry one ([versioning](../../../website/src/spec/01-core-architecture/03-versioning.rst))
+1. `fork = "genvm/executor/v0.3/runners-<batch>";` — the
+   [fork](../../../website/src/spec/01-core-architecture/03-versioning.rst) that
+   makes the runner visible. Without it the pin gets the line's own fork, from
+   `manifest.json`. A runner new to a released line must name a fork of its own
+   ([spec](../../../website/src/spec/02-execution-environment/04-runners.rst)),
+   or it activates for every network the moment validators upgrade
 2. `supersedes = "<gvm32 hash>";` — the hash of the same id this one replaces.
    The old hash must still be shipped, or evaluation fails
 
 `hash-updater.py` rewrites only `hash`, so both survive a re-pin
+
+### Adding a Fork
+
+The schedule is `support/genvm-chainforks.json` in the manager repo; a fork
+named by a pin but missing there fails the build
+
+1. Add the fork under `forks`, with `"requires": ["genvm/executor/<line>"]`: a
+   name extending another fork's name must require it
+2. Schedule it on every network under `networks.<name>.forks`: `always` on
+   `dev`, so the test suite sees it, and `never` or the agreed RFC 3339 date on
+   the real networks. A network missing the fork fails the build and the
+   manager startup
+3. Integration tests run on `dev`, where every fork is active; test the closed
+   gate in the executor, by leaving the fork out of `genvm run --forks`

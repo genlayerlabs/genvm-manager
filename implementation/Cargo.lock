@@ -1040,6 +1040,7 @@ dependencies = [
  "sha3",
  "signal-hook",
  "sysinfo",
+ "thiserror",
  "tokio",
  "tokio-tungstenite 0.26.2",
  "unicode-normalization",

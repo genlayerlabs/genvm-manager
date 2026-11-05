@@ -42,8 +42,7 @@ exclude_patterns = [
 language = 'en'
 
 mermaid_version = '11.6.0'
-mermaid_output_format = 'svg'
-mermaid_params = ['--theme', 'dark', '--backgroundColor', 'transparent']
+mermaid_output_format = 'raw'
 
 # html_theme = 'alabaster'
 html_theme = 'pydata_sphinx_theme'

@@ -8,10 +8,10 @@ let
   # version -> version -> bool; the swappable compatibility policy.
   compatible = import ./compat.nix;
 
-  # [ { version; src; } ] — the active executor lines.
+  # [ { version; fork; src; } ] — the active executor lines.
   executors = import ./executors.nix args;
 
-  # every runner across every line, tagged with its line's version.
+  # every runner across every line, tagged with its line's version and its fork.
   list = import ./all.nix args;
 
   # the runners an executor pinned at `executorVersion` may ship.

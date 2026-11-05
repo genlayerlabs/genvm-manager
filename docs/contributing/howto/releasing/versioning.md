@@ -10,7 +10,9 @@
    sources
 
 Executor crates are versioned **independently**: a line's `manifest.json` holds
-`executor-version` and no manager script rewrites it
+`executor-version` and no manager script rewrites it. It also holds `fork`, the
+fork gating the line, which `support/genvm-chainforks.json` must define and
+schedule on every network; a new line adds `genvm/executor/<line>` there
 
 A platform release asset bundles every active line, and nothing else ships an
 executor on its own: the executor repo publishes no releases, so an install root

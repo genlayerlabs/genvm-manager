@@ -71,11 +71,9 @@ pub async fn handle_module_restart(
 pub async fn handle_contract_detect_version(
     ctx: sync::DArc<AppContext>,
     contract_code: bytes::Bytes,
-    deployment_timestamp: String,
+    forks: super::chainforks::Active,
 ) -> Result<Json<serde_json::Value>> {
-    let deployment_timestamp =
-        chrono::DateTime::parse_from_rfc3339(&deployment_timestamp)?.with_timezone(&chrono::Utc);
-    let major = versioning::detect_major_spec(&ctx, &contract_code, deployment_timestamp).await?;
+    let major = versioning::detect_major_spec(&ctx, &contract_code, &forks).await?;
     Ok(Json(serde_json::json!({
         "specified_major": major,
     })))

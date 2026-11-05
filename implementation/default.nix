@@ -24,6 +24,7 @@ let
       "install"
       "libs/unhardcoded-engine/llm_policy"
       "libs/unhardcoded-engine/llm_policy.lua"
+      "support/genvm-chainforks.json"
       "support/manifest-base.yaml"
     ]
     ++ builtins.map (line: "executors/${line}.x/manifest.json") monorepo.active-versions
@@ -54,6 +55,8 @@ let
           "crates/fuzzing"
           # executor crates come from the v0.3.x submodule mount
           "executors/v0.3.x/executor/crates"
+          # embedded as the built-in chainforks schedule
+          "support/genvm-chainforks.json"
         ];
         sourceRoot = "./source/implementation";
 
@@ -116,8 +119,9 @@ let
         patch-web-config --tag ${build-config.executor-version} "$out/config/genvm-module-web.yaml"
 
         # Assemble data/manifest.yaml from the active executor submodules
-        # (executor-version + available-after) and the static base fields.
+        # (executor-version + fork) and the static base fields.
         genvm-tool -C ${release-src} build-manifest --output "$out/data/manifest.yaml"
+        cp --no-preserve=ownership "${release-src}/support/genvm-chainforks.json" "$out/config/genvm-chainforks.json"
 
         patch-rpath --codesign --search-dir "$out/lib" --rpath '$ORIGIN/../lib' "$out/bin/genvm-modules"
         find "$out/lib" -type f -name '*.so' -not -name 'libc.so' | while read lib; do

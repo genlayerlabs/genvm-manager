@@ -15,6 +15,7 @@ use axum::{
 
 use crate::common;
 
+pub mod chainforks;
 mod check_install;
 pub mod execution_context;
 mod handlers;
@@ -28,6 +29,11 @@ pub struct Config {
     #[serde(flatten)]
     pub base: genvm_common::BaseConfig,
     pub manifest_path: String,
+    /// Replaces the built-in chainforks schedule.
+    #[serde(default)]
+    pub chainforks_path: Option<String>,
+    /// Network of a request that names none.
+    pub default_network: String,
 
     /// Absent or null keeps every default.
     pub permits: Option<PermitsConfig>,
@@ -161,11 +167,6 @@ fn default_max_message_bytes() -> usize {
     64 * 1024 * 1024
 }
 
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct ExecutorVersion {
-    pub available_after: String,
-}
-
 #[derive(Debug, PartialEq, PartialOrd, Clone)]
 pub struct VersionParts {
     pub major: Option<u32>,
@@ -192,11 +193,6 @@ pub fn parse_version(version: &str) -> Result<VersionParts> {
         minor: parse_part(&captures[2]),
         patch: parse_part(&captures[3]),
     })
-}
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-pub struct Manifest {
-    pub executor_versions: std::collections::BTreeMap<String, ExecutorVersion>,
 }
 
 pub struct AppContext {
@@ -281,11 +277,26 @@ fn parse_genvm_id(raw: &str) -> Option<run::GenVMId> {
     raw.parse::<u64>().ok().map(run::GenVMId)
 }
 
-fn deployment_timestamp(headers: &HeaderMap) -> anyhow::Result<String> {
+fn deployment_timestamp(headers: &HeaderMap) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
     let value = headers
         .get("Deployment-Timestamp")
         .ok_or_else(|| anyhow::anyhow!("missing Deployment-Timestamp header"))?;
-    Ok(value.to_str()?.to_owned())
+    Ok(chrono::DateTime::parse_from_rfc3339(value.to_str()?)
+        .with_context(|| "malformed Deployment-Timestamp header")?
+        .with_timezone(&chrono::Utc))
+}
+
+/// The forks a detect-version request runs under: its `Network` header, else the default network.
+fn detect_version_forks(
+    ctx: &AppContext,
+    headers: &HeaderMap,
+) -> anyhow::Result<chainforks::Active> {
+    let timestamp = deployment_timestamp(headers)?;
+    let network = match headers.get("Network") {
+        Some(value) => value.to_str()?,
+        None => &ctx.config.default_network,
+    };
+    Ok(ctx.ver_ctx.active_forks(network, timestamp)?)
 }
 
 fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
@@ -351,17 +362,12 @@ fn create_router(app_ctx: sync::DArc<AppContext>) -> Router {
                 |State(ctx): State<sync::DArc<AppContext>>,
                  headers: HeaderMap,
                  contract_code: Bytes| async move {
-                    let deployment_timestamp = match deployment_timestamp(&headers) {
-                        Ok(deployment_timestamp) => deployment_timestamp,
+                    let forks = match detect_version_forks(&ctx, &headers) {
+                        Ok(forks) => forks,
                         Err(error) => return bad_request(error),
                     };
                     unwrap_all_anyhow(
-                        handlers::handle_contract_detect_version(
-                            ctx,
-                            contract_code,
-                            deployment_timestamp,
-                        )
-                        .await,
+                        handlers::handle_contract_detect_version(ctx, contract_code, forks).await,
                     )
                 },
             ),

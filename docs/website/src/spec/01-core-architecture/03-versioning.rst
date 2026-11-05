@@ -22,9 +22,9 @@ Minor
 A minor release adds new features and is backwards-compatible.
 
 #. The :ref:`gvm-def-execution-hash` of a transaction may change.
-#. New :term:`Runner`\s may be added; each MUST carry an
-   :ref:`availability time <gvm-def-runner-availability>`, so executors of the
-   previous minor agree with it until then. Existing runners MUST NOT be
+#. New :term:`Runner`\s may be added; each MUST be gated by a
+   :ref:`fork <gvm-def-fork>` of its own, so executors of the previous minor
+   agree with it until the fork activates. Existing runners MUST NOT be
    removed.
 #. New ``gl_call`` methods and new parameters of existing methods may be added.
 #. Old code continues to work, unless it deliberately tried to be
@@ -38,6 +38,30 @@ majors within the same VM is impossible.
 
 If a ``v2.x`` executor is ever released, messages and calls across majors will
 be supported by delegating execution to a ``v1.x`` executor.
+
+.. _gvm-def-fork:
+
+Forks
+-----
+
+A *fork* is a named switch that a network activates at a time of its own
+choosing. The *active set* of a transaction is the set of forks whose activation
+time on its network is at or before the transaction timestamp. Validators of a
+network compute the same active set only if they share its activation times.
+
+#. A name is ``/``-separated segments of ``[a-z0-9._-]``, rooted at the
+   component it belongs to, e.g. ``genvm/executor/v0.3``.
+#. A fork may require other forks; a network MUST NOT activate a fork before
+   any fork it requires. A fork whose name extends another fork's name
+   requires it.
+#. ``always`` is in every active set and ``never`` is in none; neither can be
+   defined as a fork.
+#. An activated fork is never withdrawn.
+
+Each executor line is gated by a fork, and a line is selectable *iff* its fork
+is active. A :term:`Runner` is gated as described in
+:ref:`gvm-def-runner-availability`. A behaviour change inside a line may also
+be gated by a fork, so the line keeps its old behaviour until it activates.
 
 Forced Contract Updates
 -----------------------

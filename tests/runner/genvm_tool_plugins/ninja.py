@@ -504,8 +504,12 @@ class LineContext:
 		runners), so both the line's and the umbrella's nix inputs matter.
 		Requires the `nix_eval` rule.
 		"""
-		runners_nix_inputs = glob(self.exec_root / 'runners', '**/*.nix') + glob(
-			self.source_dir / 'runners', '**/*.nix'
+		# Fork names come from the schedule and each line's manifest.json
+		runners_nix_inputs = (
+			glob(self.exec_root / 'runners', '**/*.nix')
+			+ glob(self.source_dir / 'runners', '**/*.nix')
+			+ glob(self.source_dir / 'executors', '*/manifest.json')
+			+ [self.source_dir / 'support' / 'genvm-chainforks.json']
 		)
 		out = f'{self.out_exec}/data/all.json'
 		edge = self.n.build('nix_eval', out)
