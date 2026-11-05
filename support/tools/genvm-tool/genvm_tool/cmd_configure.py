@@ -571,6 +571,12 @@ def main(ctx: common.Context, args) -> int:
 
 	n.install('install', 'out', all_manager)
 
+	from . import chainforks, manifest
+
+	chainforks_out = 'out/config/genvm-chainforks.json'
+	all_manager.add_dependency(chainforks_out)
+	n.build('cp', chainforks_out).add_dependency(source_dir / chainforks.REL).finish()
+
 	# The LLM dispatch script requires the `llm_policy` package from the
 	# unhardcoded-engine submodule; fail loudly if it was not checked out.
 	llm_policy_dir = source_dir / 'libs' / 'unhardcoded-engine'
@@ -609,8 +615,6 @@ def main(ctx: common.Context, args) -> int:
 	# The manager reads out/data/manifest.yaml at runtime; assemble it from the
 	# active executor submodules (the same logic release packaging runs via
 	# `genvm-tool build-manifest`).
-	from . import manifest
-
 	manifest_path = build_dir / 'out' / 'data' / 'manifest.yaml'
 	manifest.write(source_dir, manifest_path)
 

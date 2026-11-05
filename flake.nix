@@ -146,8 +146,7 @@
             wabt
           ];
           # Docs toolchain from nix instead of a poetry venv: sphinx + the
-          # extensions conf.py loads. mermaid-cli is the `mmdc` the
-          # sphinxcontrib.mermaid svg output shells out to. The Python SDK
+          # extensions conf.py loads. Mermaid renders in the browser. The Python SDK
           # autodoc (and its numpy dep) and the text→txt merge (formerly ruby,
           # now docs/website/merge_txts.py) moved to the executor sub-sites.
           docs-python = pkgs.python312.withPackages (
@@ -161,7 +160,6 @@
           );
           packages-gen-docs = with pkgs; [
             docs-python
-            mermaid-cli
           ];
           packages-py-test = with pkgs; [
             python312

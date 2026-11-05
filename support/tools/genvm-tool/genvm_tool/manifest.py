@@ -2,15 +2,16 @@
 Assemble the manager's runtime manifest (`data/manifest.yaml`).
 
 The manager reads this YAML at startup: `executor_versions` maps each active
-executor version to its `available_after` timestamp, alongside the runner
-download-URL templates. It is generated at build time rather than checked in, so
-the version keys and availability always track the executor submodules.
+executor version to the chainfork gating it, alongside the runner download-URL
+templates. It is generated at build time rather than checked in, so the version
+keys and forks always track the executor submodules.
 
 Inputs, all under the monorepo root:
 
 	* `.genvm-monorepo-root`              -> `active-versions` (the executor trains)
-	* `executors/v<ver>.x/manifest.json`  -> `executor-version`, `available-after`
+	* `executors/v<ver>.x/manifest.json`  -> `executor-version`, `fork`
 	* `support/manifest-base.yaml`        -> static fields (runner download URLs)
+	* `support/genvm-chainforks.json`     -> validated, and must define every `fork`
 
 Used in-process by `genvm-tool configure` (dev) and exposed as the
 `genvm-tool build-manifest` subcommand (release packaging).
@@ -22,7 +23,7 @@ from pathlib import Path
 from ruamel.yaml import YAML
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
-from . import common
+from . import chainforks, common
 
 # Manager-root-relative; holds the build-independent fields (runner URLs).
 BASE_REL = Path('support') / 'manifest-base.yaml'
@@ -38,15 +39,18 @@ def build(root: Path):
 	Return the manifest document: `executor_versions` followed by the static
 	base fields. Keeps ruamel's round-trip type so comments/quoting in the base
 	file survive the dump."""
+	schedule = chainforks.load(root)
 	executor_versions: dict = {}
 	for version in common.active_versions(root):
 		em = _executor_manifest(root, version)
-		# Quote the timestamp so YAML keeps it a string rather than parsing it
-		# into a native timestamp (the manager expects an RFC 3339 string).
-		entry = {
-			'available_after': DoubleQuotedScalarString(em['available-after']),
+		fork = em['fork']
+		if fork not in schedule['forks']:
+			raise chainforks.Error(
+				f'executor {em["executor-version"]}: fork `{fork}` is not defined in {chainforks.REL}'
+			)
+		executor_versions[em['executor-version']] = {
+			'fork': DoubleQuotedScalarString(fork),
 		}
-		executor_versions[em['executor-version']] = entry
 
 	doc = YAML(typ='rt').load((root / BASE_REL).read_text())
 	doc.insert(0, 'executor_versions', executor_versions)

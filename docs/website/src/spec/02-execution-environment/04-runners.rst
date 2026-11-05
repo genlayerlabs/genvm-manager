@@ -58,14 +58,15 @@ fails like any other malformed runner rather than falling back to another view.
 Packaged Runner Availability
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An executor ships a fixed set of packaged runners. Each may carry an
-availability time:
+An executor ships a fixed set of packaged runners. Each executor line declares
+the runners it ships, and each declaration is gated by a
+:ref:`fork <gvm-def-fork>`, by default that line's own:
 
 #. A ``<human-readable-id>:<hash>`` the executor does not ship fails as a
    malformed runner
-#. One whose availability time is later than the transaction timestamp fails
+#. One that no line up to the running one declares under an active fork fails
    the same way, so executors that ship it agree with those that do not until
-   that time
+   such a fork activates
 
 Hash Format
 ~~~~~~~~~~~

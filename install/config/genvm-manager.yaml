@@ -7,6 +7,8 @@ log_disable: tracing*,polling*,tungstenite*,tokio_tungstenite*
 log_level: info
 
 manifest_path: ${exeDir}/../data/manifest.yaml
+chainforks_path: ${exeDir}/../config/genvm-chainforks.json # when each executor line and runner activates, per network
+default_network: bradbury-phase2 # network of a request that names none
 allow_two_workers: true # overlap deterministic execution with nondeterministic validation
 permits: # 1 permit is 1 GiB of RAM
   total: null # if null, free memory times `per_gib`

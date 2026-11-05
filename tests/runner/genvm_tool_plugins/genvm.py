@@ -208,13 +208,16 @@ class ManagerService(genvm_tool.tests.exec.service.Service):
 		config_dir = self._log_path.parent if self._log_path is not None else Path('/tmp')
 		config_dir.mkdir(parents=True, exist_ok=True)
 		config_path = config_dir / 'genvm-manager.yaml'
-		manifest_path = self._bin_path.parent.parent / 'data' / 'manifest.yaml'
+		install_root = self._bin_path.parent.parent
 		config = {
 			'threads': 4,
 			'blocking_threads': 48,
 			'log_disable': 'tracing*,polling*,tungstenite*,tokio_tungstenite*',
 			'log_level': 'info',
-			'manifest_path': str(manifest_path),
+			'manifest_path': str(install_root / 'data' / 'manifest.yaml'),
+			'chainforks_path': str(install_root / 'config' / 'genvm-chainforks.json'),
+			# every fork is always active on `dev`
+			'default_network': 'dev',
 			'permits': None,
 			'execution_retention': '5m',
 			'max_message_bytes': 67108864,
