@@ -87,11 +87,7 @@ let
 
     dontFixup = true;
   };
-  lua-src = builtins.fetchGit {
-    url = "https://github.com/lua/lua.git";
-    rev = "75ea9ccbea7c4886f30da147fb67b693b2624c26";
-    shallow = true;
-  };
+  lua-src = deps."lua-5.3.6";
 in
 rec {
   inherit pkgs deps lua-src;
@@ -145,9 +141,15 @@ rec {
     libraries = [ pkgs.python3Packages.ruamel-yaml ];
   } (builtins.readFile ./scripts/patch-web-config.py);
 
+  # lief before 0.17.6 corrupts the section headers of our large musl PIE
+  # executors on `binary.write()` (lief-project/LIEF#1315)
+  lief =
+    assert pkgs.lib.versionAtLeast pkgs.python3Packages.lief.version "0.17.6";
+    pkgs.python3Packages.lief;
+
   patch-rpath = pkgs.writers.writePython3Bin "patch-rpath" {
     doCheck = false;
-    libraries = [ pkgs.python3Packages.lief ];
+    libraries = [ lief ];
     makeWrapperArgs = [
       "--prefix"
       "PATH"

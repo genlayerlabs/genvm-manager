@@ -2,3 +2,11 @@
 	path = executors/v0.3.x
 	url = ../genvm-executor
 	branch = v0.3.x
+[submodule "executors/v0.2.x"]
+	path = executors/v0.2.x
+	url = ../genvm-executor
+	branch = v0.2.x
+[submodule "libs/unhardcoded-engine"]
+	path = libs/unhardcoded-engine
+	url = ../unhardcoded-engine
+	branch = main

@@ -1,0 +1,16 @@
+{
+    "foo nul": [
+        "bar",
+        "baz\n\\z",
+        123,
+      null,
+        true,
+        false,
+        [1, 2, 3]
+    ],
+    "bar": [
+        "русские буквы 日本",
+        "mbbbbbbbbbbbbbbaz\t\uabbbbb",
+    "mbbbbbbbbbbbbbbaz\t\\ua]bbbb"
+    ]
+}

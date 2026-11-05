@@ -66,3 +66,20 @@ Module Lifecycle
 -  **Termination**:
 
    -  Graceful shutdown and resource cleanup
+
+Caller Disconnection
+~~~~~~~~~~~~~~~~~~~~
+
+The executor's module stream is monitored during handler initialization,
+requests and response writes. EOF or a read error cancels the active operation.
+The reader buffers at most one pending request; further pipelining closes the
+connection rather than suspending disconnect detection
+
+Each Lua call owns its pending HTTP, provider and sleep futures. Cancellation
+drops these operations even when Lua retains the suspended coroutine, closing
+pending WebDriver requests so that the sidecar releases its rendering slot.
+Teardown runs synchronous cleanup but is dropped if it would wait asynchronously
+
+This differs from the manager's reconnectable WebSocket: disconnecting that
+control connection preserves executions for later attachment, as described in
+:doc:`../../appendix/manager-socket`

@@ -1,18 +1,30 @@
 [package]
-name = "genvm-modules-interfaces"
+name = "genvm_modules_interfaces"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = []
+
 [dependencies]
-genlayer_sdk = { path = "../../executors/v0.3.x/executor/crates/sdk-rs", default-features = false }
 anyhow = "1.0.97"
-tokio = { version = "1.44.1", features = ["rt", "rt-multi-thread", "net", "time", "macros", "sync"], default-features = false}
-serde = { version = "1.0.219", features = ["rc", "derive"] }
-serde_json = "1.0.140"
-serde_derive = "1.0.219"
-regex = { version = "1.11.1", default-features = false, features = ["std"] }
-serde_bytes = "0.11.17"
+bytes = { version = "1.11.0", features = ["serde"] }
+chrono = "0.4.45"
 genlayer_calldata = { path = "../../executors/v0.3.x/executor/crates/calldata" }
 num-bigint = "0.4"
 num-traits = "0.2"
 primitive-types = { version = "0.13", features = ["impl-serde"] }
+regex = { version = "1.11.1", default-features = false, features = ["std"] }
+serde = { version = "1.0.219", features = ["rc", "derive"] }
+serde_bytes = "0.11.17"
+serde_derive = "1.0.219"
+serde_json = "1.0.140"
+sha3 = "0.10"
+tokio = { version = "1.44.1", features = [
+    "rt",
+    "rt-multi-thread",
+    "net",
+    "time",
+    "macros",
+    "sync",
+], default-features = false }
