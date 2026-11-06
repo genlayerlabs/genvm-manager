@@ -58,14 +58,15 @@ fails like any other malformed runner rather than falling back to another view.
 Packaged Runner Availability
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-An executor ships a fixed set of packaged runners. Each may carry an
-availability time:
+An executor ships a fixed set of packaged runners. Each executor line declares
+the runners it ships, and each declaration is gated by a
+:ref:`fork <gvm-def-fork>`, by default that line's own:
 
 #. A ``<human-readable-id>:<hash>`` the executor does not ship fails as a
    malformed runner
-#. One whose availability time is later than the transaction timestamp fails
+#. One that no line up to the running one declares under an active fork fails
    the same way, so executors that ship it agree with those that do not until
-   that time
+   such a fork activates
 
 Hash Format
 ~~~~~~~~~~~
@@ -105,12 +106,22 @@ Used if runner bytes represent a ZIP archive
 - A stored file's contents must match its declared CRC-32
 - The local header must agree with the central directory on the entry name, and,
   unless the entry has a data descriptor (general-purpose flag bit 3), on the
-  CRC-32 and the sizes. The name is compared as raw bytes and must be valid
-  UTF-8, so an entry no two readers would decode alike is rejected rather than
-  silently resolved
+  CRC-32 and the sizes. The local name must be valid UTF-8 and equal, as raw
+  bytes, to the decoded central name: the Unicode Path extra field if present,
+  otherwise the name as UTF-8 with general-purpose flag bit 11 and as CP437
+  without it
 - Encrypted entries (general-purpose flag bit 0) are rejected
 - An entry ending with ``/`` is a directory; its size and CRC-32 must be 0, and it is omitted from the file list
 - If several entries share a name, the file list holds the last of them
+- Once every rule above holds for every entry and the metadata cost (see
+  :ref:`runner load charges <gvm-def-runner-load-charge>`) is charged, the
+  archive is also checked against the following, in order:
+
+  #. The local header and the central directory carry the same general-purpose flags
+  #. No 2 entries overlap, directories included: an entry spans its local
+     header through the end of its data
+  #. No file name is also a directory: neither of another file, as ``a`` is of
+     ``a/b``, nor of a directory entry, as ``a`` is of ``a/`` or ``a/b/``
 
 2. Raw WASM
 ~~~~~~~~~~~
@@ -398,7 +409,8 @@ The raw size is the length of the runner's code or archive bytes. For a ZIP
 runner, the metadata cost is the sum of
 :ref:`gvm-def-consts-value-memory-limiter-consts-zip-file-cost` plus the UTF-8
 filename length in octets for each distinct non-directory entry. Repeated
-filenames count once, using the last entry. Non-ZIP runners have no additional
+filenames count once, using the last entry. It is charged per entry, in
+central-directory order, after that entry's checks. Non-ZIP runners have no additional
 metadata charge. Insufficient RAM for either charge exits the :term:`sub-VM`
 with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`
 

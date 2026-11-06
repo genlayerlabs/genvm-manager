@@ -3,18 +3,24 @@
 #
 #   { <id> = {
 #       latest = <hash32>;   the executor's own current runner
-#       versions = { <hash32> = { available_after; supersedes; }; };
+#       versions = { <hash32> = { forks; supersedes; }; };
 #   }; }
 #
 # `versions` holds every runner compatible up to the executor's version and is
 # what the executor consults to accept a requested runner hash; `latest`
-# resolves an id in debug mode.
+# resolves an id in debug mode. `forks` is the `|`-joined, sorted set of forks
+# of every line declaring that hash: the runner is visible iff any is active.
 {
   executorVersion,
+  root-src ? ../.,
   ...
 }@args:
 let
   api = import ./default.nix args;
+
+  chainforks = builtins.fromJSON (
+    builtins.readFile (root-src + "/install/data/genvm-chainforks.json")
+  );
 
   hash32 = x: builtins.head (builtins.tail (builtins.match "([^:]+):(.*)" x.uid));
 
@@ -31,34 +37,62 @@ let
       acc // { ${x.id} = hash32 x; }
   ) { } own;
 
-  timestampRe = "[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:([0-5][0-9]|60)(\\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])";
-
-  meta =
+  checkFork =
     x:
-    if x.available-after != null && builtins.match timestampRe x.available-after == null then
-      throw "runner ${x.uid}: available-after `${x.available-after}` is not an RFC 3339 timestamp"
+    if !(chainforks.forks ? ${x.fork}) then
+      throw "runner ${x.uid} of ${x.version}: fork `${x.fork}` is not defined in install/data/genvm-chainforks.json"
     else
-      {
-        available_after = x.available-after;
-        inherit (x) supersedes;
-      };
+      x.fork;
 
-  versions = builtins.foldl' (
+  # <id> -> <hash32> -> { supersedes; forks = <line version> -> <fork>; }
+  declarations = builtins.foldl' (
     acc: x:
     let
-      existing = acc.${x.id} or { };
+      byId = acc.${x.id} or { };
       h = hash32 x;
+      existing =
+        byId.${h} or {
+          inherit (x) supersedes;
+          forks = { };
+        };
+      fork = checkFork x;
     in
-    if existing ? ${h} && existing.${h} != meta x then
-      throw "runner ${x.uid} is pinned with different metadata across executor lines"
+    if existing.supersedes != x.supersedes then
+      throw "runner ${x.uid} is pinned with different supersedes across executor lines"
+    else if existing.forks ? ${x.version} && existing.forks.${x.version} != fork then
+      throw "runner ${x.uid} is declared twice by ${x.version} with different forks"
     else
       acc
       // {
-        ${x.id} = existing // {
-          ${h} = meta x;
+        ${x.id} = byId // {
+          ${h} = existing // {
+            forks = existing.forks // {
+              ${x.version} = fork;
+            };
+          };
         };
       }
   ) { } compatible;
+
+  versions = builtins.mapAttrs (
+    _id:
+    builtins.mapAttrs (
+      _h: d: {
+        inherit (d) supersedes;
+        # attrNames is sorted and unique
+        forks = builtins.concatStringsSep "|" (
+          builtins.attrNames (
+            builtins.listToAttrs (
+              builtins.map (f: {
+                name = f;
+                value = null;
+              }) (builtins.attrValues d.forks)
+            )
+          )
+        );
+      }
+    )
+  ) declarations;
 in
 builtins.mapAttrs (
   id: vs:

@@ -1,9 +1,9 @@
 # The active executor lines, resolved from the umbrella manifest into
-#   [ { version; src; } ]
-# where `version` is the line's pinned `executor-version` and `src` is its
-# checkout. Each checkout's `runners` directory exports that line's current
-# runner list. This — not git history — is where the runner history lives: every
-# executor line contributes its own runners.
+#   [ { version; fork; src; } ]
+# where `version` is the line's pinned `executor-version`, `fork` the chainfork
+# gating it, and `src` its checkout. Each checkout's `runners` directory exports
+# that line's current runner list. This — not git history — is where the runner
+# history lives: every executor line contributes its own runners.
 {
   root-src ? ../.,
   ...
@@ -19,6 +19,7 @@ builtins.map (
   in
   {
     version = manifest.executor-version;
+    inherit (manifest) fork;
     src = root-src + "/${exec-rel}";
   }
 ) monorepo.active-versions
