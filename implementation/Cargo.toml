@@ -64,7 +64,9 @@ sha3 = "0.10"
 signal-hook = "0.3.17"
 thiserror = "2.0.21"
 
-hickory-resolver = { version = "0.26", features = ["tokio"] }
+hickory-resolver = { version = "0.26", default-features = false, features = [
+    "tokio",
+] }
 tokio-tungstenite = "0.26.2"
 unicode-normalization = "0.1.20"
 unicode-width = "0.2.1"
@@ -108,13 +110,22 @@ features = [
 version = "0.10.3"
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
+hickory-resolver = { version = "0.26", default-features = false, features = [
+    "system-config",
+] }
 sysinfo = { version = "0.36", default-features = false, features = ["system"] }
+
+# hickory's macOS system-config links the SystemConfiguration framework, which
+# the zig cross-linker cannot provide
+[target.'cfg(target_os = "macos")'.dependencies]
+resolv-conf = "0.7"
 
 [build-dependencies]
 cc = "1"
 
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
+resolv-conf = "0.7"
 
 [profile.dev]
 incremental = false
