@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 from typing import NamedTuple
 
-from . import common
+from . import chainforks, common
 
 NAME = 'configure'
 HELP = 'generate build/build.ninja and build/info.json'
@@ -474,6 +474,56 @@ def main(ctx: common.Context, args) -> int:
 		all_exec_line.finish()
 
 	codegen_phony.finish()
+
+	# The manager reads out/data/manifest.yaml at runtime; the same
+	# `genvm-tool build-manifest` release packaging runs assembles it.
+	runner_forks_out = 'runner-forks.json'
+	runner_forks = n.build('nix_eval', runner_forks_out)
+	runner_forks.var(
+		'expr', '(import ./runners/forks.nix { host-system = builtins.currentSystem; })'
+	)
+	runner_forks.var('wd', source_dir)
+	runner_forks.add_implicit_dependency(
+		[
+			f
+			for v in versions
+			for f in ninja.glob(source_dir / v.exec_rel / 'runners', '**/*.nix')
+		]
+		+ ninja.glob(source_dir / 'runners', '**/*.nix')
+		+ [source_dir / v.exec_rel / 'manifest.json' for v in versions]
+		+ [source_dir / MONOREPO_ROOT_FILE]
+	)
+	runner_forks.finish()
+
+	manifest_out = 'out/data/manifest.yaml'
+	build_manifest = n.build('CUSTOM_COMMAND', manifest_out)
+	build_manifest.var(
+		'COMMAND',
+		[
+			str(genvm_tool_sh),
+			'-C',
+			str(source_dir),
+			'build-manifest',
+			'--runner-forks',
+			str(build_dir.resolve() / runner_forks_out),
+			'--output',
+			str(build_dir.resolve() / manifest_out),
+		],
+	)
+	build_manifest.var('CWD', str(build_dir))
+	build_manifest.add_dependency(runner_forks_out)
+	build_manifest.add_implicit_dependency(
+		[source_dir / v.exec_rel / 'manifest.json' for v in versions]
+		+ [
+			source_dir / MONOREPO_ROOT_FILE,
+			source_dir / 'support' / 'manifest-base.yaml',
+			source_dir / chainforks.REL,
+			tool_src / 'genvm_tool' / 'manifest.py',
+			tool_src / 'genvm_tool' / 'chainforks.py',
+		]
+	)
+	build_manifest.finish()
+	data_phony.add_dependency(manifest_out)
 	data_phony.finish()
 
 	def _runner_file(f: Path) -> bool:
@@ -606,13 +656,7 @@ def main(ctx: common.Context, args) -> int:
 	info = base_info(monorepo_cfg, source_dir, build_dir, rust_target_dir)
 	(build_dir / 'info.json').write_text(json.dumps(info, indent=2))
 
-	# The manager reads out/data/manifest.yaml at runtime; assemble it from the
-	# active executor submodules (the same logic release packaging runs via
-	# `genvm-tool build-manifest`).
-	from . import manifest
-
-	manifest_path = build_dir / 'out' / 'data' / 'manifest.yaml'
-	manifest.write(source_dir, manifest_path)
+	manifest_path = build_dir / manifest_out
 
 	ctx.printer.put(
 		'configured',

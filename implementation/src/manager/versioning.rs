@@ -2,12 +2,13 @@ use anyhow::Context as _;
 use genvm_common::sync;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-use crate::manager::Config;
+use crate::manager::{chainforks, Config};
 use genvm_common::*;
 
 #[derive(serde::Serialize, serde::Deserialize, Clone)]
 pub struct ExecutorVersion {
-    pub available_after: chrono::DateTime<chrono::Utc>,
+    /// The line is selectable *iff* this fork is active.
+    pub fork: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -51,6 +52,8 @@ impl<'de> serde::Deserialize<'de> for Version {
 pub struct Manifest {
     pub executor_versions: std::collections::BTreeMap<Version, ExecutorVersion>,
     pub version_orig_keys: std::collections::BTreeMap<Version, String>,
+    /// Every fork a runner names; the schedule must define each.
+    pub runner_forks: Vec<String>,
 }
 
 impl<'de> serde::Deserialize<'de> for Manifest {
@@ -61,6 +64,7 @@ impl<'de> serde::Deserialize<'de> for Manifest {
         #[derive(serde::Deserialize)]
         struct Raw {
             executor_versions: std::collections::BTreeMap<String, ExecutorVersion>,
+            runner_forks: Vec<String>,
         }
         let raw = Raw::deserialize(deserializer)?;
         let mut executor_versions = std::collections::BTreeMap::new();
@@ -81,6 +85,7 @@ impl<'de> serde::Deserialize<'de> for Manifest {
         Ok(Manifest {
             executor_versions,
             version_orig_keys,
+            runner_forks: raw.runner_forks,
         })
     }
 }
@@ -93,29 +98,71 @@ pub struct ResolvedVersion {
 
 pub struct Ctx {
     config: sync::DArc<Config>,
+    chainforks: chainforks::Schedule,
     manifest: tokio::sync::RwLock<Manifest>,
 }
 
-async fn load_manifest(manifest_path: &str) -> anyhow::Result<Manifest> {
+/// The schedule and manifest the manager runs with, validated against each other.
+pub fn load_install(config: &Config) -> anyhow::Result<(chainforks::Schedule, Manifest)> {
+    let path = &config.chainforks_path;
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("reading chainforks schedule {path}"))?;
+    let chainforks =
+        chainforks::Schedule::parse(&content).with_context(|| format!("loading {path}"))?;
+    chainforks
+        .check_network(&config.default_network)
+        .with_context(|| "checking default_network")?;
+    let content = std::fs::read_to_string(&config.manifest_path)
+        .with_context(|| format!("Failed to read manifest file: {}", config.manifest_path))?;
+    let manifest = parse_manifest(&content, &config.manifest_path, &chainforks)?;
+    Ok((chainforks, manifest))
+}
+
+async fn load_manifest(
+    manifest_path: &str,
+    chainforks: &chainforks::Schedule,
+) -> anyhow::Result<Manifest> {
     let content = tokio::fs::read_to_string(manifest_path)
         .await
         .with_context(|| format!("Failed to read manifest file: {}", manifest_path))?;
+    parse_manifest(&content, manifest_path, chainforks)
+}
+
+fn parse_manifest(
+    content: &str,
+    manifest_path: &str,
+    chainforks: &chainforks::Schedule,
+) -> anyhow::Result<Manifest> {
     let manifest: Manifest =
-        serde_yaml::from_str(&content).with_context(|| "Failed to parse manifest YAML")?;
+        serde_yaml::from_str(content).with_context(|| "Failed to parse manifest YAML")?;
+    for (ver, ev) in &manifest.executor_versions {
+        chainforks.check_defined(&ev.fork).with_context(|| {
+            format!(
+                "executor version {} in manifest {manifest_path}",
+                manifest.version_orig_keys[ver]
+            )
+        })?;
+    }
+    for fork in &manifest.runner_forks {
+        chainforks
+            .check_defined(fork)
+            .with_context(|| format!("runner fork in manifest {manifest_path}"))?;
+    }
     Ok(manifest)
 }
 
 impl Ctx {
     pub async fn new(config: sync::DArc<Config>) -> anyhow::Result<Self> {
-        let manifest = load_manifest(&config.manifest_path).await?;
+        let (chainforks, manifest) = load_install(&config)?;
         Ok(Self {
             manifest: tokio::sync::RwLock::new(manifest),
+            chainforks,
             config,
         })
     }
 
     pub async fn reload_manifest(&self) -> anyhow::Result<()> {
-        let manifest = load_manifest(&self.config.manifest_path).await?;
+        let manifest = load_manifest(&self.config.manifest_path, &self.chainforks).await?;
 
         let mut lock = self.manifest.write().await;
         *lock = manifest;
@@ -123,11 +170,20 @@ impl Ctx {
         Ok(())
     }
 
-    pub async fn get_latest_major(&self, timestamp: chrono::DateTime<chrono::Utc>) -> Option<u32> {
+    /// The forks active on `network` at `timestamp`; an unknown network is an error.
+    pub fn active_forks(
+        &self,
+        network: &str,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> Result<chainforks::Active, chainforks::Error> {
+        self.chainforks.active(network, timestamp)
+    }
+
+    pub async fn get_latest_major(&self, forks: &chainforks::Active) -> Option<u32> {
         let lock = self.manifest.read().await;
         lock.executor_versions
             .iter()
-            .filter(|(_, ev)| ev.available_after <= timestamp)
+            .filter(|(_, ev)| forks.contains(&ev.fork))
             .map(|(ver, _)| ver.major)
             .max()
     }
@@ -135,23 +191,20 @@ impl Ctx {
     pub async fn get_version(
         &self,
         major: u32,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        forks: &chainforks::Active,
     ) -> Option<ResolvedVersion> {
         let lock = self.manifest.read().await;
-        resolve_version(&lock, timestamp, |ver, _| ver.major == major)
+        resolve_version(&lock, forks, |ver, _| ver.major == major)
     }
 
-    /// Newest line available at `timestamp`, whatever its major.
+    /// Newest active line, whatever its major.
     ///
     /// The fallback for a major no installed line provides: the run still
     /// reaches an executor, which rejects the contract with a canonical
     /// `invalid_contract major_mismatch` instead of never starting.
-    pub async fn get_newest_version(
-        &self,
-        timestamp: chrono::DateTime<chrono::Utc>,
-    ) -> Option<ResolvedVersion> {
+    pub async fn get_newest_version(&self, forks: &chainforks::Active) -> Option<ResolvedVersion> {
         let lock = self.manifest.read().await;
-        resolve_version(&lock, timestamp, |_, _| true)
+        resolve_version(&lock, forks, |_, _| true)
     }
 
     /// Newest line whose manifest key matches `pattern`, by the same rules a
@@ -159,10 +212,10 @@ impl Ctx {
     pub async fn get_matching_version(
         &self,
         pattern: &regex::Regex,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        forks: &chainforks::Active,
     ) -> Option<ResolvedVersion> {
         let lock = self.manifest.read().await;
-        resolve_version(&lock, timestamp, |_, key| pattern.is_match(key))
+        resolve_version(&lock, forks, |_, key| pattern.is_match(key))
     }
 }
 
@@ -185,7 +238,7 @@ pub fn exact_version(version: &str) -> ResolvedVersion {
 
 fn resolve_version(
     manifest: &Manifest,
-    timestamp: chrono::DateTime<chrono::Utc>,
+    forks: &chainforks::Active,
     matches: impl Fn(&Version, &str) -> bool,
 ) -> Option<ResolvedVersion> {
     let matches = |ver: &Version| match manifest.version_orig_keys.get(ver) {
@@ -193,29 +246,12 @@ fn resolve_version(
         None => false,
     };
 
-    let mut ver = manifest
+    let ver = manifest
         .executor_versions
         .iter()
-        .filter(|(ver, ev)| matches(ver) && ev.available_after <= timestamp)
+        .filter(|(ver, ev)| matches(ver) && forks.contains(&ev.fork))
         .map(|(ver, _)| *ver)
         .max()?;
-
-    // Walk forward to the newest contiguous patch, but only adopt a patch
-    // whose time gate has already opened. Skipping `available_after` here
-    // would activate a future (or rc) patch prematurely, which during a
-    // rolling update with staged manifests causes consensus divergence. The
-    // patch must satisfy the same predicate: a major cannot change under a
-    // patch bump, but a pattern the caller wrote can stop matching.
-    loop {
-        let mut next = ver;
-        next.patch += 1;
-        match manifest.executor_versions.get(&next) {
-            Some(ev) if ev.available_after <= timestamp && matches(&next) => {
-                ver = next;
-            }
-            _ => break,
-        }
-    }
 
     Some(ResolvedVersion {
         version: ver,
@@ -226,16 +262,16 @@ fn resolve_version(
 pub async fn detect_major_spec(
     full_ctx: &crate::manager::AppContext,
     data: &[u8],
-    deployment_timestamp: chrono::DateTime<chrono::Utc>,
+    forks: &chainforks::Active,
 ) -> anyhow::Result<u32> {
     let zelf = &full_ctx.ver_ctx;
 
-    let Some(possible_major) = zelf.get_latest_major(deployment_timestamp).await else {
+    let Some(possible_major) = zelf.get_latest_major(forks).await else {
         anyhow::bail!("no_executor_version_available");
     };
 
     let execute_in = zelf
-        .get_version(possible_major, deployment_timestamp)
+        .get_version(possible_major, forks)
         .await
         .with_context(|| "failed_to_get_executor_version")?;
 

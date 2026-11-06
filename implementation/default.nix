@@ -29,6 +29,10 @@ let
     ++ builtins.map (line: "executors/${line}.x/manifest.json") monorepo.active-versions
   );
 
+  runner-forks = builtins.toFile "runner-forks.json" (
+    builtins.toJSON (import (root-src + "/runners/forks.nix") { inherit root-src; })
+  );
+
   # The shipped LLM dispatch script requires the `llm_policy` package, which
   # lives in the unhardcoded-engine submodule instead of under install/.
   llm-policy-src = release-src + "/libs/unhardcoded-engine";
@@ -116,8 +120,8 @@ let
         patch-web-config --tag ${build-config.executor-version} "$out/config/genvm-module-web.yaml"
 
         # Assemble data/manifest.yaml from the active executor submodules
-        # (executor-version + available-after) and the static base fields.
-        genvm-tool -C ${release-src} build-manifest --output "$out/data/manifest.yaml"
+        # (executor-version + fork), the runner forks and the static base fields.
+        genvm-tool -C ${release-src} build-manifest --runner-forks ${runner-forks} --output "$out/data/manifest.yaml"
 
         patch-rpath --codesign --search-dir "$out/lib" --rpath '$ORIGIN/../lib' "$out/bin/genvm-modules"
         find "$out/lib" -type f -name '*.so' -not -name 'libc.so' | while read lib; do

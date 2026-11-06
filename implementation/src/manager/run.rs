@@ -1025,10 +1025,18 @@ pub struct Request {
     #[serde(default)]
     #[calldata(default = default_hook_cross_contract_calls)]
     pub hook_cross_contract_calls: bool,
+    /// Chainforks schedule network; absent means the manager's `default_network`.
+    #[serde(default)]
+    #[calldata(default = default_network)]
+    pub network: Option<String>,
 }
 
 fn default_hook_cross_contract_calls() -> bool {
     false
+}
+
+fn default_network() -> Option<String> {
+    None
 }
 
 fn default_gas_data() -> std::collections::BTreeMap<String, String> {
@@ -1818,6 +1826,7 @@ fn configure_log_pipe(
 fn build_genvm_command(
     command_path: std::path::PathBuf,
     req: &Request,
+    forks: &crate::manager::chainforks::Active,
     genvm_id: GenVMId,
     log_write_fd: &std::os::unix::io::OwnedFd,
 ) -> tokio::process::Command {
@@ -1840,6 +1849,7 @@ fn build_genvm_command(
     proc.arg(&req.permissions);
 
     proc.arg(format!("--genvm-id={}", genvm_id.0));
+    proc.arg(format!("--forks={forks}"));
 
     proc.arg("--debug-mode");
     proc.arg(req.debug_mode.as_arg());
@@ -2203,6 +2213,8 @@ impl Ctx {
             // A child that may itself call across a boundary needs the same
             // routing as its parent.
             hook_cross_contract_calls: parent_req.hook_cross_contract_calls,
+            // Already resolved by the parent, so a child cannot pick another one.
+            network: parent_req.network.clone(),
         };
         let mut execution_data = execution_data_from_request(&req, &full_ctx.config);
         execution_data.code = None;
@@ -2391,7 +2403,7 @@ async fn supervise_genvm_inner(
 async fn resolve_selector(
     ver_ctx: &crate::manager::versioning::Ctx,
     selector: &genvm_modules_interfaces::ExecutorSelector,
-    timestamp: chrono::DateTime<chrono::Utc>,
+    forks: &crate::manager::chainforks::Active,
     genvm_id: GenVMId,
 ) -> anyhow::Result<crate::manager::versioning::ResolvedVersion> {
     use genvm_modules_interfaces::{ExecutorSelector, VersionMatch};
@@ -2408,7 +2420,7 @@ async fn resolve_selector(
                     })?;
 
                     ver_ctx
-                        .get_matching_version(&pattern, timestamp)
+                        .get_matching_version(&pattern, forks)
                         .await
                         .ok_or_else(|| {
                             anyhow::anyhow!("no line matches version selector `{pattern}`")
@@ -2419,7 +2431,7 @@ async fn resolve_selector(
         ExecutorSelector::MajorOverride { major } => *major,
     };
 
-    if let Some(version) = ver_ctx.get_version(major, timestamp).await {
+    if let Some(version) = ver_ctx.get_version(major, forks).await {
         return Ok(version);
     }
 
@@ -2430,7 +2442,7 @@ async fn resolve_selector(
         "no line provides the requested major, falling back to the newest one"
     );
 
-    ver_ctx.get_newest_version(timestamp).await.ok_or_else(|| {
+    ver_ctx.get_newest_version(forks).await.ok_or_else(|| {
         anyhow::anyhow!(
             "no compatible version found for major {major} and no line is available at all"
         )
@@ -2440,12 +2452,17 @@ async fn resolve_selector(
 async fn run_genvm_process(
     full_ctx: sync::DArc<crate::manager::AppContext>,
     exec_ctx: sync::DArc<SingleGenVMContext>,
-    req: Request,
+    mut req: Request,
     execution_data: genvm_modules_interfaces::ExecutionData,
     genvm_id: GenVMId,
     consumed_result: sync::DArc<tokio::sync::OnceCell<Vec<u8>>>,
     resources: RunResources,
 ) -> anyhow::Result<std::process::ExitStatus> {
+    let network = req
+        .network
+        .get_or_insert_with(|| full_ctx.config.default_network.clone());
+    let forks = full_ctx.ver_ctx.active_forks(network, req.timestamp)?;
+
     let is_top_level = resources.is_top_level();
     let caller_stream = resources.caller_stream();
     let modules_lock = match &resources {
@@ -2491,7 +2508,7 @@ async fn run_genvm_process(
         }
         _ => req.selector.clone(),
     };
-    let version = resolve_selector(&full_ctx.ver_ctx, &selector, req.timestamp, genvm_id).await?;
+    let version = resolve_selector(&full_ctx.ver_ctx, &selector, &forks, genvm_id).await?;
     let ctx = full_ctx.clone().into_gep(|x| &x.run_ctx);
 
     // Capture controls how logs and stdout/stderr are kept: disabled (forwarded
@@ -2526,7 +2543,7 @@ async fn run_genvm_process(
 
     // Create log pipe and build command
     let (read_fd, write_fd) = create_log_pipe()?;
-    let mut proc = build_genvm_command(command_path, &req, genvm_id, &write_fd);
+    let mut proc = build_genvm_command(command_path, &req, &forks, genvm_id, &write_fd);
 
     // Setup manager host socketpair (host id=1 for consume_result, run_nested
     // and -- unless the request hooks them -- resolve_call_contract_executor)
