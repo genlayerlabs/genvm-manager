@@ -303,6 +303,11 @@ def tests(ctx):
 
 	ctx.add_collector(collect_parse_version)
 
+	def collect_check_install(ctx: genvm_tool.tests.stage.collection.Context):
+		ctx.collect_dir('tests/system/check-install')
+
+	ctx.add_collector(collect_check_install)
+
 	def collect_make_zip(ctx: genvm_tool.tests.stage.collection.Context):
 		ctx.collect_dir('tests/system/make_zip')
 

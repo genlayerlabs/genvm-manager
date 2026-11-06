@@ -22,13 +22,15 @@ fn test_ctx(retention: &str, permits: usize) -> Ctx {
 async fn test_app_ctx() -> sync::DArc<crate::manager::AppContext> {
     let manifest_path =
         std::env::temp_dir().join(format!("genvm-run-test-{}.yaml", rand::random::<u128>()));
-    std::fs::write(&manifest_path, "executor_versions: {}\n").unwrap();
+    std::fs::write(&manifest_path, "runner_forks: []\nexecutor_versions: {}\n").unwrap();
     let config: sync::DArc<crate::manager::Config> = sync::DArc::new(
         serde_json::from_value(serde_json::json!({
             "threads": 1,
             "blocking_threads": 1,
             "log_disable": "",
             "manifest_path": manifest_path,
+            "chainforks_path": concat!(env!("CARGO_MANIFEST_DIR"), "/../install/data/genvm-chainforks.json"),
+            "default_network": "dev",
         }))
         .unwrap(),
     );
@@ -1118,6 +1120,7 @@ fn request_field_names() -> Vec<&'static str> {
             deadline,
             host_hello_data,
             hook_cross_contract_calls,
+            network,
         } = req;
     };
 
@@ -1147,6 +1150,7 @@ fn request_field_names() -> Vec<&'static str> {
         "deadline",
         "host_hello_data",
         "hook_cross_contract_calls",
+        "network",
     ]
 }
 
@@ -1250,4 +1254,35 @@ fn a_delegated_chain_never_widens_the_budget_it_was_given() {
     ] {
         assert!(cross_major_recursion(remaining) <= remaining, "{remaining}");
     }
+}
+
+#[test]
+fn the_executor_gets_the_active_forks_sorted_and_without_builtins() {
+    let schedule = crate::manager::chainforks::Schedule::parse(
+        r#"{
+            "forks": { "b": {}, "a": {}, "c": {} },
+            "networks": { "net": { "forks": { "b": "always", "a": "2024-01-01T00:00:00Z", "c": "never" } } }
+        }"#,
+    )
+    .unwrap();
+    let (_read_fd, write_fd) = create_log_pipe().unwrap();
+
+    let args = |at: &str| {
+        let forks = schedule.active("net", at.parse().unwrap()).unwrap();
+        let proc = build_genvm_command(
+            std::path::PathBuf::from("genvm"),
+            &module_request(),
+            &forks,
+            GenVMId(1),
+            &write_fd,
+        );
+        proc.as_std()
+            .get_args()
+            .map(|a| a.to_str().unwrap().to_owned())
+            .filter(|a| a.starts_with("--forks"))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(args("2025-01-01T00:00:00Z"), ["--forks=a,b"]);
+    assert_eq!(args("2023-01-01T00:00:00Z"), ["--forks=b"]);
 }

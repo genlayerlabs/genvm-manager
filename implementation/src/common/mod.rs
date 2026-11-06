@@ -808,8 +808,7 @@ struct FilteringResolver {
 
 impl FilteringResolver {
     fn new() -> anyhow::Result<Self> {
-        let mut builder = hickory_resolver::TokioResolver::builder_tokio()
-            .map_err(|e| anyhow::anyhow!("building hickory resolver: {e}"))?;
+        let mut builder = system_resolver_builder()?;
         // look up A and AAAA so "happy eyeballs" works, matching reqwest's own
         // hickory integration
         builder.options_mut().ip_strategy = hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6;
@@ -820,6 +819,67 @@ impl FilteringResolver {
             inner: Arc::new(inner),
         })
     }
+}
+
+type ResolverBuilder =
+    hickory_resolver::ResolverBuilder<hickory_resolver::net::runtime::TokioRuntimeProvider>;
+
+#[cfg(not(target_os = "macos"))]
+fn system_resolver_builder() -> anyhow::Result<ResolverBuilder> {
+    hickory_resolver::TokioResolver::builder_tokio()
+        .map_err(|e| anyhow::anyhow!("building hickory resolver: {e}"))
+}
+
+/// macOS keeps `/etc/resolv.conf` in sync with its primary resolver; read it the
+/// way hickory does on other unixes.
+#[cfg(target_os = "macos")]
+fn system_resolver_builder() -> anyhow::Result<ResolverBuilder> {
+    let data = std::fs::read("/etc/resolv.conf").context("reading /etc/resolv.conf")?;
+    let (config, options) = parse_resolv_conf(&data)?;
+    let mut builder =
+        hickory_resolver::TokioResolver::builder_with_config(config, Default::default());
+    *builder.options_mut() = options;
+    Ok(builder)
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn parse_resolv_conf(
+    data: &[u8],
+) -> anyhow::Result<(
+    hickory_resolver::config::ResolverConfig,
+    hickory_resolver::config::ResolverOpts,
+)> {
+    use hickory_resolver::config::{NameServerConfig, ResolverConfig, ResolverOpts};
+
+    let (conf, errors) = resolv_conf::Config::parse_with_errors(data);
+    for error in errors {
+        log_warn!(@operator, error:err = error; "error parsing resolv.conf");
+    }
+
+    let nameservers: Vec<_> = conf
+        .nameservers
+        .iter()
+        .map(|ip| NameServerConfig::udp_and_tcp(ip.into()))
+        .collect();
+    if nameservers.is_empty() {
+        anyhow::bail!("no nameservers in /etc/resolv.conf");
+    }
+    let search = conf
+        .get_last_search_or_domain()
+        .filter(|domain| *domain != "--")
+        .map(hickory_resolver::proto::rr::Name::from_str_relaxed)
+        .collect::<Result<Vec<_>, _>>()
+        .context("parsing resolv.conf search domains")?;
+
+    let mut options = ResolverOpts::default();
+    options.ndots = conf.ndots.try_into()?;
+    options.timeout = std::time::Duration::from_secs(conf.timeout.into());
+    options.attempts = conf.attempts.try_into()?;
+    options.edns0 = conf.edns0;
+    Ok((
+        ResolverConfig::from_parts(None, search, nameservers),
+        options,
+    ))
 }
 
 impl reqwest::dns::Resolve for FilteringResolver {
@@ -1322,6 +1382,53 @@ pub mod tests {
             gas_data: std::collections::BTreeMap::new(),
             initial_time_units_allocation: 0,
         })
+    }
+}
+
+#[cfg(test)]
+mod resolv_conf_tests {
+    use super::parse_resolv_conf as parse;
+    use std::net::IpAddr;
+
+    #[test]
+    fn no_nameservers_is_an_error() {
+        assert!(parse(b"search example.com\n").is_err());
+        assert!(parse(b"").is_err());
+    }
+
+    #[test]
+    fn nameservers_search_and_options() {
+        let (config, options) = parse(
+            b"nameserver 192.0.2.1\nnameserver fe80::1%en0\nsearch a.example b.example\noptions ndots:3 timeout:1 attempts:4 edns0\n",
+        )
+        .unwrap();
+        let ips: Vec<IpAddr> = config.name_servers().iter().map(|ns| ns.ip).collect();
+        assert_eq!(
+            ips,
+            [
+                "192.0.2.1".parse::<IpAddr>().unwrap(),
+                "fe80::1".parse().unwrap()
+            ]
+        );
+        let search: Vec<String> = config.search().iter().map(|n| n.to_string()).collect();
+        assert_eq!(search, ["a.example", "b.example"]);
+
+        assert_eq!(options.ndots, 3);
+        assert_eq!(options.timeout, std::time::Duration::from_secs(1));
+        assert_eq!(options.attempts, 4);
+        assert!(options.edns0);
+    }
+
+    #[test]
+    fn dash_dash_search_is_skipped() {
+        let (config, _) = parse(b"nameserver 192.0.2.1\nsearch --\n").unwrap();
+        assert!(config.search().is_empty());
+    }
+
+    #[test]
+    fn unparseable_lines_are_skipped() {
+        let (config, _) = parse(b"nameserver 192.0.2.1\nbogus line\n").unwrap();
+        assert_eq!(config.name_servers().len(), 1);
     }
 }
 

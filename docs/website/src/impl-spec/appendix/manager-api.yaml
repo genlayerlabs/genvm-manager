@@ -258,6 +258,14 @@ paths:
             type: string
             format: date-time
           description: Contract deployment timestamp in RFC3339 format
+        - name: Network
+          in: header
+          required: false
+          schema:
+            type: string
+          description: |
+            Network of the chainforks schedule; absent means the manager's
+            `default_network`. An unknown network answers 400
       requestBody:
         required: true
         content:
@@ -987,6 +995,16 @@ components:
             Whether the host wants to answer `resolve_call_contract_executor`. When
             false the manager answers it with a null reply and every `CallContract`
             stays in-process
+        network:
+          type: string
+          nullable: true
+          default: null
+          description: |
+            Network of the chainforks schedule whose forks, active at `timestamp`,
+            decide which executor lines and runners are available. Null means the
+            manager's `default_network`; an unknown network fails the run before an
+            executor is spawned. A delegated call inherits its caller's network
+          example: bradbury-phase2
         unsafe_overrides:
           type: object
           additionalProperties: false

@@ -16,11 +16,12 @@ pub struct Args {
     pub precompile: bool,
 }
 
-/// Runs `genvm check` for every active executor listed in the manifest,
-/// verifying that its runners are present with the correct hashes (and, with
-/// `--precompile`, precompiling them). Each executor resolves its own runner
-/// registry and directory from its bundled config, so the manager only has to
-/// locate and invoke the right binaries.
+/// Validates the schedule and manifest as startup does, then runs `genvm check`
+/// for every executor listed in the manifest, verifying that its runners are
+/// present with the correct hashes and name only forks the schedule defines
+/// (and, with `--precompile`, precompiling them). Each executor resolves its
+/// own runner registry and directory from its bundled config, so the manager
+/// only has to locate and invoke the right binaries.
 pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
     let config =
         genvm_common::load_config(HashMap::new(), &cli.config).with_context(|| "loading config")?;
@@ -32,10 +33,13 @@ pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
 
     config.base.setup_logging(std::io::stdout())?;
 
-    let manifest_str = std::fs::read_to_string(&config.manifest_path)
-        .with_context(|| format!("reading manifest {}", config.manifest_path))?;
-    let manifest: versioning::Manifest =
-        serde_yaml::from_str(&manifest_str).with_context(|| "parsing manifest")?;
+    let (chainforks, manifest) = versioning::load_install(&config)?;
+    let defined_forks = chainforks
+        .forks
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(",");
 
     // Executors live next to this binary: <root>/bin/genvm-modules -> <root>/executor
     let mut executors_path = std::env::current_exe()?;
@@ -46,17 +50,6 @@ pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
 
     for version in manifest.executor_versions.keys() {
-        // Mirror the installer: only the newest patch of each line is active.
-        let next = versioning::Version {
-            major: version.major,
-            minor: version.minor,
-            patch: version.patch + 1,
-        };
-        if manifest.executor_versions.contains_key(&next) {
-            log_info!(@operator, version:? = version; "skipping executor: a newer patch exists");
-            continue;
-        }
-
         let orig_key = manifest
             .version_orig_keys
             .get(version)
@@ -67,7 +60,10 @@ pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
         log_info!(version = orig_key.as_str(), exe:? = genvm, precompile = args.precompile; "checking executor install");
 
         let mut command = std::process::Command::new(&genvm);
-        command.arg("check");
+        command
+            .arg("check")
+            .arg("--defined-forks")
+            .arg(&defined_forks);
         if args.precompile {
             command.arg("--precompile");
         }

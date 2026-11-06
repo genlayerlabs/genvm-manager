@@ -140,6 +140,7 @@
     "permit": "Permits",
 
     "manager-socket": "Manager socket protocol",
+    "check-install": "Install verification by genvm-manager check-install",
     "version-parse": "Version parsing",
     "version-routing": "Version routing",
     "version-routing-cross-major": "Cross-major routing",
