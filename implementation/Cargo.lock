@@ -1013,6 +1013,7 @@ dependencies = [
  "crossbeam",
  "futures-util",
  "genlayer_calldata",
+ "genlayer_sdk",
  "genvm-common",
  "genvm_modules_interfaces",
  "hex",
