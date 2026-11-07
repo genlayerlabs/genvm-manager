@@ -981,6 +981,64 @@ async fn process_completion_waits_for_final_logs_on_success_and_error() {
 }
 
 #[tokio::test]
+async fn safe_capture_bounds_bytes_from_rejected_gl_call_logs() {
+    use std::{collections::BTreeMap, io::Write};
+
+    use genlayer_sdk::abi::gl_call::Message;
+
+    // A contract can pass these bytes to the raw gl_call import, catch the
+    // resulting SystemError, and repeat the call before returning normally.
+    // The executor logs the decode error with @user error:err; its 128-byte
+    // limit only applies to byte captures, so the unknown field is echoed.
+    let unknown_field = "z".repeat(1024 * 1024);
+    let request = calldata::Value::Map(BTreeMap::from([(
+        "EmitEvent".to_owned(),
+        calldata::Value::Map(BTreeMap::from([(unknown_field, calldata::Value::Null)])),
+    )]));
+    let encoded = calldata::encode(&request);
+    let error = calldata::decode_obj::<Message>(&encoded).unwrap_err();
+    let mut record = Vec::new();
+    genvm_common::logger::log_into_buffer(
+        &mut record,
+        genvm_common::logger::Record {
+            callsite: genvm_common::logger::Callsite {
+                level: genvm_common::logger::Level::Info,
+                audience: genvm_common::logger::Audience::User,
+                target: "genlayer_sdk",
+            },
+            args: format_args!("calldata deserialization failed"),
+            kv: &[("error", genvm_common::logger::Capture::Error(&error))],
+            file: "mod.rs",
+            line: 0,
+        },
+        genvm_common::logger::LogIntoBufferConfig::default(),
+    )
+    .unwrap();
+    let sink = Arc::new(LogSinkInner::new(false));
+    let (read_fd, write_fd) = create_log_pipe().unwrap();
+    let writer = tokio::task::spawn_blocking(move || {
+        let mut file = std::fs::File::from(write_fd);
+        for _ in 0..6 {
+            file.write_all(&record).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+    });
+    let mut appender = LogAppenderToValue(sink.clone());
+    read_log_pipe(read_fd, &mut appender).await.unwrap();
+    writer.await.unwrap();
+
+    let entries = sink.drain();
+    let captured_bytes: usize = entries
+        .iter()
+        .map(|entry| serde_json::to_vec(entry).unwrap().len())
+        .sum();
+    assert!(
+        captured_bytes <= 4 * 1024 * 1024,
+        "safe capture retained {captured_bytes} log bytes, above the proposed 4 MiB log budget"
+    );
+}
+
+#[tokio::test]
 async fn spawn_failure_closes_the_log_pipe() {
     let (read_fd, write_fd) = create_log_pipe().unwrap();
     let process = async {

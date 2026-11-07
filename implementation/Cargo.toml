@@ -114,6 +114,7 @@ cc = "1"
 
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
+genlayer_sdk = { path = "../executors/v0.3.x/executor/crates/sdk-rs", default-features = false }
 
 [profile.dev]
 incremental = false
