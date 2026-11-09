@@ -90,38 +90,37 @@ For any of the layouts a file list is constructed. Each entry name:
 - Must not be empty or start with ``/``
 - Must use ``/`` as the path separator; backslashes are forbidden
 - Must not contain empty, ``.`` or ``..`` path components
-- Must not end with ``/`` unless the entry is a directory
 
 Each file also has contents as a raw byte slice
 
 1. ZIP Archive
 ~~~~~~~~~~~~~~
 
-Used if runner bytes represent a ZIP archive
+Used if runner bytes represent a ZIP archive: they end with an end of central
+directory record whose comment runs exactly to the end, that record names disk 0
+and equal entry counts, and the central directory ends right at the record and
+consists of exactly that many entries, each with a local header offset before
+the directory. Anything else, ZIP64 included, is not a ZIP and the next layout
+is tried
 
-- If successful, extracts the archive contents and processes it as a structured :term:`runner` package
-- This format supports complex :term:`runners <Runner>` with multiple files, dependencies, and configuration
-- Only allowed compression is ``stored`` (no compression), declared by both the central directory and the entry's local header
-- A stored entry's compressed and uncompressed sizes must be equal
-- A stored file's contents must match its declared CRC-32
-- The local header must agree with the central directory on the entry name, and,
-  unless the entry has a data descriptor (general-purpose flag bit 3), on the
-  CRC-32 and the sizes. The local name must be valid UTF-8 and equal, as raw
-  bytes, to the decoded central name: the Unicode Path extra field if present,
-  otherwise the name as UTF-8 with general-purpose flag bit 11 and as CP437
-  without it
-- Encrypted entries (general-purpose flag bit 0) are rejected
-- An entry ending with ``/`` is a directory; its size and CRC-32 must be 0, and it is omitted from the file list
-- If several entries share a name, the file list holds the last of them
-- Once every rule above holds for every entry and the metadata cost (see
-  :ref:`runner load charges <gvm-def-runner-load-charge>`) is charged, the
-  archive is also checked against the following, in order:
+A ZIP archive is a structured :term:`runner` package. Once its metadata cost
+fits (see :ref:`runner load charges <gvm-def-runner-load-charge>`), it is
+malformed unless:
 
-  #. The local header and the central directory carry the same general-purpose flags
-  #. No 2 entries overlap, directories included: an entry spans its local
-     header through the end of its data
-  #. No file name is also a directory: neither of another file, as ``a`` is of
-     ``a/b``, nor of a directory entry, as ``a`` is of ``a/`` or ``a/b/``
+- Neither the archive nor any entry has a comment
+- Entry names are printable ASCII, ``0x20`` to ``0x7e``, follow the rules above,
+  do not end with ``/`` and are unique
+- Every entry is ``stored`` (no compression), with equal compressed and
+  uncompressed sizes, ZIP version needed 2.0, disk 0, no internal attributes,
+  no general-purpose flags, no extra fields, and external attributes that are
+  either 0 or a Unix regular file with any permissions
+- The local header agrees with the central directory on the compression method,
+  version needed, time, date, flags, name, CRC-32 and sizes
+- Entries tile every byte before the central directory in directory order: the
+  first local header is at offset 0, and each next one starts where the
+  previous entry's data ends
+- No file name is also a directory of another, as ``a`` is of ``a/b``
+- Each file's contents match its declared CRC-32
 
 2. Raw WASM
 ~~~~~~~~~~~
@@ -407,10 +406,10 @@ ids it has already loaded. The load action for an id is:
 
 The raw size is the length of the runner's code or archive bytes. For a ZIP
 runner, the metadata cost is the sum of
-:ref:`gvm-def-consts-value-memory-limiter-consts-zip-file-cost` plus the UTF-8
-filename length in octets for each distinct non-directory entry. Repeated
-filenames count once, using the last entry. It is charged per entry, in
-central-directory order, after that entry's checks. Non-ZIP runners have no additional
+:ref:`gvm-def-consts-value-memory-limiter-consts-zip-file-cost` plus the name
+length in octets for each central directory entry. It must fit before any entry
+is checked, so an archive over the budget is out of memory even if it is also
+malformed. Non-ZIP runners have no additional
 metadata charge. Insufficient RAM for either charge exits the :term:`sub-VM`
 with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`
 

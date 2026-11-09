@@ -156,3 +156,11 @@ Breaking
    :ref:`gvm-def-consts-value-top-limits-emissions`; past it the :term:`sub-VM`
    exits with :ref:`gvm-def-str-trie-value-vm-error-out-of-emissions`. See
    :doc:`03-vm/03-ram-limiting`
+#. ZIP :term:`runners <Runner>` are limited to a strict subset: entries tile
+   the archive in directory order, carry no comments, flags, extra fields,
+   directory entries or attributes beyond a Unix regular file, have unique
+   printable-ASCII names, and
+   agree with their local headers on every shared field. Data before the
+   archive, ZIP64 and an inconsistent central directory no longer make the
+   bytes a ZIP. The metadata cost counts every entry and must fit before any
+   entry is checked. See :doc:`02-execution-environment/04-runners`
