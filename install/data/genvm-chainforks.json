@@ -1,0 +1,26 @@
+{
+  "forks": {
+    "genvm/executor/v0.2": {},
+    "genvm/executor/v0.3": {}
+  },
+  "networks": {
+    "dev": {
+      "forks": {
+        "genvm/executor/v0.2": "always",
+        "genvm/executor/v0.3": "always"
+      }
+    },
+    "studio": {
+      "forks": {
+        "genvm/executor/v0.2": "2026-01-01T00:00:00Z",
+        "genvm/executor/v0.3": "always"
+      }
+    },
+    "bradbury-phase2": {
+      "forks": {
+        "genvm/executor/v0.2": "never",
+        "genvm/executor/v0.3": "always"
+      }
+    }
+  }
+}
