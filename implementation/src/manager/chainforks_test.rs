@@ -35,11 +35,25 @@ fn the_shipped_schedule_is_valid() {
     )
     .unwrap();
 
-    for network in ["dev", "studio", "bradbury-phase2"] {
+    for network in ["dev", "studio", "bradbury-phase2", "clarke"] {
         schedule.check_network(network).unwrap();
     }
     let dev = schedule.active("dev", at("1970-01-01T00:00:00Z")).unwrap();
-    assert_eq!(dev.to_string(), "genvm/executor/v0.2,genvm/executor/v0.3");
+    assert_eq!(
+        dev.to_string(),
+        "genvm/executor/v0.2,genvm/executor/v0.3,genvm/executor/v0.4"
+    );
+    let now = at("2026-11-09T00:00:00Z");
+    assert_eq!(
+        schedule.active("clarke", now).unwrap().to_string(),
+        "genvm/executor/v0.4"
+    );
+    for network in ["studio", "bradbury-phase2"] {
+        assert!(!schedule
+            .active(network, now)
+            .unwrap()
+            .contains("genvm/executor/v0.4"));
+    }
 }
 
 #[test]

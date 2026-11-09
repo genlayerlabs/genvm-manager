@@ -142,3 +142,17 @@ Changed
    whose entries overlap, or with a file name that is also a directory is
    malformed. These are checked after every earlier rule, so an archive those
    reject keeps its error. See :doc:`02-execution-environment/04-runners`
+
+.. _gvm-changelog-v0-4:
+
+v0.4
+----
+
+Breaking
+~~~~~~~~
+
+#. External messages, internal messages, internal deploy messages and events
+   share 1 execution-wide cap of
+   :ref:`gvm-def-consts-value-top-limits-emissions`; past it the :term:`sub-VM`
+   exits with :ref:`gvm-def-str-trie-value-vm-error-out-of-emissions`. See
+   :doc:`03-vm/03-ram-limiting`

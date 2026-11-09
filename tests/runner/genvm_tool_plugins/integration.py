@@ -655,7 +655,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		)
 
 		# Set up paths
-		rel_path = jsonnet_path.relative_to(self._test_case.cases_dir)
+		# Relative to the root, not the cases dir: lines sharing a case would collide
+		rel_path = jsonnet_path.relative_to(local_ctx.shared.root_dir)
 		mock_sock_path = Path('/tmp', 'genvm-test', rel_path.with_suffix(f'.sock{suff}'))
 		# sun_path is 104 bytes on macOS, 108 on Linux
 		if len(os.fsencode(mock_sock_path)) > 100:

@@ -10,7 +10,7 @@ default = []
 anyhow = "1.0.97"
 bytes = { version = "1.11.0", features = ["serde"] }
 chrono = "0.4.45"
-genlayer_calldata = { path = "../../executors/v0.3.x/executor/crates/calldata" }
+genlayer_calldata = { path = "../../executors/v0.4.x/executor/crates/calldata" }
 num-bigint = "0.4"
 num-traits = "0.2"
 primitive-types = { version = "0.13", features = ["impl-serde"] }

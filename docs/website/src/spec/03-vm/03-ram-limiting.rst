@@ -126,6 +126,10 @@ In addition to the RAM budget, the following hard limits apply:
 
 - Maximum :term:`sub-VM` nesting depth: :ref:`gvm-def-consts-value-top-limits-vm-recursion`
 - Maximum ``RunNondet`` calls per execution: :ref:`gvm-def-consts-value-top-limits-nondet-blocks`
+- Maximum emissions per execution, messages and events together, from v0.4: :ref:`gvm-def-consts-value-top-limits-emissions`.
+  Each ``Emit*`` message checks it right after its permission checks, before
+  validating its arguments, and exits with
+  :ref:`gvm-def-str-trie-value-vm-error-out-of-emissions`
 - Maximum open file descriptors per :term:`sub-VM`: :ref:`gvm-def-consts-value-top-limits-max-fds`
 - Maximum locked storage slots: :ref:`gvm-def-consts-value-top-limits-locked-slots`
 - Minimum remaining RAM to issue a ``WebRequest``: :ref:`gvm-def-consts-value-top-limits-web-request-min-space` octets
