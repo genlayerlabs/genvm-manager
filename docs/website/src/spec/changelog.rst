@@ -142,3 +142,26 @@ Changed
    whose entries overlap, or with a file name that is also a directory is
    malformed. These are checked after every earlier rule, so an archive those
    reject keeps its error. See :doc:`02-execution-environment/04-runners`
+
+.. _gvm-changelog-v0-4:
+
+v0.4
+----
+
+Breaking
+~~~~~~~~
+
+#. External messages, internal messages, internal deploy messages and events
+   share 1 execution-wide cap of
+   :ref:`gvm-def-consts-value-top-limits-emissions`; past it the :term:`sub-VM`
+   exits with :ref:`gvm-def-str-trie-value-vm-error-out-of-emissions`. See
+   :doc:`03-vm/03-ram-limiting`
+#. ZIP :term:`runners <Runner>` are limited to a strict subset: entries tile
+   the archive in directory order, carry no comments, flags, extra fields,
+   directory entries or attributes beyond a Unix regular file, have unique
+   printable-ASCII names, and
+   agree with their local headers on every shared field. ZIP64 and an
+   inconsistent central directory no longer make the bytes a ZIP; neither does
+   data before the archive, unless the directory offsets account for it, which
+   makes the archive malformed. The metadata cost counts every entry and must
+   fit before any entry is checked. See :doc:`02-execution-environment/04-runners`
