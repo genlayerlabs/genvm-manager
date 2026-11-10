@@ -655,7 +655,8 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 		)
 
 		# Set up paths
-		rel_path = jsonnet_path.relative_to(self._test_case.cases_dir)
+		# Relative to the root, not the cases dir: lines sharing a case would collide
+		rel_path = jsonnet_path.relative_to(local_ctx.shared.root_dir)
 		mock_sock_path = Path('/tmp', 'genvm-test', rel_path.with_suffix(f'.sock{suff}'))
 		# sun_path is 104 bytes on macOS, 108 on Linux
 		if len(os.fsencode(mock_sock_path)) > 100:
@@ -779,6 +780,12 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				message_fee_cascade = single_conf.get('message_fee_cascade')
 				if message_fee_cascade is not None:
 					request_extra['message_fee_cascade'] = message_fee_cascade
+				create2 = single_conf.get('create2')
+				if create2 is not None:
+					request_extra['create2'] = {
+						'deployer': Address(create2['deployer']),
+						'code_hash': bytes.fromhex(create2['code_hash'].removeprefix('0x')),
+					}
 				bucket_totals = base_host.default_bucket_totals(self._test_case.executor_major)
 				bucket_totals.update(single_conf.get('bucket_totals', {}))
 

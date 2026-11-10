@@ -17,11 +17,11 @@ default_env.pop('VIRTUAL_ENV', None)
 local_ctx = genvm_tool.tests.stage.configuration.current_context()
 
 # The Python unit-test interpreter is provided by a standalone, pinned nix flake
-# (executors/v0.3.x/support/nix/py-test) that replaced genlayer-py-std's poetry
+# (executors/v0.4.x/support/nix/py-test) that replaced genlayer-py-std's poetry
 # env. It is realised lazily at run time (not collection time, so `test show`
 # stays cheap); tools are exec'd from its bin/.
 py_test_flake_dir = local_ctx.shared.root_dir.joinpath(
-	'executors', 'v0.3.x', 'support', 'nix', 'py-test'
+	'executors', 'v0.4.x', 'support', 'nix', 'py-test'
 )
 py_test_env_link = local_ctx.shared.root_dir.joinpath(
 	'build', 'ya-build', 'py-test-env'

@@ -66,6 +66,26 @@ pub struct MessageData {
     pub transaction_timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Inputs of the settlement chain's CREATE2 address derivation for salted deploys
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    serde::Serialize,
+    serde::Deserialize,
+    genlayer_calldata::Encode,
+    genlayer_calldata::Decode,
+)]
+pub struct Create2Data {
+    pub deployer: Address,
+    #[calldata(
+        serialize_with = ::genlayer_calldata::codec::as_bytes::serialize,
+        deserialize_with = ::genlayer_calldata::codec::as_bytes::deserialize,
+    )]
+    pub code_hash: [u8; 32],
+}
+
 fn decode_transaction_timestamp_rfc3339(
     val: genlayer_calldata::Value,
 ) -> Result<chrono::DateTime<chrono::Utc>, genlayer_calldata::codec::DecodeError> {
