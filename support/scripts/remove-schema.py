@@ -48,12 +48,15 @@ def process_json(p: Path):
 
 
 def process_one(p: Path):
+	if p.is_symlink():
+		return
+
 	if p.is_dir():
 		for child in p.iterdir():
 			process_one(child)
 		return
 
-	if not p.is_file() or p.is_symlink():
+	if not p.is_file():
 		return
 
 	if p.name.endswith(('.yml', '.yaml')):

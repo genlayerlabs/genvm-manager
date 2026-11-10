@@ -160,7 +160,8 @@ Breaking
    the archive in directory order, carry no comments, flags, extra fields,
    directory entries or attributes beyond a Unix regular file, have unique
    printable-ASCII names, and
-   agree with their local headers on every shared field. Data before the
-   archive, ZIP64 and an inconsistent central directory no longer make the
-   bytes a ZIP. The metadata cost counts every entry and must fit before any
-   entry is checked. See :doc:`02-execution-environment/04-runners`
+   agree with their local headers on every shared field. ZIP64 and an
+   inconsistent central directory no longer make the bytes a ZIP; neither does
+   data before the archive, unless the directory offsets account for it, which
+   makes the archive malformed. The metadata cost counts every entry and must
+   fit before any entry is checked. See :doc:`02-execution-environment/04-runners`

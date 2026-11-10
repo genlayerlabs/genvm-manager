@@ -1,6 +1,7 @@
 # Modifying a Runner
 
-Paths are relative to `executors/v0.4.x/`, the line that owns runner sources
+Paths are relative to the target line, `executors/v0.<N>.x/`; each forward-rolling
+line owns its runner sources and pins
 
 1. Set `runners/support/versions/dev-mode.nix` to `true` and the runner's hash
 	 in `runners/support/versions/current.nix` to `"test"`, then develop and test
@@ -21,7 +22,7 @@ Step 4 in detail, and why a hash is never restored by hand:
 A pin in `current.nix` may set 2 optional attributes, which end up in the
 line's `data/all.json`:
 
-1. `fork = "genvm/executor/v0.4/runners-<batch>";` — the
+1. `fork = "genvm/executor/v0.<N>/runners-<batch>";` — the
    [fork](../../../website/src/spec/01-core-architecture/03-versioning.rst) that
    makes the runner visible. Without it the pin gets the line's own fork, from
    `manifest.json`. A runner new to a released line must name a fork of its own

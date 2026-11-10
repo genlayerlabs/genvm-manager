@@ -40,6 +40,12 @@ def test_absolute_json_schema_is_kept(tmp_path):
 	assert f.read_text() == text
 
 
+def test_directory_symlinks_are_not_followed(tmp_path):
+	(tmp_path / 'loop').symlink_to(tmp_path, target_is_directory=True)
+	(tmp_path / 'x.yaml').write_text('a: 1\n')
+	assert _patch(tmp_path).returncode == 0
+
+
 @pytest.mark.parametrize('schema', ['../schema.json', './docs/schemas/x.json'])
 def test_relative_json_schema_outside_docs_schemas_is_rejected(tmp_path, schema):
 	f = tmp_path / 'x.json'
