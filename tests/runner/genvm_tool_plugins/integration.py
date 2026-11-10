@@ -780,6 +780,12 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 				message_fee_cascade = single_conf.get('message_fee_cascade')
 				if message_fee_cascade is not None:
 					request_extra['message_fee_cascade'] = message_fee_cascade
+				create2 = single_conf.get('create2')
+				if create2 is not None:
+					request_extra['create2'] = {
+						'deployer': Address(create2['deployer']),
+						'code_hash': bytes.fromhex(create2['code_hash'].removeprefix('0x')),
+					}
 				bucket_totals = base_host.default_bucket_totals(self._test_case.executor_major)
 				bucket_totals.update(single_conf.get('bucket_totals', {}))
 

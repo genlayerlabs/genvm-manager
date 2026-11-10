@@ -165,3 +165,9 @@ Breaking
    data before the archive, unless the directory offsets account for it, which
    makes the archive malformed. The metadata cost counts every entry and must
    fit before any entry is checked. See :doc:`02-execution-environment/04-runners`
+
+Added
+~~~~~
+
+#. The startup message carries ``create2``. See
+   :ref:`gvm-vm-startup-message`

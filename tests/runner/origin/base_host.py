@@ -55,6 +55,14 @@ DebugMode = typing.Literal[
 	'unsafe-tracing',
 ]
 
+# GhostFactory of a node conformance devnet
+DEFAULT_CREATE2: dict[str, Address | bytes] = {
+	'deployer': Address('0x7bc06c482DEAd17c0e297aFbC32f6e63d3846650'),
+	'code_hash': bytes.fromhex(
+		'01560dfe6cb54e53503bdef98255051fb87df5f08521bdb891314ab83229c3dd'
+	),
+}
+
 # Default host-provided `node` fee constants (see fees.expr_prelude in
 # install/config/genvm.yaml). Values are strings (gas_data is Map<str, str>)
 # and are kept minimal/deterministic for tests. `validatorsPerRound` is
@@ -1224,6 +1232,7 @@ async def run_genvm(
 				),
 			},
 			'message': message,
+			'create2': DEFAULT_CREATE2,
 			'is_sync': is_sync,
 			'debug_mode': debug_mode,
 			'host_data': host_data,

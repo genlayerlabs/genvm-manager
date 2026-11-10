@@ -350,7 +350,10 @@ Requirements
 #. When ``use_balance`` is set: :ref:`gvm-perm-use-balance-for-message-fees` and ``fee_params``
 #. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
-Supports CREATE2-style deployment with salt nonce for deterministic addressing.
+A nonzero ``salt_nonce`` places the child at the settlement chain's CREATE2
+address, salted with ``keccak256(contract_address ++ salt_nonce)``; 0 leaves the
+address to consensus. From v0.4, the startup message's ``create2`` carries the
+remaining inputs, see :ref:`gvm-vm-startup-message`.
 ``use_balance`` / ``fee_params`` / ``descendants`` behave as for
 :ref:`gvm-gl-call-balance-fees`.
 
