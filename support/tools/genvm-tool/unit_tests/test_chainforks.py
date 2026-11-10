@@ -115,6 +115,12 @@ def test_an_offset_is_normalized_before_comparing():
 	chainforks.validate(_schedule('2025-01-01T02:00:00+02:00', '2025-01-01T00:00:00Z'))
 
 
+def test_a_schema_reference_is_accepted_only_at_the_root():
+	chainforks.validate({'$schema': 's.json', 'forks': {}, 'networks': {}})
+	_rejects({'$schema': 1, 'forks': {}, 'networks': {}}, '`\\$schema` must be a string')
+	_rejects({'forks': {'a': {'$schema': 's.json'}}, 'networks': {}}, 'unknown keys')
+
+
 def test_a_null_description_is_accepted():
 	doc = _schedule()
 	doc['forks'][FIX]['description'] = None

@@ -743,6 +743,27 @@ components:
           default: "2024-11-26T06:42:42.424242Z"
           description: Transaction timestamp
 
+    Create2Data:
+      type: object
+      additionalProperties: false
+      description: |
+        Settlement-chain constants of the CREATE2 derivation that places a
+        salted child contract:
+        `keccak256(0xff ++ deployer ++ keccak256(contract_address ++ salt) ++ code_hash)[12:]`.
+        It is part of the contract's startup message, which also seeds its
+        deterministic randomness, so every node must send the same value
+      required:
+        - deployer
+        - code_hash
+      properties:
+        deployer:
+          $ref: '#/components/schemas/Address'
+          description: Contract that performs the CREATE2, the ghost factory
+        code_hash:
+          type: string
+          format: binary
+          description: 32-byte keccak256 of the init code the deployer passes to CREATE2
+
     GenvmRunRequest:
       type: object
       additionalProperties: false
@@ -764,6 +785,7 @@ components:
       required:
         - selector
         - message
+        - create2
         - is_sync
         - bucket_totals
         - host_data
@@ -778,6 +800,9 @@ components:
           $ref: '#/components/schemas/ExecutorSelector'
         message:
           $ref: '#/components/schemas/MessageData'
+        create2:
+          $ref: '#/components/schemas/Create2Data'
+          description: Executor lines before v0.4 ignore it
         is_sync:
           type: boolean
           description: Whether execution is synchronous
