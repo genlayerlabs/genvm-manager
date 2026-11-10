@@ -195,6 +195,9 @@ class _VmErrorOutOf:
 	def nondet_blocks() -> 'VmError':
 		return VmError('out_of nondet_blocks')
 	@staticmethod
+	def emissions() -> 'VmError':
+		return VmError('out_of emissions')
+	@staticmethod
 	def locked_slots() -> 'VmError':
 		return VmError('out_of locked_slots')
 	@staticmethod

@@ -38,7 +38,7 @@ def manager_version() -> str:
 
 	Read from the `version` field. The manager dev/release branches
 	(`v<X>-dev`, `v<X>`) are named after this — NOT after the executor lines
-	in `active-versions`, which move independently (currently v0.2 / v0.3).
+	in `active-versions`, which move independently (currently v0.2 / v0.3 / v0.4).
 	"""
 	return major_minor(load_root_conf()['version'])
 

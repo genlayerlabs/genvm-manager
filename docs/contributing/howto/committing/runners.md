@@ -1,7 +1,7 @@
 # Committing Runner Changes
 
-Runner sources and version pins live in the forward-rolling executor line,
-`executors/v0.3.x/`; every path below is relative to it. Frozen v0.2.x has no
+Runner sources and version pins live in each forward-rolling executor line,
+e.g. `executors/v0.4.x/`; every path below is relative to it. Frozen v0.2.x has no
 `runners/support/versions` tree — it ships a committed registry instead
 
 During development `runners/support/versions/dev-mode.nix` may be `true` and
