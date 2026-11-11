@@ -1,6 +1,14 @@
 ``gl_call`` Messages
 ====================
 
+Message Resource Limits
+-----------------------
+
+For internal, deploy and external message emissions, exhausting the submitted-message
+byte allowance produces :ref:`gvm-def-str-trie-value-vm-error-out-of-message-bytes`;
+exhausting the count allowance produces :ref:`gvm-def-str-trie-value-vm-error-out-of-message-count`.
+These limits are separate from message-fee funding
+
 ``EmitExternalMessage`` Message
 -------------------------------
 
@@ -160,6 +168,8 @@ Requirements
 #. ``descendants`` is absent unless ``use_balance`` is set
 #. ``calldata`` satisfies :ref:`gvm-def-contract-call-conv`
 
+A zero ``address`` is rejected with ``Inval`` before any charge
+
 Allocation-funded fees
 ~~~~~~~~~~~~~~~~~~~~~~
 
@@ -239,9 +249,12 @@ rejected with ``Inval``
 A Pinned grant obeys all of the following:
 
 #. Every node has a non-zero ``budget``
-#. The tree contains at most 24 nodes and has depth at most 24. An internal
-   node's encoded fee parameters are at most 1,024 bytes, which permits at most
-   22 ``rotations`` entries
+#. The tree contains at most :ref:`gvm-def-consts-value-top-limits-descendant-grant-nodes` nodes
+#. Depth is bounded by the host-supplied allocation-tree depth limit, with roots
+   at depth 1. If omitted, the limit is
+   :ref:`gvm-def-consts-value-top-limits-default-allocation-tree-depth`
+#. An internal node's encoded fee parameters, including its ``rotations``, fit
+   within :ref:`gvm-def-consts-value-top-limits-descendant-grant-fee-params-bytes` bytes
 #. External allocations occur only at the root. Their ``gas_limit`` and
    ``max_gas_price`` are non-zero, and their budget is a positive multiple of
    ``gas_limit * max_gas_price``. They authorize only finalization-phase
