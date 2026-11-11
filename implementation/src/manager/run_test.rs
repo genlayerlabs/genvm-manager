@@ -60,6 +60,10 @@ fn module_request() -> Request {
     serde_json::from_value(serde_json::json!({
         "selector": genvm_modules_interfaces::ExecutorSelector::MajorOverride { major: 0 },
         "message": message,
+        "create2": genvm_modules_interfaces::Create2Data {
+            deployer: calldata::Address::from([0; 20]),
+            code_hash: [0; 32],
+        },
         "is_sync": false,
         "bucket_totals": {},
         "host_data": "",
@@ -1097,6 +1101,7 @@ fn request_field_names() -> Vec<&'static str> {
         let Request {
             selector,
             message,
+            create2,
             is_sync,
             debug_mode,
             max_execution_minutes,
@@ -1127,6 +1132,7 @@ fn request_field_names() -> Vec<&'static str> {
     vec![
         "selector",
         "message",
+        "create2",
         "is_sync",
         "debug_mode",
         "max_execution_minutes",

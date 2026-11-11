@@ -33,6 +33,7 @@ pub struct ExecutionData {
     pub allow_two_workers: bool,
     pub calldata: Bytes,
     pub message: super::abi_stub::MessageData,
+    pub create2: super::abi_stub::Create2Data,
     pub host_data: String,
     pub code: Option<Bytes>,
     pub leader_public_data: Option<Bytes>,

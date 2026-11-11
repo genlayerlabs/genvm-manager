@@ -3,11 +3,11 @@
   deps,
   root-src,
   system,
-  # Source tree of the executor checkout (genvm-executor, branch v0.3.x). Merged
+  # Source tree of the executor checkout (genvm-executor, branch v0.4.x). Merged
   # into full-src at ${exec-prefix} so the former monorepo layout (executor/,
   # runners/, tests/) is reconstructed for get-root-subtree / compile-rust.
   executor-src,
-  exec-prefix ? "executors/v0.3.x",
+  exec-prefix ? "executors/v0.4.x",
 }:
 let
   mergeDoubleDepthAttrs =
