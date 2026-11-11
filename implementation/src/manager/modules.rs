@@ -200,6 +200,7 @@ impl Ctx {
                 &config_vars,
                 base_path,
                 &genvm_common::templater::DOLLAR_UNFOLDER_RE,
+                usize::MAX,
             )?;
             serde_yaml::from_reader(std::fs::File::open(base_path)?)?
         } else {

@@ -23,7 +23,7 @@ the modules, and the install/manifest pipeline.
 This is a monorepo for GenVM. It is composed of the following sub-projects:
 
 - [`executors/`](./executors/) — the core GenVM executor (a [genvm-executor]
-  submodule, pinned per version train) plus the [`runners/`](./executors/v0.3.x/runners/)
+  submodule, pinned per version train) plus the [`runners/`](./executors/v0.4.x/runners/)
   available to contracts (software floating point, the Python interpreter with
   built-in bindings to the GenVM WASM module, the GenLayer Python standard
   library, ...). The executor is a modified [`wasmtime`](https://wasmtime.dev)
@@ -41,7 +41,7 @@ environment setup and debug/production build instructions.
 
 GenVM's only purpose is to execute Intelligent Contracts. For getting-started
 documentation, see the [GenLayer documentation](https://docs.genlayer.com/build-with-genlayer/intelligent-contracts).
-For more complex examples, look into the [test suite](./executors/v0.3.x/tests/integration/).
+For more complex examples, look into the [test suite](./executors/v0.4.x/tests/integration/).
 
 ## Maintainers
 

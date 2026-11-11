@@ -97,6 +97,8 @@ pub struct Network {
 #[derive(Debug, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Schedule {
+    #[serde(rename = "$schema", default)]
+    _schema: Option<String>,
     #[serde(deserialize_with = "unique_map")]
     pub forks: BTreeMap<String, Fork>,
     #[serde(deserialize_with = "unique_map")]

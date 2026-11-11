@@ -35,11 +35,45 @@ fn the_shipped_schedule_is_valid() {
     )
     .unwrap();
 
-    for network in ["dev", "studio", "bradbury-phase2"] {
+    for network in [
+        "dev",
+        "studio",
+        "bradbury-phase2",
+        "phantom-bradbury",
+        "clarke",
+    ] {
         schedule.check_network(network).unwrap();
     }
     let dev = schedule.active("dev", at("1970-01-01T00:00:00Z")).unwrap();
-    assert_eq!(dev.to_string(), "genvm/executor/v0.2,genvm/executor/v0.3");
+    assert_eq!(
+        dev.to_string(),
+        "genvm/executor/v0.2,genvm/executor/v0.3,genvm/executor/v0.4"
+    );
+    let now = at("2026-11-09T00:00:00Z");
+    assert_eq!(
+        schedule.active("clarke", now).unwrap().to_string(),
+        "genvm/executor/v0.4"
+    );
+    for when in [at("1970-01-01T00:00:00Z"), at("2026-01-01T00:00:00Z"), now] {
+        assert_eq!(
+            schedule
+                .active("phantom-bradbury", when)
+                .unwrap()
+                .to_string(),
+            schedule
+                .active("bradbury-phase2", when)
+                .unwrap()
+                .to_string()
+        );
+    }
+    assert_eq!(
+        schedule.active("studio", now).unwrap().to_string(),
+        "genvm/executor/v0.2,genvm/executor/v0.3,genvm/executor/v0.4"
+    );
+    assert!(!schedule
+        .active("bradbury-phase2", now)
+        .unwrap()
+        .contains("genvm/executor/v0.4"));
 }
 
 #[test]
@@ -200,6 +234,17 @@ fn wrong_types_are_rejected() {
     let err =
         parse_err(r#"{ "forks": { "a": {} }, "networks": { "n": { "forks": { "a": 1 } } } }"#);
     assert!(err.contains("malformed chainforks schedule"), "{err}");
+}
+
+#[test]
+fn a_schema_reference_is_accepted_only_at_the_root() {
+    Schedule::parse(r#"{ "$schema": "s.json", "forks": {}, "networks": {} }"#).unwrap();
+
+    let err = parse_err(r#"{ "$schema": 1, "forks": {}, "networks": {} }"#);
+    assert!(err.contains("malformed chainforks schedule"), "{err}");
+
+    let err = parse_err(r#"{ "forks": { "a": { "$schema": "s.json" } }, "networks": {} }"#);
+    assert!(err.contains("unknown field"), "{err}");
 }
 
 #[test]
