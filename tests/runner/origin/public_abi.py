@@ -195,6 +195,12 @@ class _VmErrorOutOf:
 	def nondet_blocks() -> 'VmError':
 		return VmError('out_of nondet_blocks')
 	@staticmethod
+	def message_bytes() -> 'VmError':
+		return VmError('out_of message_bytes')
+	@staticmethod
+	def message_count() -> 'VmError':
+		return VmError('out_of message_count')
+	@staticmethod
 	def emissions() -> 'VmError':
 		return VmError('out_of emissions')
 	@staticmethod
