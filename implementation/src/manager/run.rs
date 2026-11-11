@@ -959,6 +959,7 @@ pub struct Request {
     /// its caller was given.
     pub selector: genvm_modules_interfaces::ExecutorSelector,
     pub message: genvm_modules_interfaces::MessageData,
+    pub create2: genvm_modules_interfaces::Create2Data,
     pub is_sync: bool,
     /// Executor debug level. Controls captured-output bounding, tracing, runner
     /// `:latest`/`:test` resolution (under `unsafe`), and (under `unsafe-tracing`)
@@ -1981,6 +1982,7 @@ fn execution_data_from_request(
         .unwrap_or(config.allow_two_workers),
         calldata: req.calldata.clone(),
         message: req.message.clone(),
+        create2: req.create2.clone(),
         host_data: req.host_data.clone(),
         code: req.code.clone(),
         leader_public_data: req.leader_public_data.clone(),
@@ -2188,6 +2190,7 @@ impl Ctx {
         let req = Request {
             selector: routing,
             message: envelope.message.clone(),
+            create2: parent_req.create2.clone(),
             is_sync: true,
             debug_mode: genvm_common::DebugMode::Disabled,
             max_execution_minutes: parent_req.max_execution_minutes,

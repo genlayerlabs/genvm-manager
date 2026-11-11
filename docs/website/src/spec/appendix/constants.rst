@@ -359,6 +359,21 @@ Param: i32
 ``out_of nondet_blocks``
 ~~~~~~~~~~~~~~~~~~~~~~~~
 
+.. _gvm-def-str-trie-value-vm-error-out-of-message-bytes:
+
+``out_of message_bytes``
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-message-count:
+
+``out_of message_count``
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. _gvm-def-str-trie-value-vm-error-out-of-emissions:
+
+``out_of emissions``
+~~~~~~~~~~~~~~~~~~~~
+
 .. _gvm-def-str-trie-value-vm-error-out-of-locked-slots:
 
 ``out_of locked_slots``
