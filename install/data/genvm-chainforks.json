@@ -17,13 +17,6 @@
       "forks": {
         "genvm/executor/v0.2": "2026-01-01T00:00:00Z",
         "genvm/executor/v0.3": "always",
-        "genvm/executor/v0.4": "never"
-      }
-    },
-    "studio-dev": {
-      "forks": {
-        "genvm/executor/v0.2": "2026-01-01T00:00:00Z",
-        "genvm/executor/v0.3": "always",
         "genvm/executor/v0.4": "always"
       }
     },

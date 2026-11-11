@@ -7,7 +7,7 @@ import pytest
 
 SCRIPT = ci_lib.ROOT_DIR / 'support' / 'scripts' / 'remove-schema.py'
 
-TAG = 'v0.6.0-rc12'
+TAG = 'v0.6.0-rc13'
 URL = f'https://raw.githubusercontent.com/genlayerlabs/genvm-manager/refs/tags/{TAG}/docs/schemas'
 
 

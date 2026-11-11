@@ -38,7 +38,6 @@ fn the_shipped_schedule_is_valid() {
     for network in [
         "dev",
         "studio",
-        "studio-dev",
         "bradbury-phase2",
         "phantom-bradbury",
         "clarke",
@@ -66,18 +65,15 @@ fn the_shipped_schedule_is_valid() {
                 .unwrap()
                 .to_string()
         );
-        let studio = schedule.active("studio", when).unwrap().to_string();
-        assert_eq!(
-            schedule.active("studio-dev", when).unwrap().to_string(),
-            format!("{studio},genvm/executor/v0.4")
-        );
     }
-    for network in ["studio", "bradbury-phase2"] {
-        assert!(!schedule
-            .active(network, now)
-            .unwrap()
-            .contains("genvm/executor/v0.4"));
-    }
+    assert_eq!(
+        schedule.active("studio", now).unwrap().to_string(),
+        "genvm/executor/v0.2,genvm/executor/v0.3,genvm/executor/v0.4"
+    );
+    assert!(!schedule
+        .active("bradbury-phase2", now)
+        .unwrap()
+        .contains("genvm/executor/v0.4"));
 }
 
 #[test]
