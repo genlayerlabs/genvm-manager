@@ -5,9 +5,9 @@ Overview
 --------
 
 The :term:`Host` Interface defines the communication protocol between GenVM and
-the blockchain node. GenVM launches with ``--host`` (socket address) and
-``--message`` (JSON data) parameters and communicates via a binary
-protocol over TCP or Unix domain sockets.
+the blockchain node. ``genvm run`` receives execution data as calldata and
+communicates via a binary protocol over TCP, Unix domain sockets or an inherited
+socket file descriptor.
 
 Process Management
 ------------------
@@ -17,8 +17,10 @@ GenVM Execution
 
 **Launch Parameters**:
 
-- ``--host``: TCP address or ``unix://`` prefixed Unix domain socket
-- ``--message``: Message data as JSON following message schema
+- ``--host``: Repeatable host URI, ordered by host index: TCP address,
+  ``unix://`` socket path or ``fd://`` inherited socket descriptor
+- ``--execution-data``: Calldata-encoded execution data from standard input by
+  default, or from a file path or ``fd://`` descriptor
 
 **Process Control**:
 
@@ -55,15 +57,14 @@ Result Encoding
 **Non-deterministic Blocks and Sandbox Encoding**:
 
 - 1 byte of result code
-- Result data: calldata for ``Return``, calldata for ``UserError``, string for ``VMError``
+- Result data: calldata for ``Return`` and ``UserError``, UTF-8 for ``VMError``
 
-**Parent VM Result Encoding**:
+**Top-Level Result Encoding**:
 
 - 1 byte of result code
-- Data format:
-
-    - ``Return``: calldata
-    - ``VMError`` / ``UserError``: ``{ "message": "string", "fingerprint": ... }``
+- Calldata-encoded ``ReportedResult`` map with the result ``kind`` and ``data``,
+  ``backtrace`` and ``wasm_store_hashes`` fingerprints, and execution fields;
+  see :doc:`../appendix/manager-socket`
 
 **Host Responsibility**: Calculating storage updates, hashes, and state
 management (similar to Ethereum's dirty storage override pattern).

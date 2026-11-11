@@ -238,6 +238,7 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 		return {
 			'selector': {'kind': 'major', 'major': base_host.UNDEPLOYED_MAJOR},
 			'message': message(address, is_init=False),
+			'create2': base_host.DEFAULT_CREATE2,
 			'is_sync': True,
 			'debug_mode': 'unsafe',
 			'host_data': '{"node_address":"test","tx_id":"cross-major-lifecycle"}',

@@ -58,11 +58,8 @@ this byte to ``CURRENT_MAJOR`` and fail with
 differs. :ref:`gvm-def-gl-call-call-contract` may instead delegate the callee to
 another executor selected by the host.
 
-The value is **not** modifiable by the contract itself: it is written once at deploy time by
-the host from a value detected in the contract package (a ``genvm.version`` custom WASM
-section, a ``version`` file inside a zip-packaged runner, or a leading ``// vX.Y.Z`` comment
-in single-file text contracts). The host detection flow and the on-the-wire endpoint
-(``POST /contract/detect-version``) are described in the impl-spec.
+The contract cannot modify ``major`` itself. This implementation's version
+handling is described in :doc:`/impl-spec/02-vm/02-version-management`.
 
 Implications for upgrades:
 

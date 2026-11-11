@@ -1,3 +1,7 @@
+[submodule "executors/v0.4.x"]
+	path = executors/v0.4.x
+	url = ../genvm-executor
+	branch = v0.4.x
 [submodule "executors/v0.3.x"]
 	path = executors/v0.3.x
 	url = ../genvm-executor
