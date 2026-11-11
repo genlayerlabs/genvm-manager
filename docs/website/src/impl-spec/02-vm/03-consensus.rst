@@ -26,8 +26,8 @@ derived from whether the node has handed in opaque leader public data:
 
 ``call_no`` is a monotonically increasing counter incremented per ``RunNondet``
 invocation. The hard cap is ``internal_constants::top_limits::NONDET_BLOCKS`` (``4096``);
-exceeding it produces ``VmError::oom().ram().limit()``. The counter is what binds
-a leader's i-th non-det result to the validator's i-th non-det check — the
+exceeding it produces :ref:`gvm-def-str-trie-value-vm-error-out-of-nondet-blocks`.
+The counter is what binds a leader's i-th non-det result to the validator's i-th non-det check — the
 ordering of ``RunNondet`` calls in deterministic code MUST match between leader
 and validator, otherwise the contract is non-replayable.
 

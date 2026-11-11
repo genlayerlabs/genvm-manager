@@ -99,12 +99,33 @@ nondet_blocks
 
 Value: ``4096``
 
+.. _gvm-def-consts-value-top-limits-emissions:
+
+emissions
+~~~~~~~~~
+
+Value: ``65535``
+
 .. _gvm-def-consts-value-top-limits-default-allocation-tree-depth:
 
 default_allocation_tree_depth
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Value: ``5``
+
+.. _gvm-def-consts-value-top-limits-descendant-grant-nodes:
+
+descendant_grant_nodes
+~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``24``
+
+.. _gvm-def-consts-value-top-limits-descendant-grant-fee-params-bytes:
+
+descendant_grant_fee_params_bytes
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+Value: ``1024``
 
 .. _gvm-def-consts-value-top-limits-locked-slots:
 

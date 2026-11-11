@@ -338,6 +338,13 @@
                 entry = "${pkgs.check-jsonschema}/bin/check-jsonschema --builtin-schema vendor.github-actions";
                 files = "^\\.github/(actions/.+/)?action\\.ya?ml$";
               };
+              check-chainforks-schema = {
+                enable = true;
+                name = "check-chainforks-schema";
+                entry = "${pkgs.check-jsonschema}/bin/check-jsonschema --schemafile docs/schemas/genvm-chainforks.json install/data/genvm-chainforks.json";
+                files = "^(install/data|docs/schemas)/genvm-chainforks\\.json$";
+                pass_filenames = false;
+              };
               # --- local guards -----------------------------------------
               # Keep the manager crate's [package] version in lockstep with
               # .genvm-monorepo-root (executor lines version independently).

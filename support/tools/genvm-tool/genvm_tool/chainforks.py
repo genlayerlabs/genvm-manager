@@ -85,7 +85,9 @@ def _closure(forks: dict[str, typing.Any], name: str) -> set[str]:
 
 
 def validate(doc: typing.Any) -> None:
-	_check_keys('schedule', doc, {'forks', 'networks'})
+	_check_keys('schedule', doc, {'forks', 'networks'}, {'$schema'})
+	if not isinstance(doc.get('$schema', ''), str):
+		raise Error('`$schema` must be a string')
 	forks = doc['forks']
 	if not isinstance(forks, dict):
 		raise Error('forks: expected an object')

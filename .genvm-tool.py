@@ -115,7 +115,7 @@ def tests(ctx):
 
 	def collect_pytest(ctx: genvm_tool.tests.stage.collection.Context):
 		dirs = [
-			ctx.shared.root_dir.joinpath('executors', 'v0.3.x', 'runners', 'genlayer-py-std'),
+			ctx.shared.root_dir.joinpath('executors', 'v0.4.x', 'runners', 'genlayer-py-std'),
 			ctx.shared.root_dir.joinpath('support', 'tools', 'genvm-tool'),
 			ctx.shared.root_dir.joinpath('support', 'ci'),
 		]

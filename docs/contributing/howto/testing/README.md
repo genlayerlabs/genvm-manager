@@ -37,7 +37,7 @@ genvm-tool test run --filter-continue <name-or-path>
 ## Where Tests Come From
 
 Rust from every tracked `Cargo.toml` and its `fuzz/*.rs`, python from
-`executors/v0.3.x/runners/genlayer-py-std`, TypeScript from every tracked
+`executors/v0.4.x/runners/genlayer-py-std`, TypeScript from every tracked
 `package.json` with a `test` script, integration from each line's
 `tests/integration/`, and system from `tests/system/`. System suites use the
 same Jsonnet collector when they execute contracts; protocol-level assertions
