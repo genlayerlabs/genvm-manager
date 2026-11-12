@@ -16,6 +16,7 @@ class Methods(IntEnum):
 	CANCEL = 5
 	ACK = 6
 	GET_ARTIFACT = 7
+	GET_FORKS = 8
 
 
 class Errors(IntEnum):
@@ -26,6 +27,8 @@ class Errors(IntEnum):
 	BOOT_ID_MISMATCH = 4
 	BAD_REQUEST_ID = 5
 	NOT_FINISHED = 6
+	UNKNOWN_NETWORK = 7
+	CHAINFORKS_MISMATCH = 8
 
 
 CURRENT_MAJOR: typing.Final[int] = 0

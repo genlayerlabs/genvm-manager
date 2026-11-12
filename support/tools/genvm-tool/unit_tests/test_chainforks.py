@@ -125,3 +125,7 @@ def test_a_null_description_is_accepted():
 	doc = _schedule()
 	doc['forks'][FIX]['description'] = None
 	chainforks.validate(doc)
+
+
+def test_a_network_name_cannot_be_empty():
+	_rejects({'forks': {}, 'networks': {'': {'forks': {}}}}, 'empty network name')
