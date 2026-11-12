@@ -35,36 +35,13 @@ fn the_shipped_schedule_is_valid() {
     )
     .unwrap();
 
-    assert_eq!(
-        schedule.networks.keys().collect::<Vec<_>>(),
-        ["bradbury-phase2", "clarke", "dev", "phantom-bradbury"]
-    );
+    // Real networks belong to the hosts, which pass their own schedules
+    assert_eq!(schedule.networks.keys().collect::<Vec<_>>(), ["dev"]);
     let dev = schedule.active("dev", at("1970-01-01T00:00:00Z")).unwrap();
     assert_eq!(
         dev.to_string(),
         "genvm/executor/v0.2,genvm/executor/v0.3,genvm/executor/v0.4"
     );
-    let now = at("2026-11-09T00:00:00Z");
-    assert_eq!(
-        schedule.active("clarke", now).unwrap().to_string(),
-        "genvm/executor/v0.4"
-    );
-    for when in [at("1970-01-01T00:00:00Z"), at("2026-01-01T00:00:00Z"), now] {
-        assert_eq!(
-            schedule
-                .active("phantom-bradbury", when)
-                .unwrap()
-                .to_string(),
-            schedule
-                .active("bradbury-phase2", when)
-                .unwrap()
-                .to_string()
-        );
-    }
-    assert!(!schedule
-        .active("bradbury-phase2", now)
-        .unwrap()
-        .contains("genvm/executor/v0.4"));
 }
 
 #[test]

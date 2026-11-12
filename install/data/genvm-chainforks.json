@@ -12,27 +12,6 @@
         "genvm/executor/v0.3": "always",
         "genvm/executor/v0.4": "always"
       }
-    },
-    "bradbury-phase2": {
-      "forks": {
-        "genvm/executor/v0.2": "never",
-        "genvm/executor/v0.3": "always",
-        "genvm/executor/v0.4": "never"
-      }
-    },
-    "phantom-bradbury": {
-      "forks": {
-        "genvm/executor/v0.2": "never",
-        "genvm/executor/v0.3": "always",
-        "genvm/executor/v0.4": "never"
-      }
-    },
-    "clarke": {
-      "forks": {
-        "genvm/executor/v0.2": "never",
-        "genvm/executor/v0.3": "never",
-        "genvm/executor/v0.4": "always"
-      }
     }
   }
 }
