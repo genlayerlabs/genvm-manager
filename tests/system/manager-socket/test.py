@@ -1,5 +1,6 @@
 import asyncio
 import contextlib
+import json
 import os
 import pickle
 import stat
@@ -17,6 +18,7 @@ import origin.calldata as gvm_calldata
 import origin.host_fns as host_fns
 from gvm_extra.mock_host import MockHost, MockStorage
 from origin.calldata import Address
+from origin.keccak import Keccak256
 from origin.manager_api import CURRENT_MAJOR, Errors, Methods
 
 HELLO_WORLD = Path(
@@ -377,6 +379,44 @@ class ManagerSocketStep(genvm_tool.tests.exec.step.Python):
 				await _read_error(client, 2, Errors.MALFORMED_FRAME)
 				await client.send(Methods.CANCEL, 3, {'cancel': {'genvm_id': 999}})
 				await _read_error(client, 3, Errors.UNKNOWN_ID)
+
+	async def _get_forks_without_run(self):
+		def request(network: str, network_hash: bytes) -> dict[str, typing.Any]:
+			return {
+				'get_forks': {
+					'network': network,
+					'timestamp': '2024-11-26T06:42:42.424242Z',
+					'network_hash': network_hash,
+				}
+			}
+
+		schedule = json.loads(
+			(self.case.shared.root_dir / 'install/data/genvm-chainforks.json').read_text()
+		)
+		dev_forks = schedule['networks']['dev']['forks']
+		dev_hash = Keccak256(gvm_calldata.encode(dev_forks)).digest()
+
+		async with await self._manager('get-forks') as manager:
+			# The node's pattern: a connection that only asks for forks and never runs
+			async with ManagerWsClient(manager.uri) as client:
+				await _read_hello(client)
+				await client.send(Methods.GET_FORKS, 1, request('dev', dev_hash))
+				reply = await _read_reply(client, Methods.GET_FORKS, 1)
+				assert reply == {'forks': {fork: True for fork in dev_forks}}, reply
+
+			async with ManagerWsClient(manager.uri) as client:
+				await _read_hello(client)
+				await client.send(Methods.GET_FORKS, 2, request('dev', b'\x00' * 32))
+				error = await _read_error(client, 2, Errors.CHAINFORKS_MISMATCH)
+				message = error['message']
+				assert '`dev`' in message, message
+				assert '00' * 32 in message and dev_hash.hex() in message, message
+
+				for request_id, network in [(3, 'other'), (4, '')]:
+					await client.send(Methods.GET_FORKS, request_id, request(network, dev_hash))
+					await _read_error(client, request_id, Errors.UNKNOWN_NETWORK)
+				await client.send(Methods.GET_FORKS, 5, request('dev', dev_hash[:31]))
+				await _read_error(client, 5, Errors.MALFORMED_FRAME)
 
 	async def _fatal_consumed_result_is_rejected(self):
 		raw = bytes([host_fns.ResultCode.FATAL_VM_ERROR]) + gvm_calldata.encode({})
@@ -963,6 +1003,7 @@ def collect(
 			None,
 			genvm.ManagerService,
 		),
+		('get-forks', '_get_forks_without_run', {}, None, genvm.ManagerService),
 		(
 			'oversized-close',
 			'_oversized_closes_connection',

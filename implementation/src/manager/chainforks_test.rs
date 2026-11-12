@@ -185,6 +185,7 @@ fn unknown_and_duplicate_keys_are_rejected() {
 fn a_date_must_be_rfc3339_or_a_builtin() {
     let err = parse_err(&schedule("2025-01-01", "never", &format!("\"{LINE}\"")));
     assert!(err.contains("RFC 3339"), "{err}");
+    assert!(err.contains(&format!("fork `{LINE}`")), "{err}");
 }
 
 #[test]
@@ -241,4 +242,126 @@ fn a_schema_reference_is_accepted_only_at_the_root() {
 #[test]
 fn a_null_description_is_accepted() {
     Schedule::parse(r#"{ "forks": { "a": { "description": null } }, "networks": {} }"#).unwrap();
+}
+
+#[test]
+fn the_network_hash_is_keccak_of_the_calldata_schedule() {
+    let schedule = Schedule::parse(
+        r#"{
+            "forks": { "b": {}, "a": {}, "c": {} },
+            "networks": { "net": { "forks": {
+                "b": "never", "a": "always", "c": "2025-01-01T00:00:00Z"
+            } } }
+        }"#,
+    )
+    .unwrap();
+    // map(3) {"a": "always", "b": "never", "c": "2025-01-01T00:00:00Z"}, keys sorted
+    let encoded = hex::decode(
+        "1e016134616c7761797301622c6e657665720163a401323032352d30312d30315430303a30303a30305a",
+    )
+    .unwrap();
+    let hash = schedule.networks["net"].hash;
+
+    println!(
+        "network_hash({{a: always, b: never, c: 2025-01-01T00:00:00Z}}) = {}",
+        hex::encode(hash)
+    );
+    assert_eq!(
+        hash,
+        <[u8; 32]>::from(<sha3::Keccak256 as sha3::Digest>::digest(encoded))
+    );
+    assert_eq!(
+        hex::encode(hash),
+        "f07d063ab917317e673498396b25c44fc090d6fe6cf37ca39038a21c29cfb61d"
+    );
+}
+
+#[test]
+fn the_network_hash_keeps_the_activation_text() {
+    let utc = Schedule::parse(&schedule(
+        "2025-01-01T00:00:00Z",
+        "never",
+        &format!("\"{LINE}\""),
+    ))
+    .unwrap();
+    let offset = Schedule::parse(&schedule(
+        "2025-01-01T02:00:00+02:00",
+        "never",
+        &format!("\"{LINE}\""),
+    ))
+    .unwrap();
+
+    assert_eq!(utc.networks["net"].forks, offset.networks["net"].forks);
+    assert_ne!(utc.networks["net"].hash, offset.networks["net"].hash);
+}
+
+#[test]
+fn scheduled_forks_answer_every_fork_at_a_timestamp() {
+    let schedule = Schedule::parse(&schedule(
+        "always",
+        "2025-01-01T00:00:00Z",
+        &format!("\"{LINE}\""),
+    ))
+    .unwrap();
+    let hash = schedule.networks["net"].hash;
+
+    let before = schedule
+        .scheduled_forks("net", at("2024-12-31T23:59:59Z"), &hash)
+        .unwrap();
+    assert_eq!(
+        before,
+        BTreeMap::from([(LINE.to_owned(), true), (FIX.to_owned(), false)])
+    );
+    let after = schedule
+        .scheduled_forks("net", at("2025-01-01T00:00:00Z"), &hash)
+        .unwrap();
+    assert_eq!(
+        after,
+        BTreeMap::from([(LINE.to_owned(), true), (FIX.to_owned(), true)])
+    );
+}
+
+#[test]
+fn scheduled_forks_reject_an_unknown_network_and_a_foreign_hash() {
+    let schedule = Schedule::parse(&schedule("always", "always", &format!("\"{LINE}\""))).unwrap();
+    let hash = schedule.networks["net"].hash;
+    let now = at("2025-01-01T00:00:00Z");
+
+    for network in ["other", ""] {
+        let err = schedule.scheduled_forks(network, now, &hash).unwrap_err();
+        assert!(matches!(err, Error::UnknownNetwork(_)), "{err}");
+    }
+
+    let err = schedule.scheduled_forks("net", now, &[0; 32]).unwrap_err();
+    assert!(matches!(err, Error::Mismatch { .. }), "{err}");
+    let message = err.to_string();
+    assert!(message.contains("`net`"), "{message}");
+    assert!(message.contains(&hex::encode(hash)), "{message}");
+    assert!(message.contains(&hex::encode([0; 32])), "{message}");
+}
+
+#[test]
+fn a_network_may_schedule_no_forks() {
+    let schedule =
+        Schedule::parse(r#"{ "forks": {}, "networks": { "empty": { "forks": {} } } }"#).unwrap();
+    let hash = schedule.networks["empty"].hash;
+
+    assert_eq!(
+        hash,
+        <[u8; 32]>::from(<sha3::Keccak256 as sha3::Digest>::digest(
+            calldata::encode_obj(&BTreeMap::<String, String>::new())
+        ))
+    );
+    assert_eq!(
+        schedule
+            .scheduled_forks("empty", at("2025-01-01T00:00:00Z"), &hash)
+            .unwrap(),
+        BTreeMap::new()
+    );
+}
+
+#[test]
+fn a_network_name_cannot_be_empty() {
+    let err = parse_err(r#"{ "forks": {}, "networks": { "": { "forks": {} } } }"#);
+    assert!(err.contains("empty network name"), "{err}");
 }

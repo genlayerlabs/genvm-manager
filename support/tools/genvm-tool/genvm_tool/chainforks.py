@@ -119,6 +119,8 @@ def validate(doc: typing.Any) -> None:
 	if not isinstance(networks, dict):
 		raise Error('networks: expected an object')
 	for network_name, network in networks.items():
+		if network_name == '':
+			raise Error('empty network name')
 		_check_keys(f'network `{network_name}`', network, {'forks'})
 		scheduled = network['forks']
 		if not isinstance(scheduled, dict):

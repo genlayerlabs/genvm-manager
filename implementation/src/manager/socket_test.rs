@@ -238,3 +238,143 @@ async fn coalescing_keeps_the_terminal_event() {
         .expect("forwarder must exit after the coalesced terminal event")
         .unwrap();
 }
+
+const FORKS_SCHEDULE: &str = r#"{
+    "forks": { "line": {}, "line/fix": { "requires": ["line"] } },
+    "networks": { "net": { "forks": { "line": "always", "line/fix": "2025-01-01T00:00:00Z" } } }
+}"#;
+
+fn get_forks_payload(network: &str, timestamp: &str, network_hash: &[u8]) -> Vec<u8> {
+    calldata::encode_obj(&calldata::Value::Map(
+        [(
+            "get_forks".to_owned(),
+            calldata::Value::Map(
+                [
+                    (
+                        "network".to_owned(),
+                        calldata::Value::Str(network.to_owned()),
+                    ),
+                    (
+                        "timestamp".to_owned(),
+                        calldata::Value::Str(timestamp.to_owned()),
+                    ),
+                    (
+                        "network_hash".to_owned(),
+                        calldata::Value::Bytes(network_hash.to_vec()),
+                    ),
+                ]
+                .into(),
+            ),
+        )]
+        .into(),
+    ))
+}
+
+fn get_forks(schedule: &chainforks::Schedule, payload: &[u8]) -> (Methods, calldata::Value) {
+    let frame = get_forks_frame(schedule, 7, payload);
+    assert_eq!(frame.request_id, 7);
+    (frame.method, calldata::decode_obj(&frame.payload).unwrap())
+}
+
+fn error_code(reply: &calldata::Value) -> (u8, String) {
+    let calldata::Value::Map(reply) = reply else {
+        panic!("expected error map, got {reply:?}");
+    };
+    let (Some(calldata::Value::Number(code)), Some(calldata::Value::Str(message))) =
+        (reply.get("code"), reply.get("message"))
+    else {
+        panic!("malformed error {reply:?}");
+    };
+    (u8::try_from(code).unwrap(), message.clone())
+}
+
+#[test]
+fn get_forks_answers_every_scheduled_fork_at_the_timestamp() {
+    let schedule = chainforks::Schedule::parse(FORKS_SCHEDULE).unwrap();
+    let hash = schedule.networks["net"].hash;
+
+    for (timestamp, fix) in [
+        ("2024-12-31T23:59:59Z", false),
+        ("2025-01-01T00:00:00Z", true),
+        ("2025-01-01T09:00:00+09:00", true),
+    ] {
+        let (method, reply) = get_forks(&schedule, &get_forks_payload("net", timestamp, &hash));
+        assert_eq!(method, Methods::GetForks, "{reply:?}");
+        let expected = calldata::Value::Map(
+            [(
+                "forks".to_owned(),
+                calldata::Value::Map(
+                    [
+                        ("line".to_owned(), calldata::Value::Bool(true)),
+                        ("line/fix".to_owned(), calldata::Value::Bool(fix)),
+                    ]
+                    .into(),
+                ),
+            )]
+            .into(),
+        );
+        assert_eq!(reply, expected, "{timestamp}");
+    }
+}
+
+#[test]
+fn get_forks_rejects_an_unknown_or_empty_network() {
+    let schedule = chainforks::Schedule::parse(FORKS_SCHEDULE).unwrap();
+    let hash = schedule.networks["net"].hash;
+
+    for network in ["other", ""] {
+        let (method, reply) = get_forks(
+            &schedule,
+            &get_forks_payload(network, "2025-01-01T00:00:00Z", &hash),
+        );
+        assert_eq!(method, Methods::Error);
+        let (code, message) = error_code(&reply);
+        assert_eq!(code, Errors::UnknownNetwork.value());
+        assert!(message.contains(&format!("`{network}`")), "{message}");
+    }
+}
+
+#[test]
+fn get_forks_rejects_a_foreign_schedule_hash() {
+    let schedule = chainforks::Schedule::parse(FORKS_SCHEDULE).unwrap();
+    let hash = schedule.networks["net"].hash;
+    let foreign = [0xab; 32];
+
+    let (method, reply) = get_forks(
+        &schedule,
+        &get_forks_payload("net", "2025-01-01T00:00:00Z", &foreign),
+    );
+    assert_eq!(method, Methods::Error);
+    let (code, message) = error_code(&reply);
+    assert_eq!(code, Errors::ChainforksMismatch.value());
+    assert!(message.contains("`net`"), "{message}");
+    assert!(message.contains(&hex::encode(hash)), "{message}");
+    assert!(message.contains(&hex::encode(foreign)), "{message}");
+}
+
+#[test]
+fn get_forks_rejects_a_malformed_payload() {
+    let schedule = chainforks::Schedule::parse(FORKS_SCHEDULE).unwrap();
+    let hash = schedule.networks["net"].hash;
+
+    for payload in [
+        b"not calldata".to_vec(),
+        get_forks_payload("net", "2025-01-01T00:00:00Z", &hash[..31]),
+        get_forks_payload("net", "2025-01-01", &hash),
+        calldata::encode_obj(&calldata::Value::Map(
+            [(
+                "get_forks".to_owned(),
+                calldata::Value::Map(Default::default()),
+            )]
+            .into(),
+        )),
+    ] {
+        let (method, reply) = get_forks(&schedule, &payload);
+        assert_eq!(method, Methods::Error);
+        assert_eq!(
+            error_code(&reply).0,
+            Errors::MalformedFrame.value(),
+            "{reply:?}"
+        );
+    }
+}

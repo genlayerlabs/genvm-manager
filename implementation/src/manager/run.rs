@@ -868,7 +868,7 @@ pub async fn start_service(
 
 use serde_with::serde_as;
 
-fn decode_datetime_rfc3339(
+pub(super) fn decode_datetime_rfc3339(
     val: calldata::Value,
 ) -> std::result::Result<chrono::DateTime<chrono::Utc>, calldata::codec::DecodeError> {
     let s = match val {

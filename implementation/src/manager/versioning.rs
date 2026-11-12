@@ -181,6 +181,10 @@ impl Ctx {
         self.chainforks.active(network, timestamp)
     }
 
+    pub fn chainforks(&self) -> &chainforks::Schedule {
+        &self.chainforks
+    }
+
     pub async fn get_latest_major(&self, forks: &chainforks::Active) -> Option<u32> {
         let lock = self.manifest.read().await;
         lock.executor_versions
