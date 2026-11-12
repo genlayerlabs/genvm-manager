@@ -36,7 +36,11 @@ line's `data/all.json`:
 ### Adding a Fork
 
 The schedule is `install/data/genvm-chainforks.json` in the manager repo; a fork
-named by a pin but missing there fails the build
+named by a pin but missing there fails the build. A host with its own schedule
+(Studio's) passes it as `genvm-manager --chainforks-path <file> --default-network <network>`,
+both for serving and for `check-install`. A flag left out falls back to the
+config's `chainforks_path` or `default_network`. A null `default_network`
+rejects a request naming no network
 
 1. Add the fork under `forks`, with `"requires": ["genvm/executor/<line>"]`: a
    name extending another fork's name must require it
@@ -44,5 +48,11 @@ named by a pin but missing there fails the build
    `dev`, so the test suite sees it, and `never` or the agreed RFC 3339 date on
    the real networks. A network missing the fork fails the build and the
    manager startup
-3. Integration tests run on `dev`, where every fork is active; test the closed
+3. Add the same fork to each host's schedule, scheduled on every network there
+   (`never` or the agreed RFC 3339 date on the real ones),
+   before the host moves to this release: the manager and `check-install`
+   reject a schedule missing a fork the manifest or a runner names. A host may
+   define forks of its own, such as `node/*`, that no runner names; the manager
+   accepts them and passes them on in `--forks`, where the executor ignores them
+4. Integration tests run on `dev`, where every fork is active; test the closed
    gate in the executor, by leaving the fork out of `genvm run --forks`

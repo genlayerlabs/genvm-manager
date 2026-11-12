@@ -141,7 +141,7 @@ fn an_exact_version_is_the_directory_name_itself() {
     assert_eq!(exact_version("v0.2.17").version.minor, 2);
 }
 
-fn temp_manifest(content: &str) -> std::path::PathBuf {
+fn temp_file(content: &str) -> std::path::PathBuf {
     let path = std::env::temp_dir().join(format!(
         "genvm-versioning-test-{}.yaml",
         rand::random::<u128>()
@@ -150,14 +150,18 @@ fn temp_manifest(content: &str) -> std::path::PathBuf {
     path
 }
 
-async fn ctx_at(manifest_path: &std::path::Path, default_network: &str) -> anyhow::Result<Ctx> {
+async fn ctx_with_schedule(
+    manifest_path: &std::path::Path,
+    chainforks_path: &std::path::Path,
+    default_network: Option<&str>,
+) -> anyhow::Result<Ctx> {
     let config: sync::DArc<Config> = sync::DArc::new(
         serde_json::from_value(serde_json::json!({
             "threads": 1,
             "blocking_threads": 1,
             "log_disable": "",
             "manifest_path": manifest_path,
-            "chainforks_path": concat!(env!("CARGO_MANIFEST_DIR"), "/../install/data/genvm-chainforks.json"),
+            "chainforks_path": chainforks_path,
             "default_network": default_network,
         }))
         .unwrap(),
@@ -165,8 +169,21 @@ async fn ctx_at(manifest_path: &std::path::Path, default_network: &str) -> anyho
     Ctx::new(config).await
 }
 
+async fn ctx_at(manifest_path: &std::path::Path, default_network: &str) -> anyhow::Result<Ctx> {
+    let shipped = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../install/data/genvm-chainforks.json"
+    );
+    ctx_with_schedule(
+        manifest_path,
+        std::path::Path::new(shipped),
+        Some(default_network),
+    )
+    .await
+}
+
 async fn ctx_with(manifest: &str, default_network: &str) -> anyhow::Result<Ctx> {
-    let path = temp_manifest(manifest);
+    let path = temp_file(manifest);
     let ctx = ctx_at(&path, default_network).await;
     std::fs::remove_file(path).unwrap();
     ctx
@@ -216,7 +233,7 @@ fn a_manifest_without_runner_forks_is_rejected() {
 
 #[tokio::test]
 async fn a_rejected_reload_keeps_the_previous_manifest() {
-    let path = temp_manifest(&format!(
+    let path = temp_file(&format!(
         "runner_forks: []\nexecutor_versions:\n  \"v0.3.0\":\n    fork: {V03}\n"
     ));
     let ctx = ctx_at(&path, "dev").await.unwrap();
@@ -239,5 +256,66 @@ async fn a_rejected_reload_keeps_the_previous_manifest() {
     assert_eq!(
         ctx.get_newest_version(&forks).await.unwrap().orig_key,
         "v0.3.0"
+    );
+}
+
+#[tokio::test]
+async fn a_fork_no_runner_names_passes_startup_and_reaches_the_executor() {
+    const NODE: &str = "node/evm_revert_timeouts";
+    let schedule = temp_file(&format!(
+        r#"{{
+            "forks": {{ "{V03}": {{}}, "{NODE}": {{ "description": "host-side behaviour" }} }},
+            "networks": {{
+                "dev": {{ "forks": {{ "{V03}": "always", "{NODE}": "always" }} }},
+                "bradbury-phase2": {{ "forks": {{ "{V03}": "always", "{NODE}": "never" }} }}
+            }}
+        }}"#
+    ));
+    let manifest = temp_file(&format!(
+        "runner_forks: [{V03}]\nexecutor_versions:\n  \"v0.3.0\":\n    fork: {V03}\n"
+    ));
+    let ctx = ctx_with_schedule(&manifest, &schedule, Some("bradbury-phase2")).await;
+    std::fs::remove_file(schedule).unwrap();
+    std::fs::remove_file(manifest).unwrap();
+    let ctx = ctx.unwrap();
+
+    let now = "2026-11-12T00:00:00Z".parse().unwrap();
+    let dev = ctx.active_forks("dev", now).unwrap();
+    assert_eq!(dev.to_string(), format!("{V03},{NODE}"));
+    assert_eq!(
+        ctx.get_newest_version(&dev).await.unwrap().orig_key,
+        "v0.3.0"
+    );
+
+    let bradbury = ctx.active_forks("bradbury-phase2", now).unwrap();
+    assert_eq!(bradbury.to_string(), V03);
+    assert_eq!(
+        ctx.get_newest_version(&bradbury).await.unwrap().orig_key,
+        "v0.3.0"
+    );
+}
+
+#[tokio::test]
+async fn startup_without_a_default_network_still_checks_the_manifest() {
+    let manifest =
+        format!("runner_forks: []\nexecutor_versions:\n  \"v0.3.0\":\n    fork: {V03}\n");
+    let path = temp_file(&manifest);
+    let shipped = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../install/data/genvm-chainforks.json"
+    );
+    let ctx = ctx_with_schedule(&path, std::path::Path::new(shipped), None).await;
+    std::fs::remove_file(path).unwrap();
+    ctx.unwrap();
+
+    let path = temp_file(
+        "runner_forks: []\nexecutor_versions:\n  \"v0.3.0\":\n    fork: genvm/executor/v9\n",
+    );
+    let ctx = ctx_with_schedule(&path, std::path::Path::new(shipped), None).await;
+    std::fs::remove_file(path).unwrap();
+    let err = format!("{:#}", ctx.err().unwrap());
+    assert!(
+        err.contains("fork `genvm/executor/v9` is not defined"),
+        "{err}"
     );
 }

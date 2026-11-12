@@ -109,9 +109,11 @@ pub fn load_install(config: &Config) -> anyhow::Result<(chainforks::Schedule, Ma
         .with_context(|| format!("reading chainforks schedule {path}"))?;
     let chainforks =
         chainforks::Schedule::parse(&content).with_context(|| format!("loading {path}"))?;
-    chainforks
-        .check_network(&config.default_network)
-        .with_context(|| "checking default_network")?;
+    if let Some(network) = &config.default_network {
+        chainforks
+            .check_network(network)
+            .with_context(|| "checking default_network")?;
+    }
     let content = std::fs::read_to_string(&config.manifest_path)
         .with_context(|| format!("Failed to read manifest file: {}", config.manifest_path))?;
     let manifest = parse_manifest(&content, &config.manifest_path, &chainforks)?;

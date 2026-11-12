@@ -1,10 +1,8 @@
-use std::collections::HashMap;
-
 use anyhow::{Context as _, Result};
 use genvm_common::*;
 
 use super::versioning;
-use super::{CliArgs, Config};
+use super::CliArgs;
 
 #[derive(clap::Args, Debug)]
 pub struct Args {
@@ -23,13 +21,7 @@ pub struct Args {
 /// own runner registry and directory from its bundled config, so the manager
 /// only has to locate and invoke the right binaries.
 pub fn run(cli: &CliArgs, args: &Args) -> Result<()> {
-    let config =
-        genvm_common::load_config(HashMap::new(), &cli.config).with_context(|| "loading config")?;
-    let mut config: Config = serde_yaml::from_value(config)?;
-
-    if let Some(manifest_path) = &cli.manifest_path {
-        config.manifest_path = manifest_path.clone();
-    }
+    let config = cli.load_config()?;
 
     config.base.setup_logging(std::io::stdout())?;
 

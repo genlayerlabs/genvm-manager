@@ -1026,7 +1026,7 @@ pub struct Request {
     #[serde(default)]
     #[calldata(default = default_hook_cross_contract_calls)]
     pub hook_cross_contract_calls: bool,
-    /// Chainforks schedule network; absent means the manager's `default_network`.
+    /// Chainforks schedule network; absent means the manager's `default_network`, and with none the run fails to start.
     #[serde(default)]
     #[calldata(default = default_network)]
     pub network: Option<String>,
@@ -2461,10 +2461,9 @@ async fn run_genvm_process(
     consumed_result: sync::DArc<tokio::sync::OnceCell<Vec<u8>>>,
     resources: RunResources,
 ) -> anyhow::Result<std::process::ExitStatus> {
-    let network = req
-        .network
-        .get_or_insert_with(|| full_ctx.config.default_network.clone());
-    let forks = full_ctx.ver_ctx.active_forks(network, req.timestamp)?;
+    let network = full_ctx.config.network(req.network.as_deref())?.to_owned();
+    let forks = full_ctx.ver_ctx.active_forks(&network, req.timestamp)?;
+    req.network = Some(network);
 
     let is_top_level = resources.is_top_level();
     let caller_stream = resources.caller_stream();

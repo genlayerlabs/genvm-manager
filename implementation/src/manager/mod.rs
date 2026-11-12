@@ -30,8 +30,9 @@ pub struct Config {
     pub base: genvm_common::BaseConfig,
     pub manifest_path: String,
     pub chainforks_path: String,
-    /// Network of a request that names none.
-    pub default_network: String,
+    /// Network of a request that names none; null rejects it. `deserialize_with` keeps the key required
+    #[serde(deserialize_with = "serde::Deserialize::deserialize")]
+    pub default_network: Option<String>,
 
     /// Absent or null keeps every default.
     pub permits: Option<PermitsConfig>,
@@ -45,6 +46,19 @@ pub struct Config {
 
 fn default_allow_two_workers() -> bool {
     true
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("request names no network and the manager has no default_network")]
+pub struct NoNetwork;
+
+impl Config {
+    /// `requested`, else `default_network`; never a guess.
+    pub fn network<'a>(&'a self, requested: Option<&'a str>) -> Result<&'a str, NoNetwork> {
+        requested
+            .or(self.default_network.as_deref())
+            .ok_or(NoNetwork)
+    }
 }
 
 /// Concurrency budget, denominated in gigabytes of RAM.
@@ -224,11 +238,41 @@ pub struct CliArgs {
     #[arg(long, default_value_t = false)]
     die_with_parent: bool,
 
-    #[arg(long, default_value_t = String::from("${exeDir}/../config/genvm-manager.yaml"))]
+    #[arg(long, global = true, default_value_t = String::from("${exeDir}/../config/genvm-manager.yaml"))]
     pub config: String,
 
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub manifest_path: Option<String>,
+
+    /// Overrides config `chainforks_path`
+    #[arg(long, global = true)]
+    pub chainforks_path: Option<String>,
+
+    /// Overrides config `default_network`
+    #[arg(long, global = true)]
+    pub default_network: Option<String>,
+}
+
+impl CliArgs {
+    fn apply_overrides(&self, config: &mut Config) {
+        if let Some(manifest_path) = &self.manifest_path {
+            config.manifest_path = manifest_path.clone();
+        }
+        if let Some(chainforks_path) = &self.chainforks_path {
+            config.chainforks_path = chainforks_path.clone();
+        }
+        if let Some(default_network) = &self.default_network {
+            config.default_network = Some(default_network.clone());
+        }
+    }
+
+    fn load_config(&self) -> Result<Config> {
+        let config = genvm_common::load_config(HashMap::new(), &self.config)
+            .with_context(|| "loading config")?;
+        let mut config: Config = serde_yaml::from_value(config)?;
+        self.apply_overrides(&mut config);
+        Ok(config)
+    }
 }
 
 fn error_response(status: StatusCode, error: impl Into<String>) -> Response {
@@ -290,10 +334,8 @@ fn detect_version_forks(
     headers: &HeaderMap,
 ) -> anyhow::Result<chainforks::Active> {
     let timestamp = deployment_timestamp(headers)?;
-    let network = match headers.get("Network") {
-        Some(value) => value.to_str()?,
-        None => &ctx.config.default_network,
-    };
+    let requested = headers.get("Network").map(|v| v.to_str()).transpose()?;
+    let network = ctx.config.network(requested)?;
     Ok(ctx.ver_ctx.active_forks(network, timestamp)?)
 }
 
@@ -533,15 +575,7 @@ pub fn entrypoint(args: CliArgs) -> Result<()> {
         return check_install::run(&args, ci);
     }
 
-    let config = genvm_common::load_config(HashMap::new(), &args.config)
-        .with_context(|| "loading config")?;
-    let mut config: Config = serde_yaml::from_value(config)?;
-
-    if let Some(manifest_path) = &args.manifest_path {
-        config.manifest_path = manifest_path.clone();
-    }
-
-    let config: sync::DArc<Config> = sync::DArc::new(config);
+    let config: sync::DArc<Config> = sync::DArc::new(args.load_config()?);
 
     config.base.setup_logging(std::io::stdout())?;
 
@@ -553,3 +587,6 @@ pub fn entrypoint(args: CliArgs) -> Result<()> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;
