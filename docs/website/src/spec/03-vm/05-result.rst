@@ -83,7 +83,7 @@ with further space-separated components.
 
 .. rubric:: UserError
 
-Represents a user-produced error in utf-8 format.
+Represents a user-produced error carrying an arbitrary :ref:`gvm-def-calldata-encoding` value.
 
 .. rubric:: Effects of a Non-Returning Run
 
@@ -101,14 +101,14 @@ Not a :ref:`gvm-def-vm-result` but the absence of one: the executor could not
 run the contract to a verdict at all, because of a :term:`Host` communication
 failure or :term:`Module` unavailability.
 
-Internal errors are not visible by the contracts and are reported only to the
-:term:`Host`, which will most likely vote *timeout* if it encounters one
+Internal errors are not visible to contracts and are reported only to the
+:term:`Host`. How the host handles one is outside this specification
 
 Non-Deterministic Block Result Encoding
 ---------------------------------------
 
 - :ref:`gvm-def-return`\: Arbitrary structure in :ref:`gvm-def-calldata-encoding`
-- :ref:`gvm-def-user-error`\: utf-8 string
+- :ref:`gvm-def-user-error`\: Arbitrary structure in :ref:`gvm-def-calldata-encoding`
 - :ref:`gvm-def-vm-error`\: utf-8 string
 
 These three are the only codes a leader-proposed non-deterministic block result
