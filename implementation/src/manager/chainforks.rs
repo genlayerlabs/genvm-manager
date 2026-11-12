@@ -1,5 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use genlayer_calldata as calldata;
+
 /// Built-in fork in every active set; also the date meaning "at every timestamp".
 pub const ALWAYS: &str = "always";
 /// Built-in fork in no active set; also the date meaning "not on this network".
@@ -33,6 +35,14 @@ pub enum Error {
     },
     #[error("unknown network `{0}`")]
     UnknownNetwork(String),
+    #[error("empty network name")]
+    EmptyNetworkName,
+    #[error("network `{network}` schedule hash mismatch: host has {host}, manager has {manager}")]
+    Mismatch {
+        network: String,
+        host: String,
+        manager: String,
+    },
 }
 
 /// When a fork activates on a network; ordered from earliest to latest.
@@ -53,9 +63,10 @@ impl Activation {
     }
 }
 
-impl<'de> serde::Deserialize<'de> for Activation {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let s = String::deserialize(deserializer)?;
+impl std::str::FromStr for Activation {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
         // Stricter than chrono, matching the build-time check: `T`, `Z` and no leap second
         static TIMESTAMP: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
             regex::Regex::new(
@@ -63,16 +74,12 @@ impl<'de> serde::Deserialize<'de> for Activation {
             )
             .unwrap()
         });
-        let malformed = || {
-            serde::de::Error::custom(format!(
-                "`{s}` is neither `always`, `never` nor an RFC 3339 timestamp"
-            ))
-        };
-        match s.as_str() {
+        let malformed = || format!("`{s}` is neither `always`, `never` nor an RFC 3339 timestamp");
+        match s {
             ALWAYS => Ok(Activation::Always),
             NEVER => Ok(Activation::Never),
-            _ if !TIMESTAMP.is_match(&s) => Err(malformed()),
-            _ => chrono::DateTime::parse_from_rfc3339(&s)
+            _ if !TIMESTAMP.is_match(s) => Err(malformed()),
+            _ => chrono::DateTime::parse_from_rfc3339(s)
                 .map(|at| Activation::At(at.with_timezone(&chrono::Utc)))
                 .map_err(|_| malformed()),
         }
@@ -88,10 +95,48 @@ pub struct Fork {
 }
 
 #[derive(Debug, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(try_from = "RawNetwork")]
 pub struct Network {
-    #[serde(deserialize_with = "unique_map")]
     pub forks: BTreeMap<String, Activation>,
+    /// keccak256 of the calldata map `{fork: activation string}`, proving a host holds this schedule
+    pub hash: [u8; 32],
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawNetwork {
+    #[serde(deserialize_with = "unique_map")]
+    forks: BTreeMap<String, String>,
+}
+
+impl TryFrom<RawNetwork> for Network {
+    type Error = String;
+
+    fn try_from(raw: RawNetwork) -> Result<Self, String> {
+        use sha3::Digest as _;
+        let hash = sha3::Keccak256::digest(calldata::encode_obj(&raw.forks)).into();
+        let forks = raw
+            .forks
+            .into_iter()
+            .map(|(fork, activation)| match activation.parse() {
+                Ok(activation) => Ok((fork, activation)),
+                Err(e) => Err(format!("fork `{fork}`: {e}")),
+            })
+            .collect::<Result<_, String>>()?;
+        Ok(Network { forks, hash })
+    }
+}
+
+impl Network {
+    /// Every scheduled fork and whether it is active at `timestamp`.
+    fn forks_at(
+        &self,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> impl Iterator<Item = (&String, bool)> {
+        self.forks
+            .iter()
+            .map(move |(fork, activation)| (fork, activation.is_active_at(timestamp)))
+    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -162,15 +207,35 @@ impl Schedule {
         network: &str,
         timestamp: chrono::DateTime<chrono::Utc>,
     ) -> Result<Active, Error> {
-        let network = self.network(network)?;
         Ok(Active(
-            network
-                .forks
-                .iter()
-                .filter(|(_, activation)| activation.is_active_at(timestamp))
+            self.network(network)?
+                .forks_at(timestamp)
+                .filter(|(_, active)| *active)
                 .map(|(fork, _)| fork.clone())
                 .collect(),
         ))
+    }
+
+    /// Every fork `network` schedules and whether it is active at `timestamp`,
+    /// for a host whose copy of the network's schedule hashes to `host_hash`.
+    pub fn scheduled_forks(
+        &self,
+        network: &str,
+        timestamp: chrono::DateTime<chrono::Utc>,
+        host_hash: &[u8; 32],
+    ) -> Result<BTreeMap<String, bool>, Error> {
+        let scheduled = self.network(network)?;
+        if scheduled.hash != *host_hash {
+            return Err(Error::Mismatch {
+                network: network.to_owned(),
+                host: hex::encode(host_hash),
+                manager: hex::encode(scheduled.hash),
+            });
+        }
+        Ok(scheduled
+            .forks_at(timestamp)
+            .map(|(fork, active)| (fork.clone(), active))
+            .collect())
     }
 
     fn network(&self, network: &str) -> Result<&Network, Error> {
@@ -214,6 +279,9 @@ impl Schedule {
         }
 
         for (network_name, network) in &self.networks {
+            if network_name.is_empty() {
+                return Err(Error::EmptyNetworkName);
+            }
             if let Some(fork) = network.forks.keys().find(|f| !self.forks.contains_key(*f)) {
                 return Err(Error::UndefinedScheduled {
                     network: network_name.clone(),

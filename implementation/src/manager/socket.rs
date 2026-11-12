@@ -9,7 +9,7 @@ use genlayer_calldata::{Decode, Encode};
 use genvm_common::*;
 use genvm_modules_interfaces::manager_api::{self, Errors, Methods};
 
-use super::{run, AppContext};
+use super::{chainforks, run, AppContext};
 
 const HEADER_LEN: usize = 10;
 const ARTIFACT_CHUNK_CAP: u32 = 256 * 1024;
@@ -152,6 +152,12 @@ enum GetArtifactPayload {
 }
 
 #[derive(Decode)]
+enum GetForksPayload {
+    #[calldata(rename = "get_forks")]
+    GetForks(GetForksRequest),
+}
+
+#[derive(Decode)]
 struct AttachRequest {
     boot_id: u64,
     genvm_id: run::GenVMId,
@@ -168,6 +174,15 @@ struct GetArtifactRequest {
     field: String,
     offset: u64,
     max_len: u32,
+}
+
+#[derive(Decode)]
+struct GetForksRequest {
+    network: String,
+    #[calldata(deserialize_with = run::decode_datetime_rfc3339)]
+    timestamp: chrono::DateTime<chrono::Utc>,
+    #[calldata(deserialize_with = calldata::codec::as_bytes::deserialize)]
+    network_hash: [u8; 32],
 }
 
 #[derive(Encode)]
@@ -200,6 +215,11 @@ struct ErrorPayload {
 struct ArtifactResponse {
     total_len: u64,
     data: bytes::Bytes,
+}
+
+#[derive(Encode)]
+struct ForksResponse {
+    forks: std::collections::BTreeMap<String, bool>,
 }
 
 #[derive(Encode)]
@@ -421,6 +441,24 @@ where
     }
 }
 
+/// The reply to `get_forks`; needs no run, so a connection may ask before or without one.
+fn get_forks_frame(schedule: &chainforks::Schedule, request_id: u64, payload: &[u8]) -> Frame {
+    let req = match decode_payload::<GetForksPayload>(payload) {
+        Ok(GetForksPayload::GetForks(req)) => req,
+        Err(e) => return error_frame(request_id, Errors::MalformedFrame, e.to_string()),
+    };
+    match schedule.scheduled_forks(&req.network, req.timestamp, &req.network_hash) {
+        Ok(forks) => Frame::new(Methods::GetForks, request_id, &ForksResponse { forks }),
+        Err(e @ chainforks::Error::UnknownNetwork(_)) => {
+            error_frame(request_id, Errors::UnknownNetwork, e.to_string())
+        }
+        Err(e @ chainforks::Error::Mismatch { .. }) => {
+            error_frame(request_id, Errors::ChainforksMismatch, e.to_string())
+        }
+        Err(e) => error_frame(request_id, Errors::Internal, e.to_string()),
+    }
+}
+
 fn decode_payload<T: DecodeTrait>(
     payload: &[u8],
 ) -> std::result::Result<T, calldata::codec::DecodeError> {
@@ -468,6 +506,15 @@ where
             Methods::Cancel => self.handle_cancel(request_id, payload).await,
             Methods::Ack => self.handle_ack(request_id, payload).await,
             Methods::GetArtifact => self.handle_get_artifact(request_id, payload).await,
+            Methods::GetForks => {
+                self.writer
+                    .send_control_async(get_forks_frame(
+                        self.ctx.ver_ctx.chainforks(),
+                        request_id,
+                        payload,
+                    ))
+                    .await
+            }
             Methods::Error | Methods::Hello | Methods::Event => {
                 self.writer
                     .error(

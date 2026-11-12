@@ -11,7 +11,8 @@
       "attach": 4,
       "cancel": 5,
       "ack": 6,
-      "get_artifact": 7
+      "get_artifact": 7,
+      "get_forks": 8
     }
   },
   {
@@ -25,7 +26,9 @@
       "unknown_id": 3,
       "boot_id_mismatch": 4,
       "bad_request_id": 5,
-      "not_finished": 6
+      "not_finished": 6,
+      "unknown_network": 7,
+      "chainforks_mismatch": 8
     }
   },
   {

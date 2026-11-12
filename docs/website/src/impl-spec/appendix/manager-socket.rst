@@ -221,6 +221,36 @@ remain attachable. An invalid ``field`` on a retained ``finished`` run answers
 The ``finished`` event carries each artifact's total size, so clients can skip
 the calls entirely when the blobs are empty
 
+``get_forks``
+-------------
+
+::
+
+   { "get_forks": { "network": str, "timestamp": str,
+                    "network_hash": bytes } }
+
+Answers which forks ``network`` has active at ``timestamp``, exactly as a
+``run`` with that ``network`` and ``timestamp`` resolves them. ``timestamp``
+has the format of ``run``'s ``timestamp``. The request needs no run, so it is
+valid on any connection, including one that never sends ``run``. ``network``
+is required: ``default_network`` does not apply. Response::
+
+   { "forks": { <fork name>: bool } }
+
+with every fork the network schedules, built-ins excluded.
+
+``network_hash`` proves the client holds the manager's schedule for the
+network: it is ``keccak256`` of the calldata encoding of the network's
+``forks`` map from the chainforks file, each value the decoded JSON string of
+the activation (``always``, ``never`` or the timestamp text, not normalized),
+keys in calldata's bytewise order. Equivalent timestamps written differently hash differently.
+
+Errors: ``unknown_network`` for a network the schedule does not have,
+including the empty name; ``chainforks_mismatch`` when ``network_hash``
+differs, with both hashes in hex in the message; ``malformed_frame`` for an
+undecodable payload, an unparsable ``timestamp`` or a ``network_hash`` that is
+not 32 bytes
+
 ``event`` notifications
 -----------------------
 
@@ -347,8 +377,10 @@ to client requests (``hello``, ``event``, ``error``); ``unknown_id`` means the r
 never existed, was acked, expired, or has no finished result for ``get_artifact``;
 ``boot_id_mismatch`` is ``attach`` across a
 manager restart; ``bad_request_id`` is a client request with
-``request_id == 0``; and ``not_finished`` is ``ack`` before a terminal event
-or result.
+``request_id == 0``; ``not_finished`` is ``ack`` before a terminal event
+or result; ``unknown_network`` is ``get_forks`` for a network the schedule
+lacks; and ``chainforks_mismatch`` is ``get_forks`` with a ``network_hash``
+that differs from the manager's.
 
 An oversized message has no error code: the connection is dropped, as described
 under `Framing`_.
