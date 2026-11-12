@@ -57,6 +57,7 @@ jobs:
           <details><summary><b>Commands</b></summary>
 
           - `/genvm-run-tests` — run full tests once for the current manager snapshot
+          - `/genvm-fast-forward` — land an approved, green PR by moving its base branch to the PR head
           - `/merge` — queue the exact manager snapshot through the App-owned E2E merge train
           </details>
           EOF

@@ -300,3 +300,35 @@ jobs:
             echo "::error::one or more full-test jobs failed/cancelled/skipped"
             exit 1
           fi
+
+  # Reports here, not from a workflow_run handler: this run is dispatched with
+  # GITHUB_TOKEN, so its completion never triggers workflow_run. Runs the PR
+  # head's reporter; a rerun, refused by validate-trigger, must not re-report
+  report-request:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ always() && inputs.request_id != '' && github.run_attempt == 1 }}
+    needs: [validate-end]
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      # A superseded run still reaches here, with validate-end failed by the cancel
+      - name: Mark cancelled run
+        if: ${{ cancelled() }}
+        run: echo RUN_CONCLUSION=cancelled >>"$GITHUB_ENV"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: ${{ always() }}
+        with:
+          persist-credentials: false
+      - name: Report full-test result
+        if: ${{ always() }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.run_id }}
+          RUN_NAME: ${{ format('[request={0};comment={1};pr={2}]', inputs.request_id, inputs.request_comment, inputs.pr) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
+          RUN_CONCLUSION: ${{ env.RUN_CONCLUSION || needs.validate-end.result }}
+        run: ./support/ci/run.sh tool full-tests-command complete

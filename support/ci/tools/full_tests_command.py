@@ -246,7 +246,7 @@ def complete() -> int:
 	run = os.environ['RUN_ID']
 	conclusion = os.environ.get('RUN_CONCLUSION', '') or 'incomplete'
 	passed = conclusion == 'success'
-	reaction = 'rocket' if passed else 'confused'
+	reaction = 'rocket' if passed else '-1'
 	try:
 		comment = wait_for_status_comment(issue, run, title_request)
 		match = STATUS_RE.search(comment['body'])
@@ -255,7 +255,7 @@ def complete() -> int:
 		status = (
 			'🚀 Full tests passed'
 			if passed
-			else f'⚠️ Full tests {conclusion.replace("_", " ")}'
+			else f'❌ Full tests {conclusion.replace("_", " ")}'
 		)
 		body = (
 			f'{match.group(0)}\n{status} for `{os.environ["RUN_SHA"][:12]}`: '
