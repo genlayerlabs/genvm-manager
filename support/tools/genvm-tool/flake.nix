@@ -21,7 +21,7 @@
         # one in `default.nix` here is what would drift.
         tool = pkgs.callPackage ./default.nix { inherit python; };
         # Instruments a fuzz target for AFL; not in nixpkgs. The same derivation
-        # is in executors/v0.3.x/support/nix/py-test/flake.nix, which cannot be
+        # is in executors/v0.4.x/support/nix/py-test/flake.nix, which cannot be
         # shared from here: it lives in another repository.
         pythonAfl = python.pkgs.buildPythonPackage rec {
           pname = "python-afl";

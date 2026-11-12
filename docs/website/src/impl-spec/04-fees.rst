@@ -276,6 +276,12 @@ A minimal, illustrative ``fees`` block::
 ``message_fee`` and ``message_receipt`` share the ``message_fee`` bucket here, so an
 outbound message debits both costs atomically against it.
 
+Exhausting ``submitted_messages`` produces
+:ref:`gvm-def-str-trie-value-vm-error-out-of-message-bytes`; exhausting
+``submitted_messages_count`` produces :ref:`gvm-def-str-trie-value-vm-error-out-of-message-count`.
+These errors identify the byte or count bucket, not a message-fee or receipt-funding
+shortfall, on both allocation-funded and balance-funded emissions
+
 Message-Fee Allocation Matching
 -------------------------------
 
@@ -452,4 +458,4 @@ remains unspecified; this does not change the per-message formula
   the leader and validator time units must also fit the host-provided
   ``minProposeTimeout`` / ``maxProposeTimeout`` and ``minCommitTimeout`` /
   ``maxCommitTimeout`` ranges; violations produce
-  ``fee phase_timeout_out_of_bounds`` on both funding paths.
+  :ref:`gvm-def-str-trie-value-vm-error-fee-below-minimum` on both funding paths.

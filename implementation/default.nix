@@ -56,8 +56,8 @@ let
           "crates/calldata-derive"
           # a dev-dependency of the executor crates below, but cargo still needs its manifest
           "crates/fuzzing"
-          # executor crates come from the v0.3.x submodule mount
-          "executors/v0.3.x/executor/crates"
+          # executor crates come from the v0.4.x submodule mount
+          "executors/v0.4.x/executor/crates"
         ];
         sourceRoot = "./source/implementation";
 

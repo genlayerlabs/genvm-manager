@@ -62,6 +62,9 @@ The message contains:
   every child :term:`sub-VM`.
 - :ref:`gvm_vm_field_stack`: the view-call stack, empty for a top-level entry
 - ``chain_id``, ``value``, ``is_init``, ``datetime``
+- From v0.4, ``create2``: the host-supplied ``deployer`` address and 32-byte
+  ``code_hash`` of the settlement chain's CREATE2 derivation, forwarded unchanged
+  to every child :term:`sub-VM`
 - ``entry_kind``: one of :ref:`gvm-def-enum-entry-kind`
 - ``entry_data``: entry payload bytes
 - ``entry_stage_data``: consensus-stage payload data

@@ -4,7 +4,7 @@
 
 1. **Manager**, the umbrella — this repo: `flake.nix`, `implementation/`,
    `runners/`, `support/`, `install/`
-2. **Executor lines** — `executors/v0.2.x`, `executors/v0.3.x`: checkouts of
+2. **Executor lines** — `executors/v0.2.x`, `executors/v0.3.x`, `executors/v0.4.x`: checkouts of
    the **same** repo, `genlayerlabs/genvm-executor`, on different branches.
    Each line's `manifest.json` owns its `executor-version`
 3. **`libs/unhardcoded-engine`** — the LLM policy engine used by
