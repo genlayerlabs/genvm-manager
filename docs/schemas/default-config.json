@@ -176,11 +176,11 @@
           },
           "chainforks_path": {
             "type": "string",
-            "description": "chainforks schedule: per network, when each fork (executor line, runner batch, behaviour change) activates"
+            "description": "chainforks schedule: per network, when each fork (executor line, runner batch, behaviour change) activates; `--chainforks-path` overrides it"
           },
           "default_network": {
-            "type": "string",
-            "description": "schedule network of a request that names none; must be a network of the schedule"
+            "type": ["string", "null"],
+            "description": "schedule network of a request that names none, which null rejects; when set, must be a network of the schedule; `--default-network` overrides it"
           },
           "allow_two_workers": {
             "type": "boolean",

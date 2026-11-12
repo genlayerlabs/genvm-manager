@@ -35,15 +35,10 @@ fn the_shipped_schedule_is_valid() {
     )
     .unwrap();
 
-    for network in [
-        "dev",
-        "studio",
-        "bradbury-phase2",
-        "phantom-bradbury",
-        "clarke",
-    ] {
-        schedule.check_network(network).unwrap();
-    }
+    assert_eq!(
+        schedule.networks.keys().collect::<Vec<_>>(),
+        ["bradbury-phase2", "clarke", "dev", "phantom-bradbury"]
+    );
     let dev = schedule.active("dev", at("1970-01-01T00:00:00Z")).unwrap();
     assert_eq!(
         dev.to_string(),
@@ -66,10 +61,6 @@ fn the_shipped_schedule_is_valid() {
                 .to_string()
         );
     }
-    assert_eq!(
-        schedule.active("studio", now).unwrap().to_string(),
-        "genvm/executor/v0.2,genvm/executor/v0.3,genvm/executor/v0.4"
-    );
     assert!(!schedule
         .active("bradbury-phase2", now)
         .unwrap()

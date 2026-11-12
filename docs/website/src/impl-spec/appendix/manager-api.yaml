@@ -265,7 +265,8 @@ paths:
             type: string
           description: |
             Network of the chainforks schedule; absent means the manager's
-            `default_network`. An unknown network answers 400
+            `default_network`. An unknown network, or none when the manager has no
+            `default_network`, answers 400
       requestBody:
         required: true
         content:
@@ -1027,9 +1028,10 @@ components:
           description: |
             Network of the chainforks schedule whose forks, active at `timestamp`,
             decide which executor lines and runners are available. Null means the
-            manager's `default_network`; an unknown network fails the run before an
+            manager's `default_network`. An unknown network, or none when the manager
+            has no `default_network`, fails the run with `failed_to_start` before an
             executor is spawned. A delegated call inherits its caller's network
-          example: bradbury-phase2
+          example: dev
         unsafe_overrides:
           type: object
           additionalProperties: false

@@ -146,7 +146,8 @@ automatically.
 A payload that fails to decode is answered with ``malformed_frame``. An
 idempotent retry can receive ``unknown_id`` if the retained run is removed
 concurrently before subscription. A decoded request that fails a check, such
-as a non-empty ``host_hello_data[1]`` or needing modules while they are stopped,
+as a non-empty ``host_hello_data[1]``, needing modules while they are stopped, or
+an unknown ``network`` or none while the manager has no ``default_network``,
 ends with ``failed_to_start``
 
 ``attach``

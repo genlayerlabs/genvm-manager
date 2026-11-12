@@ -20,6 +20,12 @@ fn test_ctx(retention: &str, permits: usize) -> Ctx {
 }
 
 async fn test_app_ctx() -> sync::DArc<crate::manager::AppContext> {
+    test_app_ctx_with("dev".into()).await
+}
+
+async fn test_app_ctx_with(
+    default_network: serde_json::Value,
+) -> sync::DArc<crate::manager::AppContext> {
     let manifest_path =
         std::env::temp_dir().join(format!("genvm-run-test-{}.yaml", rand::random::<u128>()));
     std::fs::write(&manifest_path, "runner_forks: []\nexecutor_versions: {}\n").unwrap();
@@ -30,7 +36,7 @@ async fn test_app_ctx() -> sync::DArc<crate::manager::AppContext> {
             "log_disable": "",
             "manifest_path": manifest_path,
             "chainforks_path": concat!(env!("CARGO_MANIFEST_DIR"), "/../install/data/genvm-chainforks.json"),
-            "default_network": "dev",
+            "default_network": default_network,
         }))
         .unwrap(),
     );
@@ -1291,4 +1297,36 @@ fn the_executor_gets_the_active_forks_sorted_and_without_builtins() {
 
     assert_eq!(args("2025-01-01T00:00:00Z"), ["--forks=a,b"]);
     assert_eq!(args("2023-01-01T00:00:00Z"), ["--forks=b"]);
+}
+
+/// The `failed_to_start` error of a module-free run; the test manifest has no lines, so every run fails
+async fn start_error(default_network: serde_json::Value, network: Option<&str>) -> String {
+    let ctx = test_app_ctx_with(default_network).await;
+    let mut req = module_request();
+    req.no_modules = true;
+    req.network = network.map(str::to_owned);
+    let exec = fake_execution(GenVMId(1), None);
+    supervise_genvm(ctx, exec.clone(), req).await;
+    let snapshot = exec.events.borrow().clone();
+    match snapshot {
+        Snapshot::Event(Event::FailedToStart { error, .. }) => error,
+        other => panic!("expected failed_to_start, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_run_naming_no_network_fails_to_start_without_a_default() {
+    const NO_NETWORK: &str = "request names no network and the manager has no default_network";
+
+    assert_eq!(start_error(serde_json::Value::Null, None).await, NO_NETWORK);
+    for (default_network, network) in [(serde_json::Value::Null, Some("dev")), ("dev".into(), None)]
+    {
+        let error = start_error(default_network.clone(), network).await;
+        assert!(
+            error.contains("no line is available at all"),
+            "{default_network} {network:?}: {error}"
+        );
+    }
+    let error = start_error(serde_json::Value::Null, Some("nowhere")).await;
+    assert!(error.contains("unknown network `nowhere`"), "{error}");
 }
