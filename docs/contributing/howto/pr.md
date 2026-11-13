@@ -28,7 +28,7 @@ access get it automatically. Everyone else needs a maintainer to add it after
 reading the diff
 
 With `ci-safe` and write access, `/genvm-run-tests` links one run and reacts
-👀 → 🚀/😕 without changing the sticky `run-full-tests` label
+👀 → 🚀/👎 (😕 if it could not dispatch) without changing the sticky `run-full-tests` label
 
 ## Fast-Forward
 

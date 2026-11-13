@@ -175,8 +175,8 @@ def test_force_panel_still_sets_label_and_dispatches(monkeypatch):
 	('conclusion', 'reaction', 'message'),
 	[
 		('success', 'rocket', '🚀 Full tests passed'),
-		('failure', 'confused', '⚠️ Full tests failure'),
-		('cancelled', 'confused', '⚠️ Full tests cancelled'),
+		('failure', '-1', '❌ Full tests failure'),
+		('cancelled', '-1', '❌ Full tests cancelled'),
 	],
 )
 def test_complete_updates_status_and_reaction(
