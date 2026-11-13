@@ -64,6 +64,13 @@ get_artifact
 
 Value: ``7``
 
+.. _gvm-def-enum-value-methods-get-forks:
+
+get_forks
+~~~~~~~~~
+
+Value: ``8``
+
 .. _gvm-def-enum-errors:
 
 errors
@@ -119,6 +126,20 @@ not_finished
 ~~~~~~~~~~~~
 
 Value: ``6``
+
+.. _gvm-def-enum-value-errors-unknown-network:
+
+unknown_network
+~~~~~~~~~~~~~~~
+
+Value: ``7``
+
+.. _gvm-def-enum-value-errors-chainforks-mismatch:
+
+chainforks_mismatch
+~~~~~~~~~~~~~~~~~~~
+
+Value: ``8``
 
 .. _gvm-def-const-current-major:
 

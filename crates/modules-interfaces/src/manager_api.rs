@@ -24,10 +24,11 @@ pub enum Methods {
     Cancel = 5,
     Ack = 6,
     GetArtifact = 7,
+    GetForks = 8,
 }
 
 impl Methods {
-    pub const SIZE: usize = 8;
+    pub const SIZE: usize = 9;
     pub fn value(self) -> u16 {
         match self {
             Methods::Error => 0,
@@ -38,6 +39,7 @@ impl Methods {
             Methods::Cancel => 5,
             Methods::Ack => 6,
             Methods::GetArtifact => 7,
+            Methods::GetForks => 8,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
@@ -50,6 +52,7 @@ impl Methods {
             Methods::Cancel => "cancel",
             Methods::Ack => "ack",
             Methods::GetArtifact => "get_artifact",
+            Methods::GetForks => "get_forks",
         }
     }
 }
@@ -67,6 +70,7 @@ impl TryFrom<u16> for Methods {
             5 => Ok(Methods::Cancel),
             6 => Ok(Methods::Ack),
             7 => Ok(Methods::GetArtifact),
+            8 => Ok(Methods::GetForks),
             _ => Err(()),
         }
     }
@@ -90,10 +94,12 @@ pub enum Errors {
     BootIdMismatch = 4,
     BadRequestId = 5,
     NotFinished = 6,
+    UnknownNetwork = 7,
+    ChainforksMismatch = 8,
 }
 
 impl Errors {
-    pub const SIZE: usize = 7;
+    pub const SIZE: usize = 9;
     pub fn value(self) -> u8 {
         match self {
             Errors::Internal => 0,
@@ -103,6 +109,8 @@ impl Errors {
             Errors::BootIdMismatch => 4,
             Errors::BadRequestId => 5,
             Errors::NotFinished => 6,
+            Errors::UnknownNetwork => 7,
+            Errors::ChainforksMismatch => 8,
         }
     }
     pub fn str_snake_case(self) -> &'static str {
@@ -114,6 +122,8 @@ impl Errors {
             Errors::BootIdMismatch => "boot_id_mismatch",
             Errors::BadRequestId => "bad_request_id",
             Errors::NotFinished => "not_finished",
+            Errors::UnknownNetwork => "unknown_network",
+            Errors::ChainforksMismatch => "chainforks_mismatch",
         }
     }
 }
@@ -130,6 +140,8 @@ impl TryFrom<u8> for Errors {
             4 => Ok(Errors::BootIdMismatch),
             5 => Ok(Errors::BadRequestId),
             6 => Ok(Errors::NotFinished),
+            7 => Ok(Errors::UnknownNetwork),
+            8 => Ok(Errors::ChainforksMismatch),
             _ => Err(()),
         }
     }
