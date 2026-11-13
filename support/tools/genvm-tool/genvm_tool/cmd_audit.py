@@ -90,6 +90,16 @@ def configure(parser):
 	parser.add_argument(
 		'--no-native', action='store_true', help=f'skip the NVD pass over {DEPS_FILE}'
 	)
+	parser.add_argument(
+		'--gate',
+		choices=['critical', 'high', 'medium', 'low'],
+		help='exit 1 on a finding of this severity or worse, except in replay-only lines',
+	)
+	parser.add_argument(
+		'--waivers',
+		metavar='FILE',
+		help='JSON list of {"id", "path", "message"} of dismissed code scanning alerts, which the gate skips',
+	)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -488,13 +498,64 @@ def _scan_native(ctx: common.Context) -> list[Finding]:
 	return findings
 
 
+# Worst first: `_severity` takes the first floor a score reaches
+SEVERITY_FLOORS = {'critical': 9.0, 'high': 7.0, 'medium': 4.0, 'low': 0.1}
+_LINE_RE = re.compile(r'executors/(v\d+\.\d+)\.x/')
+
+
 def _severity(score: float | None) -> str:
 	if score is None:
 		return '-'
-	for floor, name in ((9.0, 'critical'), (7.0, 'high'), (4.0, 'medium'), (0.1, 'low')):
+	for name, floor in SEVERITY_FLOORS.items():
 		if score >= floor:
 			return name
 	return 'none'
+
+
+def blocking(
+	findings: list[Finding],
+	statuses: dict[str, str],
+	waivers: set[tuple[str, str, str]],
+	floor: float,
+) -> list[Finding]:
+	"""
+	Findings at `floor` or above that block a release.
+
+	Only a `replay-only` line is exempt: it replays finalized history, so no
+	attacker reaches it. Unscored findings (unmaintained, unsound) never block.
+	`waivers` holds `(id, path, package)` of dismissed code scanning alerts.
+	"""
+	out = []
+	for f in findings:
+		if f.score is None or f.score < floor or (f.id, f.path, f.package) in waivers:
+			continue
+		line = _LINE_RE.match(f.path)
+		if line and statuses.get(line.group(1)) == 'replay-only':
+			continue
+		out.append(f)
+	return out
+
+
+def _alert_message(f: Finding) -> str:
+	fixed = f' Fixed in {", ".join(f.fixed)}.' if f.fixed else ''
+	return f'{f.package}@{f.version} is affected by {f.id}.{fixed}'
+
+
+# Inverts `_alert_message`; a version holds neither `@` nor spaces
+_ALERT_PACKAGE_RE = re.compile(r'(.+)@[^@\s]+ is affected by ')
+
+
+def load_waivers(path: Path) -> set[tuple[str, str, str]]:
+	"""
+	`[{"id", "path", "message"}]` of dismissed alerts, keyed like a finding.
+	"""
+	out = set()
+	for w in json.loads(path.read_text()):
+		package = _ALERT_PACKAGE_RE.match(w['message'])
+		if package is None:
+			raise ValueError(f'no package in the message of waiver {w}')
+		out.add((w['id'], w['path'], package.group(1)))
+	return out
 
 
 def _by_severity(findings: list[Finding]) -> list[Finding]:
@@ -566,12 +627,11 @@ def _sarif(findings: list[Finding]) -> dict:
 				},
 			},
 		)
-		fixed = f' Fixed in {", ".join(f.fixed)}.' if f.fixed else ''
 		results.append(
 			{
 				'ruleId': f.id,
 				'level': 'note' if f.score is None else 'warning' if f.score < 7.0 else 'error',
-				'message': {'text': f'{f.package}@{f.version} is affected by {f.id}.{fixed}'},
+				'message': {'text': _alert_message(f)},
 				'locations': [
 					{
 						'physicalLocation': {
@@ -630,7 +690,16 @@ def main(ctx: common.Context, args) -> int:
 		_write(Path(args.markdown), _markdown(findings))
 	if args.sarif:
 		_write(Path(args.sarif), json.dumps(_sarif(findings), indent=1) + '\n')
-	return 0
+	if args.gate is None:
+		return 0
+	config = common.monorepo_config(ctx.root)
+	statuses = {line: entry['status'] for line, entry in config['executor-lines'].items()}
+	waivers = load_waivers(Path(args.waivers)) if args.waivers else set()
+	blocked = blocking(findings, statuses, waivers, SEVERITY_FLOORS[args.gate])
+	for f in _by_severity(blocked):
+		print(f'blocking: {f.path}:{f.line}: {f.package}@{f.version} {f.id} {f.url}')
+	print(f'{len(blocked)} finding(s) block at {args.gate}')
+	return 1 if blocked else 0
 
 
 def _write(path: Path, text: str) -> None:

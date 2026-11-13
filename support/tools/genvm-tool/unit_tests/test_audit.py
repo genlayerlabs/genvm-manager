@@ -436,3 +436,98 @@ def test_nvd_stops_on_an_empty_page(monkeypatch):
 		lambda request, timeout: {'totalResults': 5, 'vulnerabilities': []},
 	)
 	assert cmd_audit._nvd_cves('cpe:x', None) == []
+
+
+def _at(
+	path: str, score: float | None, id: str = 'GHSA-1', package: str = 'zip'
+) -> cmd_audit.Finding:
+	return cmd_audit.Finding(
+		id=id,
+		aliases=(),
+		summary='',
+		score=score,
+		package=package,
+		version='1.0.0',
+		fixed=(),
+		path=path,
+		line=1,
+	)
+
+
+STATUSES = {
+	'v0.2': 'replay-only',
+	'v0.3': 'maintained',
+	'v0.4': 'current',
+	'v0.5': 'preview',
+}
+
+
+@pytest.mark.parametrize(
+	'path',
+	[
+		'executors/v0.3.x/executor/Cargo.lock',
+		'executors/v0.4.x/executor/Cargo.lock',
+		'executors/v0.5.x/executor/Cargo.lock',
+		'implementation/Cargo.lock',
+		'libs/deps/dependency-urls.json',
+		# A line missing from `executor-lines` is not exempt
+		'executors/v0.9.x/executor/Cargo.lock',
+		# Nor one with a misspelled status
+		'executors/v0.6.x/executor/Cargo.lock',
+	],
+)
+def test_gate_blocks_a_critical_finding_outside_replay_only_lines(path):
+	finding = _at(path, 9.0)
+	statuses = {**STATUSES, 'v0.6': 'replay_only'}
+	assert cmd_audit.blocking([finding], statuses, set(), 9.0) == [finding]
+
+
+@pytest.mark.parametrize(
+	('finding', 'waivers'),
+	[
+		(_at('executors/v0.2.x/executor/Cargo.lock', 10.0), set()),
+		(_at('executors/v0.4.x/executor/Cargo.lock', 8.9), set()),
+		(_at('executors/v0.4.x/executor/Cargo.lock', None), set()),
+		(
+			_at('executors/v0.4.x/executor/Cargo.lock', 9.5),
+			{('GHSA-1', 'executors/v0.4.x/executor/Cargo.lock', 'zip')},
+		),
+	],
+)
+def test_gate_passes_replay_only_lower_unscored_and_waived(finding, waivers):
+	assert cmd_audit.blocking([finding], STATUSES, waivers, 9.0) == []
+
+
+@pytest.mark.parametrize(
+	'waiver',
+	[
+		('GHSA-1', 'executors/v0.3.x/executor/Cargo.lock', 'zip'),
+		('GHSA-2', 'executors/v0.4.x/executor/Cargo.lock', 'zip'),
+		('GHSA-1', 'executors/v0.4.x/executor/Cargo.lock', 'zip2'),
+	],
+)
+def test_a_waiver_covers_only_its_own_advisory_file_and_package(waiver):
+	finding = _at('executors/v0.4.x/executor/Cargo.lock', 9.5)
+	assert cmd_audit.blocking([finding], STATUSES, {waiver}, 9.0) == [finding]
+
+
+@pytest.mark.parametrize('package', ['zip', '@scope/zip'])
+def test_waivers_load_the_package_from_the_alert_message(tmp_path, package):
+	finding = _at('a/Cargo.lock', 9.5, package=package)
+	(result,) = cmd_audit._sarif([finding])['runs'][0]['results']
+	path = tmp_path / 'waivers.json'
+	path.write_text(
+		json.dumps(
+			[{'id': 'GHSA-1', 'path': 'a/Cargo.lock', 'message': result['message']['text']}]
+		)
+	)
+	assert cmd_audit.load_waivers(path) == {('GHSA-1', 'a/Cargo.lock', package)}
+
+
+def test_waivers_reject_an_alert_message_without_a_package(tmp_path):
+	path = tmp_path / 'waivers.json'
+	path.write_text(
+		json.dumps([{'id': 'GHSA-1', 'path': 'a/Cargo.lock', 'message': 'odd'}])
+	)
+	with pytest.raises(ValueError):
+		cmd_audit.load_waivers(path)

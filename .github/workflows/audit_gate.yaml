@@ -1,0 +1,67 @@
+name: audit / release gate
+
+# Blocks a release on a critical advisory (`genvm-tool audit --gate critical`)
+# in the manager or any executor line that is not `replay-only`. Runs from
+# release.yaml and on PRs into a release branch. An alert dismissed in code
+# scanning is the ruling that it does not apply, so it does not block.
+
+on:
+  workflow_call:
+  pull_request:
+    branches: ['v*', '!v*-dev']
+
+permissions:
+  contents: read
+  security-events: read
+
+concurrency:
+  group: audit-gate-${{ github.ref }}
+  # Never cancel the gate of a running release
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Lockfiles are tracked in the submodules; no third-party tree is read
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "true"
+          third_party: none
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
+      - name: Fetch dismissed alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p build
+          gh api --paginate \
+            "repos/${GITHUB_REPOSITORY}/code-scanning/alerts?state=dismissed&tool_name=genvm-tool%20audit&per_page=100" \
+            | jq -s '[.[][] | .most_recent_instance as $i | {id: .rule.id, path: $i.location.path, message: $i.message.text}]' \
+            > build/audit-waivers.json
+          jq length build/audit-waivers.json
+      - name: Audit
+        env:
+          # Optional: without it NVD is queried at its anonymous rate
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: >-
+          nix develop '.?submodules=1#audit' --command
+          genvm-tool audit --gate critical --waivers build/audit-waivers.json
+          --markdown build/audit.md
+          | tee build/audit.log
+      - name: Summary
+        if: always()
+        run: |
+          if [ -f build/audit.log ]; then
+            { echo '```'; grep -E '^(blocking: |[0-9]+ finding\(s\) block)' build/audit.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f build/audit.md ]; then
+            cat build/audit.md >> "$GITHUB_STEP_SUMMARY"
+          fi
