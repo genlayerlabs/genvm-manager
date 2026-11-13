@@ -37,8 +37,19 @@ def create_venv(genvm_root_path: Path, requirements_path: Path) -> Path:
 
 	logger.info('installing dependencies')
 
+	# `--require-hashes`: the venv is built by fetching wheels over the network,
+	# so a pin alone is not enough — every requirement must match a sha256 listed
+	# in the file. pip refuses the whole install if any line lacks one.
 	subprocess.run(
-		[actual_python, '-m', 'pip', 'install', '-r', requirements_path],
+		[
+			actual_python,
+			'-m',
+			'pip',
+			'install',
+			'--require-hashes',
+			'-r',
+			requirements_path,
+		],
 		check=True,
 		text=True,
 	)

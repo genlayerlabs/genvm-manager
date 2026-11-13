@@ -11,6 +11,11 @@ import {
 	formatDurationMs,
 } from '../duration.js';
 import type * as browser from './index.js';
+import {
+	createEgressProfile,
+	egressProxyArgs,
+	startEgressProxy,
+} from '../egress-proxy.js';
 
 class BrowserHolder {
 	browser: pup.Browser;
@@ -74,30 +79,73 @@ const CHROME_HEADLESS = envBool('GVM_WEBDRIVER_CHROME_HEADLESS', true);
 // Extra flags appended to the defaults below. See `envStrList` for the format.
 const CHROME_EXTRA_ARGS = envStrList('GVM_WEBDRIVER_CHROME_ARGS', []);
 
+/**
+ * Ceiling on a single CDP round-trip. Puppeteer's own default is 180s, which
+ * sits above the whole render budget (a 30s navigation plus at most 60s of
+ * `waitAfterLoaded`), so a wedged command used to be noticed long after the
+ * render should have finished. It must also stay below the module's HTTP
+ * deadline (`base_client_builder` in `implementation/src/common/mod.rs`, 300s)
+ * so that a stuck browser produces an answer from us rather than a client-side
+ * timeout with nothing to report.
+ */
+const PROTOCOL_TIMEOUT_MS = envDurationMs(
+	'GVM_WEBDRIVER_PROTOCOL_TIMEOUT',
+	'90s',
+);
+
 async function newBrowser(): Promise<BrowserHolder> {
-	const args = [
-		'--no-sandbox',
-		'--disable-dev-shm-usage',
-		'--disable-accelerated-2d-canvas',
-		'--no-first-run',
-		'--no-zygote',
-		'--disable-gpu',
-		'--enable-precise-memory-info',
-		`--js-flags=--max-old-space-size=${RENDERER_MAX_OLD_SPACE_MB}`,
-		`--renderer-process-limit=${RENDERER_PROCESS_LIMIT}`,
-		...CHROME_EXTRA_ARGS,
-	];
-	const realBrowser = await puppeteer.launch({
-		headless: CHROME_HEADLESS,
-		args,
-		executablePath: CHROME_EXECUTABLE,
-	});
+	const proxy = await startEgressProxy({ timeoutMs: PROTOCOL_TIMEOUT_MS });
+	let profile: Awaited<ReturnType<typeof createEgressProfile>> | undefined;
+	let realBrowser: pup.Browser;
+	try {
+		profile = await createEgressProfile();
+		const args = [
+			'--no-sandbox',
+			'--disable-dev-shm-usage',
+			'--disable-accelerated-2d-canvas',
+			'--no-first-run',
+			'--no-zygote',
+			'--disable-gpu',
+			// No popup can be SSRF-guarded before its first navigation, so none is
+			// allowed to exist -- see the `targetcreated` handler in `render.ts`.
+			'--block-new-web-contents',
+			'--enable-precise-memory-info',
+			`--js-flags=--max-old-space-size=${RENDERER_MAX_OLD_SPACE_MB}`,
+			`--renderer-process-limit=${RENDERER_PROCESS_LIMIT}`,
+			...egressProxyArgs(proxy.url, CHROME_EXTRA_ARGS),
+		];
+		realBrowser = await puppeteer.launch({
+			headless: CHROME_HEADLESS,
+			args,
+			executablePath: CHROME_EXECUTABLE,
+			protocolTimeout: PROTOCOL_TIMEOUT_MS,
+			userDataDir: profile.path,
+		});
+	} catch (error) {
+		await proxy.close();
+		await profile?.close();
+		throw error;
+	}
 
 	logger.log('info', 'created new raw browser', {
 		pid: realBrowser.process()?.pid,
 	});
 
 	realBrowser.on('disconnected', () => {
+		void proxy.close();
+		const cleanup = () => {
+			void profile!
+				.close()
+				.catch((error) =>
+					logger.log('warn', 'could not remove browser profile', { error }),
+				);
+		};
+		const process = realBrowser.process();
+		if (process && process.exitCode === null && process.signalCode === null) {
+			process.once('exit', cleanup);
+		} else {
+			cleanup();
+		}
 		logger.log('info', 'browser disconnected');
 	});
 
@@ -153,9 +201,9 @@ class ChromeBrowserManager implements browser.Manager {
 	 * Arm the next rotation check. Uses a self-rescheduling timeout instead of
 	 * setInterval so the next check is only scheduled once the current one has
 	 * fully settled (in `finally`). This structurally prevents overlapping
-	 * rotations from interleaving holder swaps / closes — which could otherwise
+	 * rotations from interleaving holder swaps / closes -- which could otherwise
 	 * orphan a freshly launched browser (process leak) or close one still
-	 * serving a render — and avoids interval backlog under sustained load.
+	 * serving a render -- and avoids interval backlog under sustained load.
 	 */
 	private scheduleRotationCheck(): void {
 		setTimeout(() => {

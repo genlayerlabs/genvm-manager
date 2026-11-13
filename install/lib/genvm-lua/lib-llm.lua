@@ -79,6 +79,34 @@ M.overloaded_statuses = {
 	[529] = true,
 }
 
+--- Map an HTTP status onto the engine's failure vocabulary. Nil means the call
+--- never reached a provider (transport failure) -> network_error.
+--- Every `overloaded_statuses` entry must land on a concrete kind, not "unknown".
+---@param status integer | nil
+---@return string
+M.provider_http_error_description = function(status)
+	if status == nil then
+		return "network_error"
+	elseif status == 429 then
+		return "rate_limit"
+	elseif status == 408 then
+		return "timeout"
+	elseif status == 504 then
+		return "gateway_timeout"
+	elseif status == 401 or status == 403 then
+		return "auth_error"
+	elseif status == 404 then
+		return "model_unavailable"
+	elseif status == 400 then
+		return "bad_request"
+	elseif status == 529 then
+		return "server_overloaded"
+	elseif status >= 500 then
+		return "server_error"
+	end
+	return "unknown"
+end
+
 --- Execute a prompt against a specific provider/model. Delegates to the runtime.
 ---@type fun(ctx, data: { prompt: Prompt, format: Format, model: string, provider: string }): any
 M.exec_prompt_in_provider = rs.exec_prompt_in_provider
@@ -234,7 +262,7 @@ end
 M.exec_prompt_template_transform = function(args)
 	lib.log { level = "debug", message = "exec_prompt_template_transform", args = args }
 
-	my_data = {
+	local my_data = {
 		EqComparative = { template_id = "eq_comparative", format = "bool" },
 		EqNonComparativeValidator = { template_id = "eq_non_comparative_validator", format = "bool" },
 		EqNonComparativeLeader = { template_id = "eq_non_comparative_leader", format = "text" },
@@ -246,11 +274,13 @@ M.exec_prompt_template_transform = function(args)
 	local vars = shallow_copy(args)
 	vars.template = nil
 
-	local as_user_text = my_template.user
-	for key, val in pairs(vars) do
-		local val_escaped = string.gsub(val, "%%", "%%%%")
-		as_user_text = string.gsub(as_user_text, "#{" .. key .. "}", val_escaped)
-	end
+	-- Substitute every placeholder in one pass. A replacement returned from
+	-- a function is not rescanned, so a value that itself contains `#{key}`
+	-- (a leader answer, for instance) is inserted literally instead of being
+	-- expanded by a later substitution. Unknown placeholders stay as they are.
+	local as_user_text = string.gsub(my_template.user, "#{([%w_]+)}", function(key)
+		return vars[key]
+	end)
 
 	local format = my_data.format
 

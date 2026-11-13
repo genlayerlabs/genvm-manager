@@ -1,0 +1,22 @@
+name: GenVM run matrix cell step
+description: >-
+  Replay one key of a matrix cell's step mapping (from a plan-*-matrix pipeline).
+  Does nothing if that key holds no steps.
+inputs:
+  job_json:
+    description: "JSON {key: step list} mapping, as passed to test_cell.yaml"
+    required: true
+  key:
+    description: which key of job_json to replay
+    required: true
+runs:
+  using: composite
+  steps:
+    # Skip when the key holds no steps: indexing an empty list yields null, and
+    # null != null is false. The list is passed via env (not interpolated into
+    # the shell) so its quotes/brackets survive.
+    - if: ${{ fromJSON(inputs.job_json)[inputs.key][0] != null }}
+      shell: bash
+      env:
+        JOB_JSON: ${{ toJSON(fromJSON(inputs.job_json)[inputs.key]) }}
+      run: ./support/ci/run.sh pipeline test-cell --job-json "$JOB_JSON"

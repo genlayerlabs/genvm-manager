@@ -52,6 +52,12 @@ impl Internal {
     }
 }
 
+/// Matches the largest side the strictest provider (Anthropic) accepts
+pub const IMAGE_MAX_SIDE: u32 = 8000;
+/// Fits an 8-bit RGB JPEG at [`IMAGE_MAX_SIDE`] squared. Independent of the
+/// executor's `EXEC_PROMPT_MIN_SPACE`, which reserves contract memory instead
+const IMAGE_MAX_ALLOC: u64 = 256 * 1024 * 1024;
+
 #[derive(Serialize, Deserialize, Clone, Copy)]
 pub enum ImageType {
     PNG,
@@ -69,12 +75,52 @@ impl ImageType {
         }
     }
 
+    /// Whether `data` fully decodes as `self` within [`IMAGE_MAX_SIDE`]; it is
+    /// CPU-bound, so call it off the async runtime
+    pub fn decodes(self, data: &[u8]) -> bool {
+        match self {
+            Self::JPG => jpeg_decodes(data),
+            Self::PNG => png_decodes(data).unwrap_or(false),
+        }
+    }
+
     pub fn media_type(self) -> &'static str {
         match self {
             Self::JPG => "image/jpeg",
             Self::PNG => "image/png",
         }
     }
+}
+
+/// Holds the whole bitmap in memory, bounded by [`IMAGE_MAX_ALLOC`]
+fn jpeg_decodes(data: &[u8]) -> bool {
+    let mut limits = image::Limits::default();
+    limits.max_image_width = Some(IMAGE_MAX_SIDE);
+    limits.max_image_height = Some(IMAGE_MAX_SIDE);
+    limits.max_alloc = Some(IMAGE_MAX_ALLOC);
+
+    let mut reader =
+        image::ImageReader::with_format(std::io::Cursor::new(data), image::ImageFormat::Jpeg);
+    reader.limits(limits);
+    reader.decode().is_ok()
+}
+
+/// Streams rows to the end of the file, so memory stays a few rows whatever the
+/// declared size
+fn png_decodes(data: &[u8]) -> Result<bool, png::DecodingError> {
+    let mut decoder = png::Decoder::new(std::io::Cursor::new(data));
+    // expanding is what rejects a palette image that has no `PLTE`
+    decoder.set_transformations(png::Transformations::EXPAND);
+
+    let header = decoder.read_header_info()?;
+    if header.width > IMAGE_MAX_SIDE || header.height > IMAGE_MAX_SIDE {
+        return Ok(false);
+    }
+
+    let mut reader = decoder.read_info()?;
+    while reader.next_row()?.is_some() {}
+    reader.finish()?;
+    Ok(true)
 }
 
 #[derive(Serialize, Deserialize)]

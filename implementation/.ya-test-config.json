@@ -3,7 +3,7 @@
     "--features", "vendored-lua"
   ],
   "cargo_afl_build_flags": [
-    "--features", "vendored-lua"
+    "--features", "vendored-lua,fuzzing"
   ],
   "keep_env": [
     "OPENAIKEY",
@@ -13,6 +13,15 @@
     "GEMINIKEY",
     "ATOMAKEY",
     "LSQLITE3_SRC",
+    "SQLITE_SRC",
     "LUA_INCLUDE"
-  ]
+  ],
+  "tags": {
+    "lib": [
+      "feature-manager-socket",
+      "feature-version-routing",
+      "feature-web-render",
+      "feature-web-request-signed"
+    ]
+  }
 }

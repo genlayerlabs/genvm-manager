@@ -1,4 +1,4 @@
-# Builds a runner list into a `runners/<id>/<aa>/<rest>.tar` tree, one derivation
+# Builds a runner list into a `runners/<id>/<aa>/<rest>.zip` tree, one derivation
 # per uid (so identical runners shared across executor lines de-duplicate).
 {
   pkgs,
@@ -24,9 +24,9 @@ builtins.foldl' (
               throw "invalid runner uid `${x.uid}`; expected `<prefix>:<hash32>`"
             else
               builtins.elemAt uidMatch 1;
-          # `<id>/<aa>/<rest>.tar` — consumers place this tree *under* their own
+          # `<id>/<aa>/<rest>.zip` — consumers place this tree *under* their own
           # `runners/` dir, so do NOT prefix another `runners/` here.
-          result-path = "${x.id}/${builtins.substring 0 2 hash32}/${builtins.substring 2 50 hash32}.tar";
+          result-path = "${x.id}/${builtins.substring 0 2 hash32}/${builtins.substring 2 50 hash32}.zip";
         in
         ''
           mkdir -p $out/$(dirname -- ${result-path})

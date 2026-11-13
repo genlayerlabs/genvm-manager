@@ -1,0 +1,53 @@
+name: audit / nightly
+
+# Publishes `genvm-tool audit` findings to code scanning (Security → Code
+# scanning, tool "genvm-tool audit"). An alert closes by itself once a run no
+# longer reports it; dismissing one there is the ruling that it does not apply.
+#
+# GitHub only schedules workflows from the DEFAULT branch, so this file has to
+# reach it before the cron fires.
+
+on:
+  schedule:
+    # Off the hour: a scheduled run on a busy minute is queued or dropped.
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: audit-nightly
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # Lockfiles are tracked in the submodules; no third-party tree is read
+      - name: Get source
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "true"
+          third_party: none
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
+      - name: Audit
+        env:
+          # Optional: without it NVD is queried at its anonymous rate
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: >-
+          nix develop '.?submodules=1#audit' --command
+          genvm-tool audit --sarif build/audit.sarif
+      - name: Publish to code scanning
+        uses: github/codeql-action/upload-sarif@1fc58d04a4d4374f921bdac573c3811c240f9c26 # v4.39.2
+        with:
+          sarif_file: build/audit.sarif
+          category: genvm-tool-audit

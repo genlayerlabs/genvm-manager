@@ -1,0 +1,13 @@
+{
+    "foo": [
+        "bar",
+        "baz\n\\z",  1e20,
+        null,
+        true,     [1, 2, 3]
+    ],
+    "ba\\uabbbbbr": [
+        "русскиеCбуквы 日本",
+        "mbbbbbbbbbbbbbbaz\t\uabbbbb",
+        "mbbbbbbbbbbbbbbaz\t\\uabbbbb"
+    ]
+}
