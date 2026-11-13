@@ -7,8 +7,8 @@ name: branch / retarget main PRs to dev
 #
 # pull_request_target is used so the workflow gets a write-scoped token
 # even for PRs from forks. We never check out or run the PR head code;
-# the checkout is of the trusted base branch only (to read
-# active-versions).
+# the checkout is of the trusted base branch only (to read the manager
+# train).
 
 on:
   pull_request_target:

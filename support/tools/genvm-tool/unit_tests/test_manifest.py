@@ -37,7 +37,14 @@ def _micro_yaml_loads():
 def root(tmp_path):
 	"""Two active lines."""
 	tmp_path.joinpath('.genvm-monorepo-root').write_text(
-		json.dumps({'active-versions': ['v0.3', 'v0.2']})
+		json.dumps(
+			{
+				'executor-lines': {
+					'v0.3': {'status': 'current'},
+					'v0.2': {'status': 'replay-only'},
+				}
+			}
+		)
 	)
 	base = tmp_path / manifest.BASE_REL
 	base.parent.mkdir(parents=True)
