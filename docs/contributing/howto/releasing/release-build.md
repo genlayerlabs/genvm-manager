@@ -20,6 +20,10 @@ Platform suffixes: none for native, `-amd64-linux`, `-arm64-linux`,
 | `artifact-prepack-genvm-<platform>` | a platform's release asset |
 | `artifact-prepack-genvm-universal` | the universal asset: runners under a `runners/` prefix, plus the legacy-line overlay |
 
+Every Rust release binary fails to build if its graph, as `cargo tree` resolves
+it for that target with normal and build dependencies, names a crate in
+`support/release-forbidden-crates.json`, such as fuzzing support or vendored Lua
+
 ## Release Assets
 
 `.github/workflows/release.yaml` is `incl_release_build_test.yaml` — plan, build

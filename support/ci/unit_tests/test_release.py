@@ -13,8 +13,10 @@ def monorepo(tmp_path, monkeypatch):
 		json.dumps(
 			{
 				'version': 'v0.6.0-rc2',
-				'active-versions': ['v0.3', 'v0.2'],
-				'support-only-versions': ['v0.2'],
+				'executor-lines': {
+					'v0.3': {'status': 'current'},
+					'v0.2': {'status': 'replay-only'},
+				},
 				'artifacts_dir': 'build/test-artifacts',
 			},
 			indent=4,

@@ -16,8 +16,8 @@ That constraint explains most of the repository's shape
 2. The lines are branches of one executor repository, checked out as separate
    submodules. They share crate names and versions, so cargo needs a target
    directory per line ([build.md](../howto/building/build.md))
-3. Anything manager-global is owned by exactly one line, the first in
-   `active-versions` ([versioning.md](../howto/releasing/versioning.md))
+3. Anything manager-global is owned by exactly one line, the `current` one in
+   `executor-lines` ([versioning.md](../howto/releasing/versioning.md))
 4. Every doc, test filter and config key naming a version is a place a new line
    must be added
 
@@ -25,11 +25,12 @@ This is the price of the guarantee, not complexity to be simplified away
 
 ## Lines Are Not Peers
 
-`active-versions` is ordered: the first entry is the current line, the rest are
-kept so existing work keeps running. Where 2 lines cannot agree, the loss is
-taken on the older side ([ADR-015](<../../adr/015. cross-major contract calls.md>)).
-`support-only-versions` goes further — still shipped, no longer built from full
-sources
+Each line in `executor-lines` has a status. The `current` and `preview` lines
+get new work; the others are kept so existing work keeps running. Where 2 lines cannot agree,
+the loss is taken on the older side ([ADR-015](<../../adr/015. cross-major contract calls.md>)).
+A `replay-only` line goes further: in production it only replays finalized
+history, so no attacker can feed it new input, and only selected bugs are worth
+fixing there. A debug-mode `reroute_to` can still run it on any request
 
 A major bump would be worthless if it cut new contracts off from existing ones,
 so a call crossing majors is delegated to the callee's executor rather than

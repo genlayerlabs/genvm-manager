@@ -22,24 +22,25 @@ docs_src_root_dir = genvm_root_dir.joinpath('docs', 'website', 'src')
 monorepo = json.loads(genvm_root_dir.joinpath('.genvm-monorepo-root').read_text())
 
 
-def _newest_line() -> str:
+def _current_line() -> str:
 	"""
-	The newest active executor line, e.g. `v0.3`.
+	The `current` executor line, e.g. `v0.3`.
 
-	Decided by version order, NOT by position: `active-versions` is hand-ordered
-	and `genvm-tool check-versions bump` APPENDS the new line, so after the next
-	bump `active-versions[0]` is no longer the newest. This must agree with
-	`support/ci/tools/versions.py:newest_line`, which is what decides the
-	sub-site this page is generated into — if the two disagree, this page renders
-	one line's runner data into another line's site.
+	Must agree with `support/ci/tools/versions.py:current_line`, which decides
+	the sub-site this page is generated into; otherwise this page renders one
+	line's runner data into another line's site.
 	"""
-	return max(
-		monorepo['active-versions'],
-		key=lambda v: tuple(int(p) for p in v.lstrip('v').split('-', 1)[0].split('.')[:2]),
-	)
+	current = [
+		line
+		for line, entry in monorepo['executor-lines'].items()
+		if entry['status'] == 'current'
+	]
+	if len(current) != 1:
+		sys.exit(f'.genvm-monorepo-root: exactly 1 `current` line, found {current}')
+	return current[0]
 
 
-executor_dir = genvm_root_dir.joinpath('executors', f'{_newest_line()}.x')
+executor_dir = genvm_root_dir.joinpath('executors', f'{_current_line()}.x')
 
 
 def executor_git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -109,11 +110,11 @@ proc = subprocess.run(
 res = json.loads(proc.stdout)
 
 # docs.nix accumulates the runners of EVERY active line, but this page is
-# per-line (it renders into the NEWEST line's sub-site — see `_newest_line`).
+# per-line (it renders into the current line's sub-site — see `_current_line`).
 # Post-split the lines are independent — v0.2 is not "before" v0.3 — so scope to
 # this line's own versions; otherwise the other lines' hashes leak in as bogus
 # history.
-_line = _newest_line()
+_line = _current_line()
 res = {v: r for v, r in res.items() if v.startswith(_line + '.')}
 
 # --- Post-process: sort by semver, enrich with descriptions, diffs, commits ---
@@ -521,8 +522,8 @@ changelog_rst_path.write_text('\n'.join(changelog_rst) + '\n')
 # heading/prose and this file is just the per-line bullets. Links are relative to
 # the overview page (one level under the html root), hence `../executors/`.
 executor_links = [
-	f'- `{line} <../executors/{line}/index.html>`_'
-	for line in monorepo['active-versions']
+	f'- `{line} <../executors/{line}/index.html>`_ ({entry["status"]})'
+	for line, entry in monorepo['executor-lines'].items()
 ]
 (docs_src_root_dir / 'overview' / 'executor-lines_generated.rst').write_text(
 	'\n'.join(executor_links) + '\n'

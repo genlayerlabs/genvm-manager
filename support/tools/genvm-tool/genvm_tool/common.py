@@ -117,14 +117,33 @@ def monorepo_config(root: Path) -> dict:
 
 
 def active_versions(root: Path) -> list[str]:
-	"""Active executor trains from .genvm-monorepo-root, ascending, bare."""
+	"""Every executor line from .genvm-monorepo-root, ascending, bare."""
 	return active_versions_from_config(monorepo_config(root))
 
 
 def active_versions_from_config(config: dict) -> list[str]:
-	"""Active executor trains from parsed monorepo config, ascending, bare."""
-	vers = (_bare(v) for v in config.get('active-versions', []))
-	return sorted(vers, key=_ver_key)
+	"""
+	Every executor line from parsed monorepo config, ascending, bare.
+
+	Also reads the `active-versions` list of a commit predating
+	`executor-lines`, which a push can still carry.
+	"""
+	lines = config.get('executor-lines', config.get('active-versions', []))
+	return sorted((_bare(v) for v in lines), key=_ver_key)
+
+
+def current_line_from_config(config: dict) -> str:
+	"""The `current` executor line, e.g. `v0.4`."""
+	current = sorted(
+		line
+		for line, entry in config['executor-lines'].items()
+		if entry['status'] == 'current'
+	)
+	if len(current) != 1:
+		raise ToolError(
+			f'{MONOREPO_MARKER}: exactly 1 `current` executor line, found {", ".join(current) or "none"}'
+		)
+	return current[0]
 
 
 def add_extra_python_paths(root: Path) -> None:

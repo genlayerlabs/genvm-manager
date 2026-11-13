@@ -26,7 +26,9 @@ non-zero.
 import dataclasses
 import hashlib
 import json
+import operator
 import os
+import re
 import subprocess
 import time
 import tomllib
@@ -87,6 +89,16 @@ def configure(parser):
 	)
 	parser.add_argument(
 		'--no-native', action='store_true', help=f'skip the NVD pass over {DEPS_FILE}'
+	)
+	parser.add_argument(
+		'--gate',
+		choices=['critical', 'high', 'medium', 'low'],
+		help='exit 1 on a finding of this severity or worse, except in replay-only lines',
+	)
+	parser.add_argument(
+		'--waivers',
+		metavar='FILE',
+		help='JSON list of {"id", "path", "message"} of dismissed code scanning alerts, which the gate skips',
 	)
 
 
@@ -402,10 +414,51 @@ def _cvss_score(cve: dict) -> float | None:
 	return None
 
 
+_NVD_BOUNDS = (
+	('versionStartIncluding', operator.ge),
+	('versionStartExcluding', operator.gt),
+	('versionEndIncluding', operator.le),
+	('versionEndExcluding', operator.lt),
+)
+
+
+def _version_key(version: str) -> tuple:
+	return tuple(
+		(0, int(part)) if part.isdigit() else (1, part)
+		for part in re.split(r'[.-]', version)
+	)
+
+
+def _is_vulnerable(cve: dict, vendor: str, product: str, version: str) -> bool:
+	"""
+	Whether `cve` names this release as vulnerable, not merely as a platform.
+
+	NVD's `virtualMatchString` also returns a CVE whose configuration only needs
+	the product to run on, e.g. a PHP bug "running on" SQLite.
+	"""
+	for config in cve.get('configurations', []):
+		for node in config.get('nodes', []):
+			for match in node.get('cpeMatch', []):
+				_, _, _, m_vendor, m_product, m_version, *_ = match['criteria'].split(':')
+				if not match['vulnerable'] or (m_vendor, m_product) != (vendor, product):
+					continue
+				if m_version != '*':
+					if m_version == version:
+						return True
+					continue
+				if all(
+					holds(_version_key(version), _version_key(match[bound]))
+					for bound, holds in _NVD_BOUNDS
+					if bound in match
+				):
+					return True
+	return False
+
+
 def findings_from_nvd(
 	cpe: str, path: str, line: int, cves: list[dict]
 ) -> list[Finding]:
-	_, _, _, _, product, version, *_ = cpe.split(':')
+	_, _, _, vendor, product, version, *_ = cpe.split(':')
 	return [
 		_finding(
 			{cve['id']},
@@ -420,6 +473,7 @@ def findings_from_nvd(
 			line=line,
 		)
 		for cve in cves
+		if _is_vulnerable(cve, vendor, product, version)
 	]
 
 
@@ -444,13 +498,64 @@ def _scan_native(ctx: common.Context) -> list[Finding]:
 	return findings
 
 
+# Worst first: `_severity` takes the first floor a score reaches
+SEVERITY_FLOORS = {'critical': 9.0, 'high': 7.0, 'medium': 4.0, 'low': 0.1}
+_LINE_RE = re.compile(r'executors/(v\d+\.\d+)\.x/')
+
+
 def _severity(score: float | None) -> str:
 	if score is None:
 		return '-'
-	for floor, name in ((9.0, 'critical'), (7.0, 'high'), (4.0, 'medium'), (0.1, 'low')):
+	for name, floor in SEVERITY_FLOORS.items():
 		if score >= floor:
 			return name
 	return 'none'
+
+
+def blocking(
+	findings: list[Finding],
+	statuses: dict[str, str],
+	waivers: set[tuple[str, str, str]],
+	floor: float,
+) -> list[Finding]:
+	"""
+	Findings at `floor` or above that block a release.
+
+	Only a `replay-only` line is exempt: it replays finalized history, so no
+	attacker reaches it. Unscored findings (unmaintained, unsound) never block.
+	`waivers` holds `(id, path, package)` of dismissed code scanning alerts.
+	"""
+	out = []
+	for f in findings:
+		if f.score is None or f.score < floor or (f.id, f.path, f.package) in waivers:
+			continue
+		line = _LINE_RE.match(f.path)
+		if line and statuses.get(line.group(1)) == 'replay-only':
+			continue
+		out.append(f)
+	return out
+
+
+def _alert_message(f: Finding) -> str:
+	fixed = f' Fixed in {", ".join(f.fixed)}.' if f.fixed else ''
+	return f'{f.package}@{f.version} is affected by {f.id}.{fixed}'
+
+
+# Inverts `_alert_message`; a version holds neither `@` nor spaces
+_ALERT_PACKAGE_RE = re.compile(r'(.+)@[^@\s]+ is affected by ')
+
+
+def load_waivers(path: Path) -> set[tuple[str, str, str]]:
+	"""
+	`[{"id", "path", "message"}]` of dismissed alerts, keyed like a finding.
+	"""
+	out = set()
+	for w in json.loads(path.read_text()):
+		package = _ALERT_PACKAGE_RE.match(w['message'])
+		if package is None:
+			raise ValueError(f'no package in the message of waiver {w}')
+		out.add((w['id'], w['path'], package.group(1)))
+	return out
 
 
 def _by_severity(findings: list[Finding]) -> list[Finding]:
@@ -522,12 +627,11 @@ def _sarif(findings: list[Finding]) -> dict:
 				},
 			},
 		)
-		fixed = f' Fixed in {", ".join(f.fixed)}.' if f.fixed else ''
 		results.append(
 			{
 				'ruleId': f.id,
 				'level': 'note' if f.score is None else 'warning' if f.score < 7.0 else 'error',
-				'message': {'text': f'{f.package}@{f.version} is affected by {f.id}.{fixed}'},
+				'message': {'text': _alert_message(f)},
 				'locations': [
 					{
 						'physicalLocation': {
@@ -586,7 +690,16 @@ def main(ctx: common.Context, args) -> int:
 		_write(Path(args.markdown), _markdown(findings))
 	if args.sarif:
 		_write(Path(args.sarif), json.dumps(_sarif(findings), indent=1) + '\n')
-	return 0
+	if args.gate is None:
+		return 0
+	config = common.monorepo_config(ctx.root)
+	statuses = {line: entry['status'] for line, entry in config['executor-lines'].items()}
+	waivers = load_waivers(Path(args.waivers)) if args.waivers else set()
+	blocked = blocking(findings, statuses, waivers, SEVERITY_FLOORS[args.gate])
+	for f in _by_severity(blocked):
+		print(f'blocking: {f.path}:{f.line}: {f.package}@{f.version} {f.id} {f.url}')
+	print(f'{len(blocked)} finding(s) block at {args.gate}')
+	return 1 if blocked else 0
 
 
 def _write(path: Path, text: str) -> None:

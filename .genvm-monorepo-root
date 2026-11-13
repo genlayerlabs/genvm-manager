@@ -1,13 +1,17 @@
 {
+    "$schema": "./support/schemas/genvm-monorepo-root.json",
     "version": "v0.6.0-rc13",
-    "active-versions": [
-        "v0.4",
-        "v0.3",
-        "v0.2"
-    ],
-    "support-only-versions": [
-        "v0.2"
-    ],
+    "executor-lines": {
+        "v0.4": {
+            "status": "current"
+        },
+        "v0.3": {
+            "status": "maintained"
+        },
+        "v0.2": {
+            "status": "replay-only"
+        }
+    },
     "artifacts_dir": "build/test-artifacts",
     "tags_registry": "tests/tags.json",
     "extra_python_paths": [

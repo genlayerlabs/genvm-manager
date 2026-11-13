@@ -1084,10 +1084,10 @@ def integration_test(
 	webdriver_service: genvm_tool.tests.stage.collection.Service,
 	ci: bool,
 ) -> None:
-	active_versions: list[str] = json.loads(
+	executor_lines: dict = json.loads(
 		local_ctx.shared.root_dir.joinpath('.genvm-monorepo-root').read_text()
-	)['active-versions']
-	for ver in active_versions:
+	)['executor-lines']
+	for ver in executor_lines:
 		integration_test_single_executor(
 			ctx,
 			executor_version=ver,

@@ -20,16 +20,49 @@ def version_key(version: str) -> tuple[int, ...]:
 	return tuple(int(part) for part in major_minor(version).split('.'))
 
 
+LINE_STATUSES = ('preview', 'current', 'maintained', 'replay-only')
+
+
+class LinesError(Exception):
+	pass
+
+
 def load_root_conf() -> dict:
 	conf_path = os.environ.get('MONOREPO_ROOT', ci_lib.ROOT_DIR / '.genvm-monorepo-root')
 	return json.loads(Path(conf_path).read_bytes())
 
 
-def active_versions() -> list[str]:
-	conf = load_root_conf()
-	return sorted(
-		(bare(version) for version in conf.get('active-versions', [])), key=version_key
+def executor_lines() -> dict[str, str]:
+	"""
+	`executor-lines` as `{line: status}`, ascending by version.
+
+	Raises `LinesError` unless there is exactly 1 `current` line, which the
+	schema cannot express. Line names and statuses are rechecked, so a reader
+	of an unchecked file fails here instead of on a later lookup.
+	"""
+	lines = load_root_conf().get('executor-lines')
+	if not isinstance(lines, dict):
+		raise LinesError('`executor-lines` must be an object')
+	errors = []
+	for line, entry in lines.items():
+		if not re.fullmatch(r'v\d+\.\d+', line):
+			errors.append(f'`{line}`: a line must be `v<major>.<minor>`')
+		elif not isinstance(entry, dict):
+			errors.append(f'{line}: must be an object with a `status`')
+		elif entry.get('status') not in LINE_STATUSES:
+			errors.append(f'{line}: unknown status `{entry.get("status")}`')
+	if errors:
+		raise LinesError('\n'.join(errors))
+	current = sorted(
+		line for line, entry in lines.items() if entry['status'] == 'current'
 	)
+	if len(current) != 1:
+		raise LinesError(f'exactly 1 `current` line, found {", ".join(current) or "none"}')
+	return {line: lines[line]['status'] for line in sorted(lines, key=version_key)}
+
+
+def active_versions() -> list[str]:
+	return [bare(line) for line in executor_lines()]
 
 
 def manager_version() -> str:
@@ -37,41 +70,34 @@ def manager_version() -> str:
 	The manager's own release train as bare major.minor (e.g. '0.6').
 
 	Read from the `version` field. The manager dev/release branches
-	(`v<X>-dev`, `v<X>`) are named after this — NOT after the executor lines
-	in `active-versions`, which move independently (currently v0.2 / v0.3 / v0.4).
+	(`v<X>-dev`, `v<X>`) are named after this — NOT after `executor-lines`,
+	which move independently.
 	"""
 	return major_minor(load_root_conf()['version'])
 
 
 def active_lines() -> list[str]:
 	"""
-	Active executor lines as `v<X>` tags (e.g. ['v0.2', 'v0.3']).
+	Every executor line as a `v<X>` tag (e.g. ['v0.2', 'v0.3']), whatever its status.
 
-	Same data as `active_versions`, prefixed with the `v` the executor branches
-	(`<line>-dev`, `pr/<line>/...`) use. The manager release line is independent of
-	these; a manager PR ships every active line.
+	The form the executor branches (`<line>-dev`, `pr/<line>/...`) use; a manager
+	PR ships every line.
 	"""
-	return [f'v{version}' for version in active_versions()]
+	return list(executor_lines())
 
 
-def newest_line() -> str:
-	"""
-	The newest active executor line as `v<X>` (e.g. 'v0.3').
-
-	`active-versions` is hand-ordered in .genvm-monorepo-root, so "newest" must be
-	decided by `version_key`, not by position — reading `active-versions[0]`
-	directly is what let two consumers disagree on which line is primary.
-	"""
-	return active_lines()[-1]
+def current_line() -> str:
+	"""The `current` executor line as `v<X>`, which owns the manager-global files."""
+	return next(line for line, status in executor_lines().items() if status == 'current')
 
 
 class BranchVersions(ci_lib.Tool):
 	"""
 	Read version trains from .genvm-monorepo-root.
 
-	`list` yields the active executor lines (`active-versions`); `manager`
-	yields the manager's own train (`version`). These differ — don't use one
-	where the other is meant.
+	`list` yields the executor lines (`executor-lines`); `manager` yields the
+	manager's own train (`version`). These differ — don't use one where the
+	other is meant.
 	"""
 
 	def name(self) -> str:
@@ -101,6 +127,7 @@ class CheckVersions(ci_lib.Tool):
 	def add_to(self, parser: argparse.ArgumentParser) -> None:
 		sub = parser.add_subparsers(dest='cmd')
 		sub.add_parser('sync', help='rewrite crate versions to match version')
+		sub.add_parser('lines', help='check the executor-lines rules the schema cannot')
 		bump = sub.add_parser('bump', help='cut the next version train')
 		bump.add_argument('level', nargs='?', choices=['minor', 'major'], default='minor')
 		bump.add_argument('--set', dest='set_version', metavar='MAJOR.MINOR')
@@ -168,19 +195,15 @@ class CheckVersions(ci_lib.Tool):
 
 	def bump(self, level: str, set_version: str | None) -> int:
 		conf = self.load_conf()
-		active = conf.get('active-versions', [])
-		if not active:
-			print('no active versions configured in .genvm-monorepo-root', file=sys.stderr)
-			return 1
-		latest = sorted(active, key=version_key)[-1]
+		current = major_minor(conf['version'])
 
 		if set_version is not None:
-			new_mm = bare(set_version)
+			new_mm = set_version.removeprefix('v')
 			if not re.fullmatch(r'\d+\.\d+', new_mm):
 				print(f'--set expects major.minor, got {set_version!r}', file=sys.stderr)
 				return 2
 		else:
-			major, minor = (int(part) for part in major_minor(latest).split('.'))
+			major, minor = (int(part) for part in current.split('.'))
 			if level == 'minor':
 				minor += 1
 			else:
@@ -188,42 +211,35 @@ class CheckVersions(ci_lib.Tool):
 				minor = 0
 			new_mm = f'{major}.{minor}'
 
-		new = f'v{new_mm}'
-		if new in active:
-			print(f'version {new} is already active', file=sys.stderr)
-			return 1
-		if version_key(new) <= version_key(latest):
-			print(f'new version {new} is not greater than latest {latest}', file=sys.stderr)
-			return 1
-
-		text = self.conf_path().read_text()
-		new_active = '[' + ', '.join(f'"{version}"' for version in active + [new]) + ']'
-		text, n1 = re.subn(r'("version"\s*:\s*)"[^"]*"', rf'\g<1>"{new}"', text)
-		text, n2 = re.subn(
-			r'("active-versions"\s*:\s*)\[[^\]]*\]',
-			lambda match: match.group(1) + new_active,
-			text,
-		)
-		if n1 != 1 or n2 != 1:
+		if version_key(new_mm) <= version_key(current):
 			print(
-				f'failed to patch .genvm-monorepo-root (version={n1}, active-versions={n2})',
-				file=sys.stderr,
+				f'new train {new_mm} is not greater than current {current}', file=sys.stderr
 			)
 			return 1
-		self.conf_path().write_text(text)
-
 		for cargo_file in self.CARGO_FILES:
-			if self.set_package_version(cargo_file, f'{new_mm}.0') is None:
+			if self.package_version(ci_lib.ROOT_DIR / cargo_file) is None:
 				print(
 					f'{cargo_file}: could not find [package] version to bump', file=sys.stderr
 				)
 				return 1
+
+		conf['version'] = f'v{new_mm}.0-rc0'
+		self.conf_path().write_text(json.dumps(conf, indent=4) + '\n')
+		for cargo_file in self.CARGO_FILES:
+			self.set_package_version(cargo_file, f'{new_mm}.0')
 		print(new_mm)
 		return 0
 
 	def handler(self, args: argparse.Namespace) -> int:
 		if args.cmd == 'bump':
 			return self.bump(args.level, args.set_version)
+		if args.cmd == 'lines':
+			try:
+				executor_lines()
+			except LinesError as error:
+				print(f'.genvm-monorepo-root: {error}')
+				return 1
+			return 0
 		return self.sync()
 
 
