@@ -33,6 +33,7 @@ def tests(ctx):
 	from pathlib import Path
 
 	import genvm_tool.cmd_configure
+	import genvm_tool.common
 	import genvm_tool.tests
 
 	_info_path = ctx.shared.root_dir / 'build' / 'info.json'
@@ -190,7 +191,7 @@ def tests(ctx):
 		reroute_to = (
 			getattr(ctx.configuration.args, 'genvm_reroute_to', '')
 			or build_info.get('primary_executor_version')
-			or ctx.shared.config['active-versions'][0]
+			or genvm_tool.common.current_line_from_config(ctx.shared.config)
 		)
 		no_manager = getattr(ctx.configuration.args, 'no_manager', False)
 		no_webdriver = getattr(ctx.configuration.args, 'no_webdriver', False)

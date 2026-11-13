@@ -1,4 +1,4 @@
-# The active executor lines, resolved from the umbrella manifest into
+# Every executor line, resolved from the umbrella manifest into
 #   [ { version; fork; src; } ]
 # where `version` is the line's pinned `executor-version`, `fork` the chainfork
 # gating it, and `src` its checkout. Each checkout's `runners` directory exports
@@ -22,4 +22,4 @@ builtins.map (
     inherit (manifest) fork;
     src = root-src + "/${exec-rel}";
   }
-) monorepo.active-versions
+) (builtins.attrNames monorepo.executor-lines)

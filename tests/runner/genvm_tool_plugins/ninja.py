@@ -397,7 +397,7 @@ class LineContext:
 	"""
 	Everything one executor line's ``configure(line)`` hook needs.
 
-	Built by the configure command per active line. The hook composes the
+	Built by the configure command per executor line. The hook composes the
 	``register_standard_*`` / ``install_tree`` steps and chooses a runner-registry
 	resolver (:meth:`frozen_registry` vs :meth:`nix_manifests`). The phony nodes
 	are shared, command-owned aggregates the hook appends to; the command finishes
@@ -413,6 +413,7 @@ class LineContext:
 	data_phony: Build
 	all_bin: Build
 
+	# a `replay-only` line; the executors' `configure` hooks read this name
 	is_support_only: bool
 
 	@property
