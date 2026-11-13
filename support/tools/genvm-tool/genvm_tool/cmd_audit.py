@@ -26,7 +26,9 @@ non-zero.
 import dataclasses
 import hashlib
 import json
+import operator
 import os
+import re
 import subprocess
 import time
 import tomllib
@@ -402,10 +404,51 @@ def _cvss_score(cve: dict) -> float | None:
 	return None
 
 
+_NVD_BOUNDS = (
+	('versionStartIncluding', operator.ge),
+	('versionStartExcluding', operator.gt),
+	('versionEndIncluding', operator.le),
+	('versionEndExcluding', operator.lt),
+)
+
+
+def _version_key(version: str) -> tuple:
+	return tuple(
+		(0, int(part)) if part.isdigit() else (1, part)
+		for part in re.split(r'[.-]', version)
+	)
+
+
+def _is_vulnerable(cve: dict, vendor: str, product: str, version: str) -> bool:
+	"""
+	Whether `cve` names this release as vulnerable, not merely as a platform.
+
+	NVD's `virtualMatchString` also returns a CVE whose configuration only needs
+	the product to run on, e.g. a PHP bug "running on" SQLite.
+	"""
+	for config in cve.get('configurations', []):
+		for node in config.get('nodes', []):
+			for match in node.get('cpeMatch', []):
+				_, _, _, m_vendor, m_product, m_version, *_ = match['criteria'].split(':')
+				if not match['vulnerable'] or (m_vendor, m_product) != (vendor, product):
+					continue
+				if m_version != '*':
+					if m_version == version:
+						return True
+					continue
+				if all(
+					holds(_version_key(version), _version_key(match[bound]))
+					for bound, holds in _NVD_BOUNDS
+					if bound in match
+				):
+					return True
+	return False
+
+
 def findings_from_nvd(
 	cpe: str, path: str, line: int, cves: list[dict]
 ) -> list[Finding]:
-	_, _, _, _, product, version, *_ = cpe.split(':')
+	_, _, _, vendor, product, version, *_ = cpe.split(':')
 	return [
 		_finding(
 			{cve['id']},
@@ -420,6 +463,7 @@ def findings_from_nvd(
 			line=line,
 		)
 		for cve in cves
+		if _is_vulnerable(cve, vendor, product, version)
 	]
 
 

@@ -172,6 +172,17 @@ def test_commit_findings_take_the_github_severity():
 	assert (second.summary, second.score) == ('first line', None)
 
 
+def _configurations(*matches: dict) -> list[dict]:
+	return [{'nodes': [{'operator': 'OR', 'cpeMatch': list(matches)}]}]
+
+
+def _cpe_match(criteria: str, vulnerable: bool = True, **bounds: str) -> dict:
+	return {'vulnerable': vulnerable, 'criteria': criteria, **bounds}
+
+
+SQLITE_ANY = 'cpe:2.3:a:sqlite:sqlite:*:*:*:*:*:*:*:*'
+
+
 def test_nvd_findings_name_the_cpe_product_and_prefer_the_newest_cvss():
 	cves = [
 		{
@@ -184,8 +195,14 @@ def test_nvd_findings_name_the_cpe_product_and_prefer_the_newest_cvss():
 				'cvssMetricV2': [{'cvssData': {'baseScore': 5.0}}],
 				'cvssMetricV31': [{'cvssData': {'baseScore': 9.8}}],
 			},
+			'configurations': _configurations(_cpe_match(SQLITE_ANY)),
 		},
-		{'id': 'CVE-2'},
+		{
+			'id': 'CVE-2',
+			'configurations': _configurations(
+				_cpe_match('cpe:2.3:a:sqlite:sqlite:3.24.0:*:*:*:*:*:*:*')
+			),
+		},
 	]
 	first, second = cmd_audit.findings_from_nvd(
 		'cpe:2.3:a:sqlite:sqlite:3.24.0:*:*:*:*:*:*:*', 'deps.json', 7, cves
@@ -197,6 +214,53 @@ def test_nvd_findings_name_the_cpe_product_and_prefer_the_newest_cvss():
 		9.8,
 	)
 	assert second.score is None
+
+
+@pytest.mark.parametrize(
+	'matches',
+	[
+		# PHP is vulnerable, SQLite is only the platform it runs on
+		[
+			_cpe_match('cpe:2.3:a:php:php:*:*:*:*:*:*:*:*', versionStartIncluding='8.0.0'),
+			_cpe_match(SQLITE_ANY, vulnerable=False, versionStartIncluding='3.39.2'),
+		],
+		# Vulnerable only in releases the pin is past
+		[
+			_cpe_match(SQLITE_ANY, versionEndExcluding='3.24.0'),
+			_cpe_match(SQLITE_ANY, vulnerable=False),
+		],
+		[_cpe_match(SQLITE_ANY, versionStartExcluding='3.24.0')],
+		[_cpe_match(SQLITE_ANY, versionEndIncluding='3.9.9')],
+		[_cpe_match('cpe:2.3:a:sqlite:sqlite:3.24.1:*:*:*:*:*:*:*')],
+		[_cpe_match('cpe:2.3:a:other:sqlite:*:*:*:*:*:*:*:*')],
+	],
+)
+def test_nvd_findings_skip_cves_the_pin_is_not_vulnerable_to(matches):
+	cves = [{'id': 'CVE-1', 'configurations': _configurations(*matches)}]
+	assert (
+		cmd_audit.findings_from_nvd(
+			'cpe:2.3:a:sqlite:sqlite:3.24.0:*:*:*:*:*:*:*', 'deps.json', 7, cves
+		)
+		== []
+	)
+
+
+@pytest.mark.parametrize(
+	'bounds',
+	[
+		{'versionStartIncluding': '3.24.0', 'versionEndExcluding': '3.24.1'},
+		{'versionStartExcluding': '3.9.10', 'versionEndIncluding': '3.24.0'},
+		{'versionEndExcluding': '3.100'},
+	],
+)
+def test_nvd_findings_keep_a_vulnerable_range_holding_the_pin(bounds):
+	cves = [
+		{'id': 'CVE-1', 'configurations': _configurations(_cpe_match(SQLITE_ANY, **bounds))}
+	]
+	[finding] = cmd_audit.findings_from_nvd(
+		'cpe:2.3:a:sqlite:sqlite:3.24.0:*:*:*:*:*:*:*', 'deps.json', 7, cves
+	)
+	assert finding.id == 'CVE-1'
 
 
 def test_a_later_pass_does_not_repeat_an_advisory_under_another_id(tmp_path):
