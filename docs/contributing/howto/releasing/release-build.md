@@ -28,7 +28,9 @@ it for that target with normal and build dependencies, names a crate in
 
 `.github/workflows/release.yaml` is `incl_release_build_test.yaml` — plan, build
 every asset, test every platform — plus a publisher. Everything is built there;
-the executor is not a standalone build entry point
+the executor is not a standalone build entry point. The build cells skip the
+GenLayer nix cache, so an asset is built from source plus cache.nixos.org; a
+`test-release-pipeline` run builds the same way
 
 An asset is the prepacked tree itself, already named — nothing renames it:
 
