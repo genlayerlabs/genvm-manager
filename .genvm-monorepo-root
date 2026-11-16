@@ -5,15 +5,13 @@
         "v0.4": {
             "status": "current",
             "audit-ignores": [
-                { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" },
-                { "id": "RUSTSEC-2026-0190", "package": "anyhow", "reason": "the affected 1.0.86 is only in runners/support/tools (floats-to-soft, wasm-add-mod-name), which the runner builds run on our own wasm; only their output ships" }
+                { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" }
             ]
         },
         "v0.3": {
             "status": "maintained",
             "audit-ignores": [
                 { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" },
-                { "id": "RUSTSEC-2026-0190", "package": "anyhow", "reason": "the affected 1.0.86 is only in runners/support/tools (floats-to-soft, wasm-add-mod-name), which the runner builds run on our own wasm; only their output ships" },
                 { "id": "GHSA-4684-h2q9-2vcp", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },
                 { "id": "GHSA-4v9h-p7m9-rh26", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },
                 { "id": "GHSA-q7v9-x93c-xqv3", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },
