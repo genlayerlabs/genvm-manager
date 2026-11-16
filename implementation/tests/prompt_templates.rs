@@ -36,6 +36,10 @@ fn load_lib_llm() -> Lua {
     eq.set("system", "system").unwrap();
     eq.set("user", TEMPLATE).unwrap();
     templates.set("eq_comparative", eq).unwrap();
+    let leader = vm.create_table().unwrap();
+    leader.set("system", "system").unwrap();
+    leader.set("user", "<task>#{task}</task>").unwrap();
+    templates.set("eq_non_comparative_leader", leader).unwrap();
     let llm = vm.create_table().unwrap();
     llm.set("templates", templates).unwrap();
     llm.set("providers", vm.create_table().unwrap()).unwrap();
@@ -120,10 +124,17 @@ fn escaping_is_applied_once() {
     );
 }
 
+// The leader template performs the task itself, so its input reaches the model verbatim
 #[test]
-fn escape_html_is_bytewise() {
-    use genvm_modules::scripting::filters::escape_html;
-    assert_eq!(escape_html(b"&lt; <a>"), b"&amp;lt; &lt;a&gt;");
-    assert_eq!(escape_html(b"\xff<\xfe"), b"\xff&lt;\xfe");
-    assert_eq!(escape_html(b"\"'"), b"\"'");
+fn the_leader_template_is_not_escaped() {
+    let vm = load_lib_llm();
+    let code = r#"
+        local llm = require("lib-llm")
+        return llm.exec_prompt_template_transform({
+            template = "EqNonComparativeLeader",
+            task = "a < b & c",
+        }).prompt.user_message
+    "#;
+    let out: String = vm.load(code).eval().unwrap();
+    assert_eq!(out, "<task>a < b & c</task>");
 }

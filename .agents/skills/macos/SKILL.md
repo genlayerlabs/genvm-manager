@@ -87,15 +87,8 @@ trust the builder's host key.
 
 ## If you just need to develop / run, not rebuild runners
 
-You usually do not need to build runners at all. Download them instead (works on
-any platform):
-
-```bash
-nix develop '.?submodules=1#full' --command python3 build/out/bin/genvm-post-install \
-  --create-venv false --default-step false \
-  --runners-download true --error-on-missing-executor false
-```
-
-(`?submodules=1` is required on every flake ref — see `/submodules`.)
+You usually do not need to build runners at all. Download `genvm-universal.tar.xz`
+from a `genvm-manager` release instead (works on any platform) and extract it over
+the install root; see `docs/contributing/howto/building/runners.md`.
 
 See `/build` for the normal Rust build flow and `/submodules` for the multi-repo layout.
