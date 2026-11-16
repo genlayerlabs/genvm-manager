@@ -6,7 +6,7 @@ genvm-tool test run --filter-tag integration
 
 Cases are `.jsonnet` files in `executors/<line>.x/tests/integration/`; each
 yields a `<name>/prepare` case plus one per step (`/0l`, `/0v`, `/0s`, …), and
-a sibling `.skip` file marks a case skipped. Every line in `active-versions`
+a sibling `.skip` file marks a case skipped. Every line in `executor-lines`
 runs its own cases against its own built executor, via `build/info.json`
 
 A step may declare `executor_routes: {'<address>': <route>}` to send a

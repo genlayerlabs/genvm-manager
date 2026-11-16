@@ -3,7 +3,7 @@ import os
 import sys
 
 import ci_lib
-from tools.versions import active_lines, newest_line
+from tools.versions import active_lines, current_line
 
 
 class Docs(ci_lib.Pipeline):
@@ -22,15 +22,10 @@ class Docs(ci_lib.Pipeline):
 		).strip()
 
 		# Runner versions are per-executor-line data (the runner manifest), so the
-		# generated manifest + available-runners page land in the newest line's
+		# generated manifest + available-runners page land in the current line's
 		# SDK sub-site, not the manager. generate.py writes available-runners.rst
 		# next to this json (json_path.with_name).
-		#
-		# `newest_line()`, not `active-versions[0]`: that field is hand-ordered, and
-		# every other consumer goes through the sorted `tools.versions` helpers — so
-		# indexing it raw meant two readers of one field disagreeing on which line
-		# is "first".
-		primary_line = newest_line()
+		primary_line = current_line()
 		runners_versions_json = (
 			f'executors/{primary_line}.x/docs/website/src/python-sdk/runners-versions.json'
 		)

@@ -1,13 +1,45 @@
 {
+    "$schema": "./support/schemas/genvm-monorepo-root.json",
     "version": "v0.6.0-rc13",
-    "active-versions": [
-        "v0.4",
-        "v0.3",
-        "v0.2"
-    ],
-    "support-only-versions": [
-        "v0.2"
-    ],
+    "executor-lines": {
+        "v0.4": {
+            "status": "current",
+            "audit-ignores": [
+                { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" }
+            ]
+        },
+        "v0.3": {
+            "status": "maintained",
+            "audit-ignores": [
+                { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" },
+                { "id": "GHSA-4684-h2q9-2vcp", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },
+                { "id": "GHSA-4v9h-p7m9-rh26", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },
+                { "id": "GHSA-q7v9-x93c-xqv3", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },
+                { "id": "GHSA-vv5m-jxxh-4627", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },
+                { "id": "GHSA-8hxf-qr8p-62x4", "package": "zip", "reason": "no password is ever supplied, so an AES entry is never opened" },
+                { "id": "GHSA-m665-v7pm-7grj", "package": "zip", "reason": "a differential only against other zip readers; every node parses with this crate and nothing is written to disk" }
+            ]
+        },
+        "v0.2": {
+            "status": "replay-only",
+            "audit-ignores": [
+                { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" },
+                { "id": "GHSA-4684-h2q9-2vcp", "package": "zip", "reason": "replay-only; archives are read in memory and never extracted" },
+                { "id": "GHSA-4v9h-p7m9-rh26", "package": "zip", "reason": "replay-only; archives are read in memory and never extracted" },
+                { "id": "GHSA-q7v9-x93c-xqv3", "package": "zip", "reason": "replay-only; archives are read in memory and never extracted" },
+                { "id": "GHSA-vv5m-jxxh-4627", "package": "zip", "reason": "replay-only; archives are read in memory and never extracted" },
+                { "id": "GHSA-8hxf-qr8p-62x4", "package": "zip", "reason": "replay-only; no password is ever supplied, so an AES entry is never opened" },
+                { "id": "GHSA-m665-v7pm-7grj", "package": "zip", "reason": "replay-only; every node parses with this crate and nothing is written to disk" }
+            ]
+        }
+    },
+    "manager": {
+        "audit-ignores": [
+            { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" },
+            { "id": "CVE-2026-119586", "package": "sqlite", "reason": "in the command-line shell; only the library is built, into lsqlite3" },
+            { "id": "CVE-2020-15945", "package": "lua", "reason": "Lua runs only the host's scripts, a trusted party" }
+        ]
+    },
     "artifacts_dir": "build/test-artifacts",
     "tags_registry": "tests/tags.json",
     "extra_python_paths": [

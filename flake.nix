@@ -345,6 +345,20 @@
                 files = "^(install/data|docs/schemas)/genvm-chainforks\\.json$";
                 pass_filenames = false;
               };
+              check-monorepo-root-schema = {
+                enable = true;
+                name = "check-monorepo-root-schema";
+                entry = "${pkgs.check-jsonschema}/bin/check-jsonschema --default-filetype json --schemafile support/schemas/genvm-monorepo-root.json .genvm-monorepo-root";
+                files = "^(\\.genvm-monorepo-root|support/schemas/genvm-monorepo-root\\.json)$";
+                pass_filenames = false;
+              };
+              check-executor-lines = {
+                enable = true;
+                name = "check-executor-lines";
+                entry = "${hooks-python}/bin/python3 -B ./support/ci tool check-versions lines";
+                files = "^\\.genvm-monorepo-root$";
+                pass_filenames = false;
+              };
               # --- local guards -----------------------------------------
               # Keep the manager crate's [package] version in lockstep with
               # .genvm-monorepo-root (executor lines version independently).
@@ -388,14 +402,22 @@
             };
           };
 
-          # ---- Active executor lines -------------------------------
+          # ---- Executor lines --------------------------------------
           # `.genvm-monorepo-root` carries two independent versions:
-          #   * `active-versions` — the executor lines built here; each
-          #     line's manifest.json is the source of truth for its own
+          #   * `executor-lines` — the executor lines built here, by status;
+          #     each line's manifest.json is the source of truth for its own
           #     executor-version.
-          #   * `version`          — the manager's release version, which
+          #   * `version`        — the manager's release version, which
           #     may differ from any executor line.
           monorepo = builtins.fromJSON (builtins.readFile ./.genvm-monorepo-root);
+          current-lines = builtins.filter (key: monorepo.executor-lines.${key}.status == "current") (
+            builtins.attrNames monorepo.executor-lines
+          );
+          current-line =
+            if builtins.length current-lines == 1 then
+              builtins.head current-lines
+            else
+              throw ".genvm-monorepo-root: exactly 1 `current` executor line, found ${toString (builtins.length current-lines)}";
 
           host-system-as-genvm =
             {
@@ -435,20 +457,20 @@
           # release version (schema tag / GENVM_PROFILE) and is independent
           # of any executor line — they may differ (e.g. manager v0.6.0-rc0
           # shipping the v0.3 executor line). Its *sources*, though, come
-          # from an active executor line's checkout, since it mounts that
+          # from an executor line's checkout, since it mounts that
           # line's executor crates (see implementation/default.nix). Use the
-          # first active line for that.
+          # `current` line for that.
           #
           # compiled-libs depend only on pkgs/deps/zig/lua-src, so this one
           # build is reused by every package.
           manager-version = monorepo.version;
-          manager-line-prefix = "executors/${builtins.head monorepo.active-versions}.x";
+          manager-line-prefix = "executors/${current-line}.x";
           manager-line-src = self + "/${manager-line-prefix}";
           manager-release-args = make-release-args manager-line-src manager-line-prefix;
 
           compiled-libs = import ./libs manager-release-args;
 
-          # One entry per active line: its clamped label + the built,
+          # One entry per line: its clamped label + the built,
           # version-named executor package set (executor / -<platform>
           # rewritten to executor-<version> / executor-<version>-<platform>).
           executor-lines = builtins.map (
@@ -470,7 +492,7 @@
                 pkgs.lib.nameValuePair "executor-${clamped}${pkgs.lib.removePrefix "executor" name}" value
               ) raw;
             }
-          ) monorepo.active-versions;
+          ) (builtins.attrNames monorepo.executor-lines);
 
           executor-packages = builtins.foldl' (acc: line: acc // line.packages) { } executor-lines;
 
@@ -632,7 +654,7 @@
           );
 
           # ---- Release distribution bundles -------------------------
-          # `executor[-<platform>]` (no version) merges every active line's
+          # `executor[-<platform>]` (no version) merges every line's
           # executor tree (executor/<version>/...) into one bundle. The release
           # packs artifact-prepack-genvm-<platform> (manager + every line)
           # instead, so this merged bundle has no CI consumer; it stays as the
@@ -656,7 +678,7 @@
           );
 
           # Trees consumed by the artifact packer. Platform artifacts contain
-          # the manager and every active executor line for that platform. The
+          # the manager and every executor line for that platform. The
           # universal artifact contains the platform-independent runners at
           # their final `runners/` destination, plus the legacy lines' runners at
           # theirs. Keep every leaf as a symlink to its component derivation so
@@ -717,7 +739,7 @@
             genvm-packages
             # Per-line executors: executor-<version>[-<platform>].
             // executor-packages
-            # All active lines merged: executor[-<platform>] (release bundles).
+            # All lines merged: executor[-<platform>] (release bundles).
             // executor-dist-packages
             # Manager: manager[-<platform>].
             // manager-packages

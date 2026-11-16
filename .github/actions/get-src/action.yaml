@@ -23,6 +23,12 @@ inputs:
       clean runner — every nix build then starts from source.
     required: false
     default: ""
+  nix_cache:
+    description: >-
+      "false" keeps the GenLayer nix cache out of the substituters, so every
+      path not on cache.nixos.org is built from source
+    required: false
+    default: "true"
   pr:
     description: >-
       PR number to diff against, overriding `github.event.pull_request.number`.
@@ -52,6 +58,7 @@ runs:
       with:
         github_token: ${{ inputs.github_token }}
         cache_pull_token: ${{ inputs.nix_cache_pull_token }}
+        enable_genlayerlabs_cache: ${{ inputs.nix_cache }}
     - name: checkout submodules
       run: |
         cd "$GITHUB_WORKSPACE"

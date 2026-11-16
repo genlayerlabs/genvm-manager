@@ -9,7 +9,7 @@ the executor submodules.
 
 Inputs, all under the monorepo root unless noted:
 
-	* `.genvm-monorepo-root`              -> `active-versions` (the executor trains)
+	* `.genvm-monorepo-root`              -> `executor-lines` (the executor trains)
 	* `executors/v<ver>.x/manifest.json`  -> `executor-version`, `fork`
 	* `runners/forks.nix`, evaluated by the caller -> `runner_forks`
 	* `support/manifest-base.yaml`        -> static fields (runner download URLs)

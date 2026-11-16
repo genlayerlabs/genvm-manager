@@ -12,7 +12,7 @@
 
 Active lines and the manager version live in `.genvm-monorepo-root`
 ([versioning.md](../releasing/versioning.md)); `genvm-tool git` and the
-`commit-hooks` pipeline model the manager and the active lines only. Branches:
+`commit-hooks` pipeline model the manager and the executor lines only. Branches:
 manager `feat/<name>` on `v<X>-dev`, each line `pr/<line>/feat/<name>`
 
 ## Materializing A Checkout

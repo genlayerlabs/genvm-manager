@@ -86,7 +86,14 @@ def _manager_commit(
 	manager: Path, versions: list[str], gitlinks: dict[str, str]
 ) -> str:
 	(manager / '.genvm-monorepo-root').write_text(
-		json.dumps({'active-versions': [f'v{version}' for version in versions]})
+		json.dumps(
+			{
+				'executor-lines': {
+					f'v{version}': {'status': 'current' if i == 0 else 'maintained'}
+					for i, version in enumerate(versions)
+				}
+			}
+		)
 	)
 	_git(manager, 'add', '.genvm-monorepo-root')
 	for version, sha in gitlinks.items():

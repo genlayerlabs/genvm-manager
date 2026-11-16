@@ -18,7 +18,7 @@ from . import chainforks, common
 NAME = 'configure'
 HELP = 'generate build/build.ninja and build/info.json'
 
-# Umbrella manifest listing the active top-level version lines and the primary.
+# Umbrella manifest listing the executor lines and their statuses.
 MONOREPO_ROOT_FILE = '.genvm-monorepo-root'
 
 # The importable plugins live here (mirrors `extra_python_paths`); configure adds
@@ -28,10 +28,11 @@ PLUGINS_REL = Path('tests/runner')
 
 class ExecVersion(NamedTuple):
 	"""
-	One active executor line resolved to its on-disk locations.
+	One executor line resolved to its on-disk locations.
 
 	- ``key``: the top-level version line (e.g. ``v0.3``) as listed in
 		``.genvm-monorepo-root``.
+	- ``status``: its ``executor-lines`` status, e.g. ``current``.
 	- ``exec_rel``: the checkout mount, ``executors/<key>.x`` (a git submodule).
 	- ``real``: the concrete built version from that checkout's ``manifest.json``
 		(e.g. ``v0.3.0-rc7``). This is the ``out/executor/<real>`` directory the
@@ -39,41 +40,49 @@ class ExecVersion(NamedTuple):
 	"""
 
 	key: str
+	status: str
 	exec_rel: str
 	real: str
 
 
-def _load_versions(monorepo_cfg, source_dir: Path) -> tuple[str, list[ExecVersion]]:
+def _load_versions(
+	monorepo_cfg, source_dir: Path
+) -> tuple[ExecVersion, list[ExecVersion]]:
 	"""
-	Resolve every active executor line from ``.genvm-monorepo-root``.
+	Resolve every executor line from ``.genvm-monorepo-root``, and the primary.
 
-	Each active line is mounted at ``executors/<line>.x`` and its
-	``manifest.json`` pins the concrete ``executor-version`` that becomes the
-	built ``out/executor/<real>`` directory. There may be several active lines.
+	Each line is mounted at ``executors/<line>.x`` and its ``manifest.json`` pins
+	the concrete ``executor-version`` that becomes the built
+	``out/executor/<real>`` directory. The primary is the ``current`` line.
 	"""
+	current = common.current_line_from_config(monorepo_cfg)
 	versions = []
-	for key in monorepo_cfg['active-versions']:
+	for key, entry in monorepo_cfg['executor-lines'].items():
 		exec_rel = f'executors/{key}.x'
 		manifest = json.loads((source_dir / exec_rel / 'manifest.json').read_text())
 		versions.append(
-			ExecVersion(key=key, exec_rel=exec_rel, real=manifest['executor-version'])
+			ExecVersion(
+				key=key,
+				status=entry['status'],
+				exec_rel=exec_rel,
+				real=manifest['executor-version'],
+			)
 		)
-	return monorepo_cfg['version'], versions
+	return next(v for v in versions if v.key == current), versions
 
 
 def build_independent_info(monorepo_cfg, source_dir: Path) -> dict:
 	"""
 	The parts of ``info.json`` derivable from source alone — no build needed.
 
-	``executor_versions`` maps each active line (e.g. ``v0.3``) to its built
+	``executor_versions`` maps each line (e.g. ``v0.3``) to its built
 	``out/executor/<real>`` directory name; ``primary_executor_version`` is the
-	primary line's. Both come from ``.genvm-monorepo-root`` and each line's
+	``current`` line's. Both come from ``.genvm-monorepo-root`` and each line's
 	committed ``manifest.json``, so the test harness can synthesize a usable
 	``info.json`` (see the manager-root ``.genvm-tool.py``) without first running
 	``configure``. ``configure`` merges this into the full, build-dependent info.
 	"""
-	primary_key, versions = _load_versions(monorepo_cfg, source_dir)
-	primary = next((v for v in versions if v.key == primary_key), versions[0])
+	primary, versions = _load_versions(monorepo_cfg, source_dir)
 	return {
 		'executor_versions': {v.key: v.real for v in versions},
 		'primary_executor_version': primary.real,
@@ -175,10 +184,9 @@ def main(ctx: common.Context, args) -> int:
 
 	build_dir = source_dir / ninja.BUILD_DIR_REL
 
-	primary_key, versions = _load_versions(monorepo_cfg, source_dir)
 	# Manager-global generated files (test fixtures, docs) have a single output,
 	# so they are derived from the primary line's codegen data.
-	primary = next((v for v in versions if v.key == primary_key), versions[0])
+	primary, versions = _load_versions(monorepo_cfg, source_dir)
 	primary_exec_root = source_dir / primary.exec_rel
 
 	rust_target = detect_rust_target()
@@ -466,7 +474,7 @@ def main(ctx: common.Context, args) -> int:
 			codegen_phony=codegen_phony,
 			data_phony=data_phony,
 			all_bin=all_exec_line,
-			is_support_only=v.key in monorepo_cfg.get('support-only-versions', []),
+			is_support_only=v.status == 'replay-only',
 		)
 		configurator = _line_configurator(ctx, source_dir, v.exec_rel)
 		configurator(line)

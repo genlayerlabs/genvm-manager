@@ -56,10 +56,19 @@ jobs:
           fi
           echo "tag $tag is free"
 
+  # No release with an unwaived critical advisory, checked before any build
+  audit-gate:
+    needs: [check-tag]
+    permissions:
+      contents: read
+      security-events: read
+    uses: ./.github/workflows/audit_gate.yaml
+    secrets: inherit
+
   # Plan -> build every artifact -> test every platform. Its matrices are an
   # implementation detail; all we consume are the four artifact names.
   build-and-test:
-    needs: [check-tag]
+    needs: [check-tag, audit-gate]
     uses: ./.github/workflows/incl_release_build_test.yaml
     with:
       version_override: ${{ inputs.version_override }}

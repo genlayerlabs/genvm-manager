@@ -26,7 +26,9 @@ let
       "libs/unhardcoded-engine/llm_policy.lua"
       "support/manifest-base.yaml"
     ]
-    ++ builtins.map (line: "executors/${line}.x/manifest.json") monorepo.active-versions
+    ++ builtins.map (line: "executors/${line}.x/manifest.json") (
+      builtins.attrNames monorepo.executor-lines
+    )
   );
 
   runner-forks = builtins.toFile "runner-forks.json" (

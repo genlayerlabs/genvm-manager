@@ -18,15 +18,17 @@ None of the sources knows which features GenVM disables or what its patches
 change, so a finding is a candidate to rule on, not a proven exposure.
 
 `--markdown` writes a report; `--sarif` writes the findings for GitHub code
-scanning, which is where the nightly run publishes them. Exits 0 whether or not
-anything is found; a scanner failure, or a pass with nothing to scan, exits
-non-zero.
+scanning, which is where the nightly run publishes them. Without `--gate`, exits
+0 whether or not anything is found; a scanner failure, or a pass with nothing to
+scan, exits non-zero.
 """
 
 import dataclasses
 import hashlib
 import json
+import operator
 import os
+import re
 import subprocess
 import time
 import tomllib
@@ -87,6 +89,11 @@ def configure(parser):
 	)
 	parser.add_argument(
 		'--no-native', action='store_true', help=f'skip the NVD pass over {DEPS_FILE}'
+	)
+	parser.add_argument(
+		'--gate',
+		action='store_true',
+		help=f'exit 1 on a finding that the `audit-ignores` of its manager or executor line in {common.MONOREPO_MARKER} do not list, or on an ignore that matches nothing; refuses the --no-* flags',
 	)
 
 
@@ -402,10 +409,51 @@ def _cvss_score(cve: dict) -> float | None:
 	return None
 
 
+_NVD_BOUNDS = (
+	('versionStartIncluding', operator.ge),
+	('versionStartExcluding', operator.gt),
+	('versionEndIncluding', operator.le),
+	('versionEndExcluding', operator.lt),
+)
+
+
+def _version_key(version: str) -> tuple:
+	return tuple(
+		(0, int(part)) if part.isdigit() else (1, part)
+		for part in re.split(r'[.-]', version)
+	)
+
+
+def _is_vulnerable(cve: dict, vendor: str, product: str, version: str) -> bool:
+	"""
+	Whether `cve` names this release as vulnerable, not merely as a platform.
+
+	NVD's `virtualMatchString` also returns a CVE whose configuration only needs
+	the product to run on, e.g. a PHP bug "running on" SQLite.
+	"""
+	for config in cve.get('configurations', []):
+		for node in config.get('nodes', []):
+			for match in node.get('cpeMatch', []):
+				_, _, _, m_vendor, m_product, m_version, *_ = match['criteria'].split(':')
+				if not match['vulnerable'] or (m_vendor, m_product) != (vendor, product):
+					continue
+				if m_version != '*':
+					if m_version == version:
+						return True
+					continue
+				if all(
+					holds(_version_key(version), _version_key(match[bound]))
+					for bound, holds in _NVD_BOUNDS
+					if bound in match
+				):
+					return True
+	return False
+
+
 def findings_from_nvd(
 	cpe: str, path: str, line: int, cves: list[dict]
 ) -> list[Finding]:
-	_, _, _, _, product, version, *_ = cpe.split(':')
+	_, _, _, vendor, product, version, *_ = cpe.split(':')
 	return [
 		_finding(
 			{cve['id']},
@@ -420,6 +468,7 @@ def findings_from_nvd(
 			line=line,
 		)
 		for cve in cves
+		if _is_vulnerable(cve, vendor, product, version)
 	]
 
 
@@ -444,13 +493,83 @@ def _scan_native(ctx: common.Context) -> list[Finding]:
 	return findings
 
 
+# Worst first: `_severity` takes the first floor a score reaches
+SEVERITY_FLOORS = {'critical': 9.0, 'high': 7.0, 'medium': 4.0, 'low': 0.1}
+_LINE_RE = re.compile(r'executors/(v\d+\.\d+)\.x/')
+
+
 def _severity(score: float | None) -> str:
 	if score is None:
 		return '-'
-	for floor, name in ((9.0, 'critical'), (7.0, 'high'), (4.0, 'medium'), (0.1, 'low')):
+	for name, floor in SEVERITY_FLOORS.items():
 		if score >= floor:
 			return name
 	return 'none'
+
+
+MANAGER_SCOPE = 'manager'
+# Scope to the `(id, package)` pairs it ignores
+Ignores = dict[str, set[tuple[str, str]]]
+
+
+def _scope(f: Finding) -> str:
+	line = _LINE_RE.match(f.path)
+	return line.group(1) if line else MANAGER_SCOPE
+
+
+def load_ignores(config: dict) -> Ignores:
+	"""
+	`(id, package)` pairs of the `audit-ignores` of the manager and of each line.
+	"""
+
+	def pairs(entries: list[dict]) -> set[tuple[str, str]]:
+		out = {(e['id'], e['package']) for e in entries}
+		if len(out) != len(entries):
+			raise common.ToolError(f'duplicate `audit-ignores` entry among {entries}')
+		return out
+
+	return {
+		MANAGER_SCOPE: pairs(config.get('manager', {}).get('audit-ignores', [])),
+		**{
+			line: pairs(entry.get('audit-ignores', []))
+			for line, entry in config['executor-lines'].items()
+		},
+	}
+
+
+def _ignored_by(f: Finding, ignores: Ignores) -> set[tuple[str, str]]:
+	return {
+		(id, package)
+		for id, package in ignores.get(_scope(f), set())
+		if package == f.package and id in (f.id, *f.aliases)
+	}
+
+
+def blocking(findings: list[Finding], ignores: Ignores) -> list[Finding]:
+	"""
+	Findings, of any severity, that the `audit-ignores` of their scope do not list.
+	"""
+	return [f for f in findings if not _ignored_by(f, ignores)]
+
+
+def stale_ignores(
+	findings: list[Finding], ignores: Ignores
+) -> list[tuple[str, str, str]]:
+	"""
+	`(scope, id, package)` of each ignore that matches no finding.
+	"""
+	used = {(_scope(f), *pair) for f in findings for pair in _ignored_by(f, ignores)}
+	return sorted(
+		(scope, *pair)
+		for scope, pairs in ignores.items()
+		for pair in pairs
+		if (scope, *pair) not in used
+	)
+
+
+def _alert_message(f: Finding) -> str:
+	fixed = f' Fixed in {", ".join(f.fixed)}.' if f.fixed else ''
+	return f'{f.package}@{f.version} is affected by {f.id}.{fixed}'
 
 
 def _by_severity(findings: list[Finding]) -> list[Finding]:
@@ -522,12 +641,11 @@ def _sarif(findings: list[Finding]) -> dict:
 				},
 			},
 		)
-		fixed = f' Fixed in {", ".join(f.fixed)}.' if f.fixed else ''
 		results.append(
 			{
 				'ruleId': f.id,
 				'level': 'note' if f.score is None else 'warning' if f.score < 7.0 else 'error',
-				'message': {'text': f'{f.package}@{f.version} is affected by {f.id}.{fixed}'},
+				'message': {'text': _alert_message(f)},
 				'locations': [
 					{
 						'physicalLocation': {
@@ -565,13 +683,16 @@ def _sarif(findings: list[Finding]) -> dict:
 
 def not_yet_reported(earlier: list[Finding], later: list[Finding]) -> list[Finding]:
 	"""
-	`later` without the advisories `earlier` already reports, under any of their ids.
+	`later` without the advisories `earlier` already reports in the same scope, under any of their ids.
 	"""
-	seen = {id for f in earlier for id in (f.id, *f.aliases)}
-	return [f for f in later if not seen & {f.id, *f.aliases}]
+	seen = {(_scope(f), id) for f in earlier for id in (f.id, *f.aliases)}
+	return [f for f in later if not seen & {(_scope(f), id) for id in (f.id, *f.aliases)}]
 
 
 def main(ctx: common.Context, args) -> int:
+	# A skipped pass would make every ignore of its findings look stale
+	if args.gate and (args.no_lockfiles or args.no_vendored or args.no_native):
+		raise common.ToolError('--gate runs every pass; drop the --no-* flags')
 	tracked = _tracked(ctx.root)
 	findings: list[Finding] = []
 	if not args.no_lockfiles:
@@ -586,7 +707,17 @@ def main(ctx: common.Context, args) -> int:
 		_write(Path(args.markdown), _markdown(findings))
 	if args.sarif:
 		_write(Path(args.sarif), json.dumps(_sarif(findings), indent=1) + '\n')
-	return 0
+	if not args.gate:
+		return 0
+	ignores = load_ignores(common.monorepo_config(ctx.root))
+	blocked = blocking(findings, ignores)
+	for f in _by_severity(blocked):
+		print(f'blocking: {f.path}:{f.line}: {f.package}@{f.version} {f.id} {f.url}')
+	stale = stale_ignores(findings, ignores)
+	for scope, id, package in stale:
+		print(f'blocking: stale ignore: {scope}: {id} {package} matches no finding')
+	print(f'{len(blocked)} finding(s) and {len(stale)} stale ignore(s) block')
+	return 1 if blocked or stale else 0
 
 
 def _write(path: Path, text: str) -> None:
