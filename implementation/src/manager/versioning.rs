@@ -291,45 +291,63 @@ pub async fn detect_major_spec(
         .arg("parse-version-pattern")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
         .spawn()
         .with_context(|| format!("running genvm command {:?}", genvm_path))?;
 
-    let stdin = proc.stdin.take();
-    let stdout = proc.stdout.take();
+    let mut stdin = proc.stdin.take().with_context(|| "failed_to_open_stdin")?;
+    let mut stdout = proc
+        .stdout
+        .take()
+        .with_context(|| "failed_to_open_stdout")?;
+    let mut stderr = proc
+        .stderr
+        .take()
+        .with_context(|| "failed_to_open_stderr")?;
 
-    let task = async move {
-        let mut stdin = stdin.with_context(|| "failed_to_open_stdin")?;
-        stdin
-            .write_all(data)
-            .await
-            .with_context(|| "failed_to_write_to_stdin")?;
-        stdin.flush().await?;
-        std::mem::drop(stdin);
-        let mut res_str = String::new();
-        stdout
-            .with_context(|| "failed_to_open_stdout")?
-            .read_to_string(&mut res_str)
-            .await?;
-
-        log_debug!(version_string = res_str; "read version pattern");
-
-        let res = res_str.trim();
-        let res = res.strip_prefix("v").unwrap_or(res);
-        let res = &res[..res.find('.').unwrap_or(res.len())];
-
-        let res = res.parse::<u32>().unwrap_or(possible_major);
-
-        log_debug!(version_string = res_str, version = res; "version pattern parsed");
-
-        Ok(res)
+    let write = async move {
+        // a helper that rejects the contract early may close stdin first
+        let _ = stdin.write_all(data).await;
+        let _ = stdin.flush().await;
     };
+    let mut out_str = String::new();
+    let mut err_str = String::new();
+    let (_, out, err) = tokio::join!(
+        write,
+        stdout.read_to_string(&mut out_str),
+        stderr.read_to_string(&mut err_str),
+    );
+    out.with_context(|| "failed_to_read_stdout")?;
+    err.with_context(|| "failed_to_read_stderr")?;
+    let status = proc.wait().await.with_context(|| "waiting for genvm")?;
 
-    let detected_version = task.await;
+    if !status.success() {
+        // the newest line rejects such a contract itself when it runs
+        log_warn!(@operator, status = status.to_string(), stderr = err_str.trim(); "parse-version-pattern failed, using the newest major");
+        return Ok(possible_major);
+    }
 
-    let _ = proc.wait().await;
+    let major = declared_major(&out_str, possible_major);
+    log_debug!(version_string = out_str, major = major; "version pattern parsed");
+    Ok(major)
+}
 
-    detected_version.map(|v| v.min(possible_major))
+/// The major a `parse-version-pattern` output names
+///
+/// It is returned even when no line provides it: running such a contract
+/// answers `invalid_contract major_mismatch`, which a clamp would hide. A
+/// wildcard or unparseable major means `newest`, whose line validates the
+/// version itself
+fn declared_major(version_string: &str, newest: u32) -> u32 {
+    let version = version_string.trim();
+    let version = version.strip_prefix('v').unwrap_or(version);
+    let major = version.split('.').next().unwrap_or_default();
+
+    if !major.is_empty() && major.bytes().all(|b| b.is_ascii_digit()) {
+        // the root slot stores a byte; any too-large value is still a mismatch
+        return major.parse::<u8>().map_or(u8::MAX.into(), u32::from);
+    }
+    newest
 }
 
 #[cfg(test)]

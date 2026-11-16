@@ -319,3 +319,23 @@ async fn startup_without_a_default_network_still_checks_the_manifest() {
         "{err}"
     );
 }
+
+#[test]
+fn a_declared_major_is_returned_even_past_the_newest() {
+    assert_eq!(declared_major("v0.3.1", 0), 0);
+    assert_eq!(declared_major("v5.0.0\n", 0), 5);
+    assert_eq!(declared_major("7", 0), 7);
+}
+
+#[test]
+fn a_major_beyond_a_byte_saturates() {
+    assert_eq!(declared_major("v300.0.0", 0), 255);
+    assert_eq!(declared_major("v99999999999999999999.0.0", 0), 255);
+}
+
+#[test]
+fn a_wildcard_or_unparseable_major_means_the_newest() {
+    for version in ["v*.*.*", "vfoo", "", "v", "v-1.0.0", "v+1.0.0", "v.1"] {
+        assert_eq!(declared_major(version, 3), 3, "{version:?}");
+    }
+}

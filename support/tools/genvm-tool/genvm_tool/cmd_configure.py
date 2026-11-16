@@ -524,7 +524,6 @@ def main(ctx: common.Context, args) -> int:
 		[source_dir / v.exec_rel / 'manifest.json' for v in versions]
 		+ [
 			source_dir / MONOREPO_ROOT_FILE,
-			source_dir / 'support' / 'manifest-base.yaml',
 			source_dir / chainforks.REL,
 			tool_src / 'genvm_tool' / 'manifest.py',
 			tool_src / 'genvm_tool' / 'chainforks.py',

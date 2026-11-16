@@ -16,8 +16,6 @@ MICRO_YAML = (
 
 RUNNER_FORKS = ['genvm/executor/v0.2', 'genvm/executor/v0.3']
 
-BASE = 'runners_download_urls:\n  - "https://example.invalid/{name}/{hash}.{ext}"\n'
-
 SCHEDULE = {
 	'forks': {'genvm/executor/v0.3': {}, 'genvm/executor/v0.2': {}},
 	'networks': {
@@ -46,9 +44,6 @@ def root(tmp_path):
 			}
 		)
 	)
-	base = tmp_path / manifest.BASE_REL
-	base.parent.mkdir(parents=True)
-	base.write_text(BASE)
 	schedule = tmp_path / chainforks.REL
 	schedule.parent.mkdir(parents=True)
 	schedule.write_text(json.dumps(SCHEDULE))
@@ -85,7 +80,6 @@ def test_the_written_file_reads_back_through_post_install(root, tmp_path):
 
 	assert doc['executor_versions']['v0.3.0']['fork'] == 'genvm/executor/v0.3'
 	assert doc['executor_versions']['v0.2.0']['fork'] == 'genvm/executor/v0.2'
-	assert doc['runners_download_urls'] == ['https://example.invalid/{name}/{hash}.{ext}']
 	assert doc['runner_forks'] == RUNNER_FORKS
 
 

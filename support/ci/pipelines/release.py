@@ -156,7 +156,7 @@ def _cell_amd64_linux() -> dict:
 	return _test_cell(
 		'amd64-linux',
 		[
-			step_run([POST_INSTALL, '--default-download=false', '--precompile=true']),
+			step_run([POST_INSTALL, '--precompile=true']),
 			{'type': 'group-start', 'name': 'smoke test modules startup'},
 			_smoke_step('timeout'),
 			{'type': 'group-end'},
@@ -172,12 +172,11 @@ def _cell_arm64_linux() -> dict:
 	return _test_cell(
 		'arm64-linux',
 		[
-			# aarch64 binaries on an amd64 host: post-install's bin-check and
-			# precompile steps exec them and die with Exec format error, and
-			# without the runners artifact the registry is absent too. Neither is
-			# a real failure here — the qemu smoke below is what proves the build.
+			# aarch64 binaries on an amd64 host: post-install refuses to patch,
+			# exec or precompile them, which is not a real failure here — the qemu
+			# smoke below is what proves the build.
 			step_run(
-				[POST_INSTALL, '--error-on-missing-executor=false', '--default-download=false'],
+				[POST_INSTALL, '--error-on-missing-executor=false'],
 				check=False,
 			),
 			step_nix_develop(
@@ -218,7 +217,7 @@ def _cell_arm64_macos() -> dict:
 		[
 			step_run(['brew', 'install', 'wabt', 'coreutils']),
 			step_run(['rustup', 'target', 'add', 'wasm32-wasip1']),
-			step_run([POST_INSTALL, '--default-download=false']),
+			step_run([POST_INSTALL]),
 			{'type': 'group-start', 'name': 'smoke test modules startup'},
 			# coreutils' gtimeout: macOS ships no timeout(1).
 			_smoke_step('gtimeout'),

@@ -3,16 +3,14 @@ Assemble the manager's runtime manifest (`data/manifest.yaml`).
 
 The manager reads this YAML at startup: `executor_versions` maps each active
 executor version to the chainfork gating it, `runner_forks` lists every fork a
-runner names, alongside the runner download-URL templates. It is generated at
-build time rather than checked in, so the version keys and forks always track
-the executor submodules.
+runner names. It is generated at build time rather than checked in, so the
+version keys and forks always track the executor submodules.
 
 Inputs, all under the monorepo root unless noted:
 
 	* `.genvm-monorepo-root`              -> `executor-lines` (the executor trains)
 	* `executors/v<ver>.x/manifest.json`  -> `executor-version`, `fork`
 	* `runners/forks.nix`, evaluated by the caller -> `runner_forks`
-	* `support/manifest-base.yaml`        -> static fields (runner download URLs)
 	* `install/data/genvm-chainforks.json` -> validated, and must define every fork
 
 Exposed as the `genvm-tool build-manifest` subcommand, which both the debug
@@ -23,12 +21,10 @@ import json
 from pathlib import Path
 
 from ruamel.yaml import YAML
+from ruamel.yaml.comments import CommentedMap
 from ruamel.yaml.scalarstring import DoubleQuotedScalarString
 
 from . import chainforks, common
-
-# Manager-root-relative; holds the build-independent fields (runner URLs).
-BASE_REL = Path('support') / 'manifest-base.yaml'
 
 
 def _executor_manifest(root: Path, bare_version: str) -> dict:
@@ -38,9 +34,7 @@ def _executor_manifest(root: Path, bare_version: str) -> dict:
 
 def build(root: Path, runner_forks: list[str]):
 	"""
-	Return the manifest document: `executor_versions` and `runner_forks`
-	followed by the static base fields. Keeps ruamel's round-trip type so
-	comments/quoting in the base file survive the dump."""
+	Return the manifest document: `executor_versions` and `runner_forks`."""
 	schedule = chainforks.load(root)
 	runner_forks = sorted(set(runner_forks))
 	for fork in runner_forks:
@@ -58,11 +52,9 @@ def build(root: Path, runner_forks: list[str]):
 			'fork': DoubleQuotedScalarString(fork),
 		}
 
-	doc = YAML(typ='rt').load((root / BASE_REL).read_text())
-	doc.insert(0, 'executor_versions', executor_versions)
-	doc.insert(
-		1, 'runner_forks', [DoubleQuotedScalarString(fork) for fork in runner_forks]
-	)
+	doc = CommentedMap()
+	doc['executor_versions'] = executor_versions
+	doc['runner_forks'] = [DoubleQuotedScalarString(fork) for fork in runner_forks]
 	return doc
 
 

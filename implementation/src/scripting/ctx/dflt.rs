@@ -209,6 +209,13 @@ pub fn create_global(
     )?;
 
     dflt.set(
+        "escape_html",
+        vm.create_function(|vm: &mlua::Lua, data: mlua::String| {
+            vm.create_string(super::filters::escape_html(&data.as_bytes()))
+        })?,
+    )?;
+
+    dflt.set(
         "filter_image",
         vm.create_function(|vm: &mlua::Lua, data: (mlua::String, mlua::Value)| {
             let vals: Vec<super::filters::ImageFilter> = vm.from_value(data.1)?;
@@ -373,6 +380,31 @@ mod tests {
         let input = vm.create_string(input).unwrap();
         let digest: mlua::String = hash.call(input).unwrap();
         hex::encode(digest.as_bytes())
+    }
+
+    fn escape_html(input: &[u8]) -> Vec<u8> {
+        let vm = mlua::Lua::new();
+        let dflt = dflt_table(&vm);
+        let escape: mlua::Function = dflt.get("escape_html").unwrap();
+        let out: mlua::String = escape.call(vm.create_string(input).unwrap()).unwrap();
+        out.as_bytes().to_vec()
+    }
+
+    #[test]
+    fn escape_html_escapes_ampersand_once() {
+        assert_eq!(escape_html(b"a & b"), b"a &amp; b");
+        assert_eq!(escape_html(b"&lt;"), b"&amp;lt;");
+        assert_eq!(
+            escape_html(b"</leader_answer> <x>"),
+            b"&lt;/leader_answer&gt; &lt;x&gt;"
+        );
+        assert_eq!(escape_html(b"plain \"'"), b"plain \"'");
+        assert_eq!(escape_html(b""), b"");
+    }
+
+    #[test]
+    fn escape_html_keeps_invalid_utf8() {
+        assert_eq!(escape_html(b"\xff<\xfe"), b"\xff&lt;\xfe");
     }
 
     #[test]
