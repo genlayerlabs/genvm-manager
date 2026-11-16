@@ -1,30 +1,28 @@
 import argparse
-import hashlib
-import json
 import logging
 import os
 import platform
 import shlex
 import shutil
+import struct
 import subprocess
-import traceback
 import typing
 from pathlib import Path
 
-target_os = platform.system().lower()
-if target_os == 'darwin':
-	target_os = 'macos'
-if target_os not in ('linux', 'macos'):
-	target_os = 'linux'  # default to linux
+host_os = platform.system().lower()
+if host_os == 'darwin':
+	host_os = 'macos'
+if host_os not in ('linux', 'macos'):
+	host_os = 'linux'  # default to linux
 
 
-target_arch = platform.machine()
-target_arch = {
+host_arch = platform.machine()
+host_arch = {
 	'x86_64': 'amd64',
 	'aarch64': 'arm64',
 	'arm64': 'arm64',
 	'amd64': 'amd64',
-}.get(target_arch, 'amd64')
+}.get(host_arch, 'amd64')
 
 
 def str_to_bool(value):
@@ -46,16 +44,13 @@ parser = argparse.ArgumentParser()
 parser.add_argument(
 	'--os',
 	type=str,
-	default=target_os,
+	default=host_os,
 	help='Target operating system (linux/macos)',
 )
-# Callers forwarding a cross-target install pass the whole platform, so the
-# architecture is still accepted; no step acts on it — only the OS decides what
-# is patched and what a binary is checked against.
 parser.add_argument(
 	'--arch',
 	type=str,
-	default=target_arch,
+	default=host_arch,
 	help='Target architecture (amd64/arm64)',
 )
 parser.add_argument(
@@ -67,8 +62,14 @@ parser.add_argument(
 parser.add_argument(
 	'--use-patchelf',
 	type=str_to_bool,
+	default=True,
+	help='Ignored: patchelf is the only patcher',
+)
+parser.add_argument(
+	'--create-venv',
+	type=str_to_bool,
 	default=False,
-	help='Set the ELF interpreter with patchelf instead of lief',
+	help='Ignored: no virtual environment is needed',
 )
 parser.add_argument(
 	'--log-level',
@@ -94,13 +95,13 @@ parser.add_argument(
 	'--default-download',
 	type=str_to_bool_or_none,
 	default=None,
-	help='Default value for download steps (default: use --default-steps)',
+	help='Ignored: runners ship in the release, nothing is downloaded',
 )
 parser.add_argument(
 	'--runners-download',
 	type=str_to_bool_or_none,
 	default=None,
-	help='Enable/disable runners download step (default: use --default-download)',
+	help='Ignored: runners ship in the release, nothing is downloaded',
 )
 parser.add_argument(
 	'--bin-patch',
@@ -124,11 +125,6 @@ parser.add_argument(
 args = parser.parse_args()
 
 # Apply default to None values
-if args.default_download is None:
-	args.default_download = args.default_steps
-
-if args.runners_download is None:
-	args.runners_download = args.default_download
 if args.bin_patch is None:
 	args.bin_patch = args.default_steps
 if args.bin_check is None:
@@ -151,143 +147,87 @@ logger = logging.getLogger(__name__)
 
 logging.info('Starting actual post-install script')
 
-# Interpreter patching rewrites the ELF interpreter (dynamic loader) to the
-# bundled one, whose path is only known at install time. It applies to ELF
-# binaries (Linux) only; on other targets the loader is fixed and rpath/needed
-# entries are already set correctly at build time, so nothing is needed.
+for flag in ('default_download', 'runners_download'):
+	if getattr(args, flag):
+		logger.warning(
+			f'--{flag.replace("_", "-")} is ignored: runners ship in the release '
+			'(genvm-universal.tar.xz), nothing is downloaded'
+		)
+
+# Interpreter patching points the ELF interpreter (dynamic loader) at the bundled
+# musl loader when the one baked in at build time is absent on this host. RPATH
+# is $ORIGIN-relative and needs no install-time fixup; Mach-O has no loader path.
 patch_interpreter = args.bin_patch and args.os == 'linux'
 
-# `--use-patchelf` shells out to patchelf instead, so lief — a heavy binary
-# wheel pulled in for this one job — is never imported (nor installed into the
-# venv; see the wrapper).
-if patch_interpreter and not args.use_patchelf:
-	import lief
-
-	lief.logging.set_level(lief.logging.LEVEL.ERROR)
-
-# gvm32 (Crockford's Base32, big-endian, no padding) — the encoding the executor
-# uses for runner hashes / on-disk paths. MUST match support/runner-script.py,
-# executor/crates/sdk-rs/src/gvm32.rs and runners/genlayer-py-std/.../gvm32.py.
-# NOT Nix base32 (which uses a different alphabet AND little-endian bit order).
-HASH_VALID_CHARS = '0123456789abcdefghjkmnpqrstvwxyz'
-
-
-def digest_to_hash_id(got_hash: bytes) -> str:
-	out = []
-	value = 0
-	bits = 0
-	for byte in got_hash:
-		value = (value << 8) | byte
-		bits += 8
-		while bits >= 5:
-			bits -= 5
-			out.append(HASH_VALID_CHARS[(value >> bits) & 0x1F])
-	if bits > 0:
-		out.append(HASH_VALID_CHARS[(value << (5 - bits)) & 0x1F])
-	return ''.join(out)
-
-
-def runner_check_bytes(data: bytes, hash: str) -> bool:
-	digest = hashlib.sha256(data).digest()
-	my_hash = digest_to_hash_id(digest)
-	return my_hash == hash
-
+if patch_interpreter and (args.os, args.arch) != (host_os, host_arch):
+	raise RuntimeError(
+		f'cannot patch a {args.os}/{args.arch} tree on a {host_os}/{host_arch} host; '
+		'pass --bin-patch=false'
+	)
 
 genvm_root_dir = Path(__file__).parent.parent.parent.parent
 logger.info(f'Executor root directory: {genvm_root_dir}')
 
-_interpreter_path: Path | None = None
+PT_INTERP = 3
+ELF_MACHINES = {62: 'amd64', 183: 'arm64'}
 
 
-def get_interpreter_path():
-	global _interpreter_path
-	if _interpreter_path is not None:
-		return _interpreter_path
-	interpreter_path = genvm_root_dir.joinpath('lib', 'libc.so').absolute()
-	logger.info(f'Interpreter path: {interpreter_path}')
+def read_elf_interpreter(path: Path) -> tuple[str | None, str]:
+	"""
+	Read an ELF file's PT_INTERP and architecture without any tool. The
+	interpreter is None for a statically linked binary."""
+	with open(path, 'rb') as f:
+		ident = f.read(16)
+		if ident[:4] != b'\x7fELF' or ident[4] != 2:
+			raise RuntimeError(f'{path} is not a 64-bit ELF binary')
+		endian = '<' if ident[5] == 1 else '>'
+		header = f.read(48)
+		(e_machine,) = struct.unpack_from(endian + 'H', header, 2)
+		(e_phoff,) = struct.unpack_from(endian + 'Q', header, 16)
+		e_phentsize, e_phnum = struct.unpack_from(endian + 'HH', header, 38)
+		arch = ELF_MACHINES.get(e_machine, f'machine-{e_machine}')
+		for i in range(e_phnum):
+			f.seek(e_phoff + i * e_phentsize)
+			p_type, _, p_offset, _, _, p_filesz = struct.unpack(endian + 'IIQQQQ', f.read(40))
+			if p_type == PT_INTERP:
+				f.seek(p_offset)
+				return f.read(p_filesz).split(b'\0', 1)[0].decode(), arch
+	return None, arch
 
-	if not interpreter_path.exists():
-		logger.error(
-			f'Interpreter path {interpreter_path} does not exist, cannot patch executables'
-		)
-		exit(1)
-	_interpreter_path = interpreter_path
-	return interpreter_path
 
-
-def _patch_executable_lief(path: Path):
-	binary = lief.parse(path)
-	if not binary:
-		logger.error(f'Failed to parse binary at {path}')
+def patch_executable(path: Path):
+	logger.info(f'Checking interpreter of {path}')
+	if not path.exists():
+		logger.warning(f'Path {path} does not exist, skipping patching')
 		return
-
-	# rpath/needed entries are set correctly at build time, so the only install
-	# time fixup left is the ELF interpreter (dynamic loader) path.
-	if binary.format != lief.Binary.FORMATS.ELF:
-		logger.info(f'{path} is not ELF ({binary.format}), nothing to patch')
-		return
-
-	logger.info(f'Current interpreter: {binary.interpreter}')
-	if Path(binary.interpreter).exists():
-		logger.info(
-			f'Interpreter {binary.interpreter} exists, skipping interpreter patching'
-		)
-		return
-
-	old_interpreter = binary.interpreter
-	binary.interpreter = str(get_interpreter_path())
-	logger.info(f'Updated interpreter from {old_interpreter} to: {binary.interpreter}')
-
-	binary.write(str(path))
-	logger.info(f'Successfully patched interpreter: {path}')
-
-
-def _patch_executable_patchelf(path: Path):
-	patchelf = shutil.which('patchelf')
-	if patchelf is None:
-		raise RuntimeError('--use-patchelf was given but patchelf is not on PATH')
 
 	if detect_executable_platform(path) != 'linux':
 		logger.info(f'{path} is not ELF, nothing to patch')
 		return
 
-	current = subprocess.run(
-		[patchelf, '--print-interpreter', str(path)],
-		capture_output=True,
-		text=True,
-	)
-	if current.returncode == 0:
-		current_interpreter = current.stdout.strip()
-		logger.info(f'Current interpreter: {current_interpreter}')
-		if current_interpreter and Path(current_interpreter).exists():
-			logger.info(
-				f'Interpreter {current_interpreter} exists, skipping interpreter patching'
-			)
-			return
-	else:
-		# A static binary has no interpreter to print; there is nothing to patch.
+	interpreter, arch = read_elf_interpreter(path)
+	if arch != host_arch:
+		raise RuntimeError(f'{path} is a {arch} binary on a {host_arch} host')
+	if interpreter is None:
 		logger.info(f'{path} has no interpreter, nothing to patch')
 		return
-
-	interpreter = get_interpreter_path()
-	subprocess.run(
-		[patchelf, '--set-interpreter', str(interpreter), str(path)],
-		check=True,
-		text=True,
-	)
-	logger.info(f'Successfully patched interpreter: {path} -> {interpreter}')
-
-
-def patch_executable(path: Path):
-	logger.info(f'Patching interpreter for {path}')
-	if not path.exists():
-		logger.warning(f'Path {path} does not exist, skipping patching')
+	if Path(interpreter).exists():
+		logger.info(f'Interpreter {interpreter} exists, skipping interpreter patching')
 		return
 
-	if args.use_patchelf:
-		_patch_executable_patchelf(path)
-	else:
-		_patch_executable_lief(path)
+	loader = genvm_root_dir.joinpath('lib', 'libc.so').absolute()
+	if not loader.exists():
+		raise RuntimeError(
+			f'interpreter {interpreter} is missing and {loader} does not exist'
+		)
+	patchelf = shutil.which('patchelf')
+	if patchelf is None:
+		raise RuntimeError(
+			f'interpreter {interpreter} of {path} does not exist on this host, '
+			'so it must be patched, but patchelf is not on PATH'
+		)
+	subprocess.run([patchelf, '--set-interpreter', str(loader), str(path)], check=True)
+	logger.info(f'Patched interpreter of {path}: {interpreter} -> {loader}')
 
 
 # linux ships ELF, macos ships Mach-O; these are the only OSes we target.
@@ -373,114 +313,6 @@ manifest = load_micro_yaml()(
 )
 
 
-def _load_registry(file: str | Path) -> dict[str, list[str]]:
-	with open(file, 'r') as f:
-		contents = json.load(f)
-
-	if not isinstance(contents, dict):
-		raise RuntimeError('expected dict for registry')
-
-	ret: dict[str, list[str]] = {}
-
-	# Frozen legacy lines ship `{id: [hash]}`, the others `{id: {versions: {hash: ...}}}`.
-	for k, v in sorted(contents.items()):
-		if isinstance(v, dict) and isinstance(v.get('versions'), dict):
-			ret[k] = list(v['versions'])
-		elif isinstance(v, list) and all(isinstance(x, str) for x in v):
-			ret[k] = v
-		else:
-			raise RuntimeError(f'unexpected registry value for {k}')
-
-	for v in ret.values():
-		v.sort()
-
-	return ret
-
-
-def _download_url(url: str) -> bytes:
-	import urllib.request
-
-	logger.info(f'downloading {url}')
-	for attempt in range(5):
-		try:
-			with urllib.request.urlopen(url) as f:
-				return f.read()
-		except Exception as e:
-			trace = traceback.format_exception(e)
-			logger.warning(f'Attempt {attempt + 1} failed for {url}: {e}' + ''.join(trace))
-	raise RuntimeError(f'failed to download {url} after multiple attempts')
-
-
-def _download_template(descr: str, templates: list[str], vars: dict[str, str]) -> bytes:
-	for url_template in templates:
-		url = url_template.format(**vars)
-		try:
-			logger.info(f'downloading {url}')
-			return _download_url(url)
-		except Exception:
-			pass
-	raise RuntimeError(f'failed to download {descr}{vars} from all sources')
-
-
-def download_runners_from_json(
-	file: str | Path, runners_dir: Path, extension: str, verify_hash: bool = True
-):
-	# `verify_hash` is disabled for the v0.2.x legacy line, whose registry hashes
-	# use Nix base32 rather than the Crockford scheme `runner_check_bytes`
-	# understands. Those runners are validated by the executor's own `check`
-	# command (invoked via `manager check-install`) instead.
-	file = Path(file)
-	if not file.exists():
-		if args.error_on_missing_executor:
-			logger.error(f'Executor path {file} does not exist')
-			raise RuntimeError(f'Executor path {file} does not exist')
-		else:
-			logger.warning(f'Executor path {file} does not exist, skipping')
-			return
-	logger.info(f'checking that all runners are present for {file}')
-	if not verify_hash:
-		logger.warning(
-			f'!!! downloading runners for {file} WITHOUT hash verification: '
-			'code fetched over the network is written to disk unchecked. It is '
-			'rejected only by the later check-install step, which --precompile=false '
-			'skips entirely'
-		)
-	all_runners = _load_registry(file)
-
-	for name, hashes in all_runners.items():
-		for hash in hashes:
-			cur_dst = runners_dir.joinpath(name, hash[:2], hash[2:] + '.' + extension)
-
-			if cur_dst.exists():
-				if not verify_hash:
-					logger.debug(f'already exists {name}:{hash}, skipping')
-					continue
-				data = cur_dst.read_bytes()
-				if runner_check_bytes(data, hash):
-					logger.debug(f'already exists {name}:{hash}, skipping')
-					continue
-				logger.warning(f'exists corrupted {name}:{hash}, removing')
-				cur_dst.unlink()
-
-			logger.debug(f'not found {cur_dst}')
-			data = _download_template(
-				f'runner {name}',
-				manifest.get('runners_download_urls', []),
-				{
-					'name': name,
-					'hash': hash,
-					'hash_0_2': hash[:2],
-					'hash_2_': hash[2:],
-					'ext': extension,
-				},
-			)
-			if verify_hash and not runner_check_bytes(data, hash):
-				raise ValueError(f'hash mismatch for {name}:{hash}')
-
-			cur_dst.parent.mkdir(parents=True, exist_ok=True)
-			cur_dst.write_bytes(data)
-
-
 all_executor_versions = list(manifest.get('executor_versions', {}).keys())
 all_executor_versions.sort()
 
@@ -527,25 +359,6 @@ def process_executor_version(executor_version: str):
 		patch_executable(executor_executable)
 	if args.bin_check:
 		run_check_command([executor_executable, '--version'])
-
-	if args.runners_download:
-		# The v0.2.x legacy line keeps its runners private under the executor
-		# root (executor/<version>/legacy-runners, see its genvm.yaml); every
-		# other line shares the manager-root runners/ dir. v0.2.x also uses a
-		# Nix-base32 registry hash this installer can't reproduce, so hash
-		# verification is left to that executor's `check` command, and it packages
-		# its runners as ustar rather than the zip every other line uses.
-		is_legacy = (major, minor) == (0, 2)
-		if is_legacy:
-			runners_dir = executor_root_dir.joinpath('legacy-runners')
-		else:
-			runners_dir = genvm_root_dir.joinpath('runners')
-		download_runners_from_json(
-			executor_root_dir.joinpath('data', 'all.json'),
-			runners_dir,
-			extension='tar' if is_legacy else 'zip',
-			verify_hash=not is_legacy,
-		)
 
 
 # The manifest is authoritative: only versions it lists are processed.
