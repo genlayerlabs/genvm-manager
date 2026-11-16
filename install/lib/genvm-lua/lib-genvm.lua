@@ -22,7 +22,8 @@ local value2json = require("value2json")
 ---@field as_user_error fun(val: any): nil | ModuleError
 ---@field url_encode fun(url: string): string
 ---@field filter_text fun(text: string, filters: string[]): string
----@field filter_image fun(image: string, filters: any[]): string
+---@field escape_html fun(text: string): string
+---@field filter_imagefun(image: string, filters: any[]): string
 ---@field random_bytes fun(length: integer): string
 ---@field sha2_256 fun(data: string): string
 ---@field sha3_256 fun(data: string): string

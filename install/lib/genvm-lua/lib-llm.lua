@@ -278,8 +278,14 @@ M.exec_prompt_template_transform = function(args)
 	-- a function is not rescanned, so a value that itself contains `#{key}`
 	-- (a leader answer, for instance) is inserted literally instead of being
 	-- expanded by a later substitution. Unknown placeholders stay as they are.
+	-- Values are HTML-escaped so they cannot close the tags the template wraps them in.
 	local as_user_text = string.gsub(my_template.user, "#{([%w_]+)}", function(key)
-		return vars[key]
+		local value = vars[key]
+		local kind = type(value)
+		if kind == "string" or kind == "number" or kind == "boolean" then
+			return lib.rs.escape_html(tostring(value))
+		end
+		return nil
 	end)
 
 	local format = my_data.format
