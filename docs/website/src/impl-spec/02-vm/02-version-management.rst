@@ -36,6 +36,11 @@ The request body is the raw contract bytecode; the response is::
 
    { "specified_major": <u8> }
 
+The declared major is returned as is, even when no executor line provides it: running
+the contract then answers ``invalid_contract major_mismatch``. A major past ``255``
+saturates to ``255``. A wildcard, an unparseable major or a failed detection yields the
+newest available major, whose line rejects a malformed version when it runs.
+
 The node MUST store the returned value in the contract's :ref:`genvm-def-root-slot` at
 offset :ref:`gvm-def-consts-value-root-offsets-major`. See
 :doc:`/spec/04-contract-interface/03-storage` for the root-slot layout.
