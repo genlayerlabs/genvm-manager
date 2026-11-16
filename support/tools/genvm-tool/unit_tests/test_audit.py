@@ -454,80 +454,172 @@ def _at(
 	)
 
 
-STATUSES = {
-	'v0.2': 'replay-only',
-	'v0.3': 'maintained',
-	'v0.4': 'current',
-	'v0.5': 'preview',
-}
+LINE_V04 = 'executors/v0.4.x/executor/Cargo.lock'
 
 
+def _ignores(**scopes: list[tuple[str, str]]) -> dict[str, set[tuple[str, str]]]:
+	return {scope.replace('_', '.'): set(entries) for scope, entries in scopes.items()}
+
+
+@pytest.mark.parametrize('score', [None, 0.5, 9.9])
 @pytest.mark.parametrize(
 	'path',
 	[
-		'executors/v0.3.x/executor/Cargo.lock',
-		'executors/v0.4.x/executor/Cargo.lock',
-		'executors/v0.5.x/executor/Cargo.lock',
+		'executors/v0.2.x/executor/Cargo.lock',
+		LINE_V04,
 		'implementation/Cargo.lock',
 		'libs/deps/dependency-urls.json',
-		# A line missing from `executor-lines` is not exempt
+		# A line missing from `executor-lines` has no ignores
 		'executors/v0.9.x/executor/Cargo.lock',
-		# Nor one with a misspelled status
-		'executors/v0.6.x/executor/Cargo.lock',
 	],
 )
-def test_gate_blocks_a_critical_finding_outside_replay_only_lines(path):
-	finding = _at(path, 9.0)
-	statuses = {**STATUSES, 'v0.6': 'replay_only'}
-	assert cmd_audit.blocking([finding], statuses, set(), 9.0) == [finding]
+def test_gate_blocks_any_finding_its_scope_does_not_ignore(path, score):
+	finding = _at(path, score)
+	assert cmd_audit.blocking([finding], {}) == [finding]
 
 
 @pytest.mark.parametrize(
-	('finding', 'waivers'),
+	('finding', 'ignores'),
 	[
-		(_at('executors/v0.2.x/executor/Cargo.lock', 10.0), set()),
-		(_at('executors/v0.4.x/executor/Cargo.lock', 8.9), set()),
-		(_at('executors/v0.4.x/executor/Cargo.lock', None), set()),
+		(_at('implementation/Cargo.lock', 9.9), _ignores(manager=[('GHSA-1', 'zip')])),
 		(
-			_at('executors/v0.4.x/executor/Cargo.lock', 9.5),
-			{('GHSA-1', 'executors/v0.4.x/executor/Cargo.lock', 'zip')},
+			_at('libs/deps/dependency-urls.json', None),
+			_ignores(manager=[('GHSA-1', 'zip')]),
+		),
+		(
+			_at('executors/v0.2.x/executor/Cargo.lock', 9.9),
+			_ignores(v0_2=[('GHSA-1', 'zip')]),
+		),
+		(
+			dataclasses.replace(_at(LINE_V04, 9.9), aliases=('CVE-1',)),
+			_ignores(v0_4=[('CVE-1', 'zip')]),
 		),
 	],
 )
-def test_gate_passes_replay_only_lower_unscored_and_waived(finding, waivers):
-	assert cmd_audit.blocking([finding], STATUSES, waivers, 9.0) == []
+def test_gate_passes_a_finding_its_scope_ignores_under_any_alias(finding, ignores):
+	assert cmd_audit.blocking([finding], ignores) == []
 
 
 @pytest.mark.parametrize(
-	'waiver',
+	'ignores',
 	[
-		('GHSA-1', 'executors/v0.3.x/executor/Cargo.lock', 'zip'),
-		('GHSA-2', 'executors/v0.4.x/executor/Cargo.lock', 'zip'),
-		('GHSA-1', 'executors/v0.4.x/executor/Cargo.lock', 'zip2'),
+		_ignores(manager=[('GHSA-1', 'zip')]),
+		_ignores(v0_3=[('GHSA-1', 'zip')]),
+		_ignores(v0_4=[('GHSA-2', 'zip')]),
+		_ignores(v0_4=[('GHSA-1', 'zip2')]),
 	],
 )
-def test_a_waiver_covers_only_its_own_advisory_file_and_package(waiver):
-	finding = _at('executors/v0.4.x/executor/Cargo.lock', 9.5)
-	assert cmd_audit.blocking([finding], STATUSES, {waiver}, 9.0) == [finding]
+def test_an_ignore_covers_only_its_own_scope_advisory_and_package(ignores):
+	finding = _at(LINE_V04, 9.9)
+	assert cmd_audit.blocking([finding], ignores) == [finding]
 
 
-@pytest.mark.parametrize('package', ['zip', '@scope/zip'])
-def test_waivers_load_the_package_from_the_alert_message(tmp_path, package):
-	finding = _at('a/Cargo.lock', 9.5, package=package)
-	(result,) = cmd_audit._sarif([finding])['runs'][0]['results']
-	path = tmp_path / 'waivers.json'
-	path.write_text(
-		json.dumps(
-			[{'id': 'GHSA-1', 'path': 'a/Cargo.lock', 'message': result['message']['text']}]
-		)
+def test_stale_ignores_are_those_matching_no_finding_in_their_scope():
+	findings = [
+		_at(LINE_V04, 9.9),
+		dataclasses.replace(
+			_at('implementation/Cargo.lock', 1.0, id='GHSA-9'), aliases=('CVE-1',)
+		),
+	]
+	ignores = _ignores(
+		manager=[('CVE-1', 'zip'), ('GHSA-1', 'zip')],
+		v0_4=[('GHSA-1', 'zip')],
+		v0_3=[('GHSA-1', 'zip')],
 	)
-	assert cmd_audit.load_waivers(path) == {('GHSA-1', 'a/Cargo.lock', package)}
+	assert cmd_audit.stale_ignores(findings, ignores) == [
+		('manager', 'GHSA-1', 'zip'),
+		('v0.3', 'GHSA-1', 'zip'),
+	]
 
 
-def test_waivers_reject_an_alert_message_without_a_package(tmp_path):
-	path = tmp_path / 'waivers.json'
-	path.write_text(
-		json.dumps([{'id': 'GHSA-1', 'path': 'a/Cargo.lock', 'message': 'odd'}])
+def test_ignores_load_from_the_root_and_each_line():
+	entry = {'id': 'GHSA-1', 'package': 'zip', 'reason': 'unreachable'}
+	config = {
+		'manager': {'audit-ignores': [entry]},
+		'executor-lines': {
+			'v0.2': {'status': 'replay-only', 'audit-ignores': [{**entry, 'id': 'GHSA-2'}]},
+			'v0.4': {'status': 'current'},
+		},
+	}
+	assert cmd_audit.load_ignores(config) == {
+		'manager': {('GHSA-1', 'zip')},
+		'v0.2': {('GHSA-2', 'zip')},
+		'v0.4': set(),
+	}
+
+
+def test_a_later_pass_repeats_an_advisory_another_scope_reported():
+	lockfile = _at(LINE_V04, 9.9)
+	vendored = [
+		_at('executors/v0.2.x/.git-third-party/manifest.json', 9.9, package='wasmtime'),
+		_at('executors/v0.4.x/.git-third-party/manifest.json', 9.9, package='wasmtime'),
+	]
+	assert cmd_audit.not_yet_reported([lockfile], vendored) == vendored[:1]
+
+
+def test_one_ignore_covers_an_advisory_in_every_lockfile_of_its_line():
+	findings = [
+		_at(LINE_V04, 9.9),
+		_at('executors/v0.4.x/executor/crates/common/Cargo.lock', 9.9),
+	]
+	ignores = _ignores(v0_4=[('GHSA-1', 'zip')])
+	assert cmd_audit.blocking(findings, ignores) == []
+	assert cmd_audit.stale_ignores(findings, ignores) == []
+
+
+def test_ignores_reject_a_duplicate_entry():
+	entry = {'id': 'GHSA-1', 'package': 'zip', 'reason': 'unreachable'}
+	config = {
+		'executor-lines': {'v0.4': {'status': 'current', 'audit-ignores': [entry, entry]}}
+	}
+	with pytest.raises(common.ToolError):
+		cmd_audit.load_ignores(config)
+
+
+def _gate(monkeypatch, tmp_path, findings, ignores, **flags):
+	monkeypatch.setattr(cmd_audit, '_tracked', lambda root: [])
+	monkeypatch.setattr(cmd_audit, '_scan_lockfiles', lambda ctx, tracked: findings)
+	monkeypatch.setattr(cmd_audit, '_scan_vendored', lambda ctx, tracked: [])
+	monkeypatch.setattr(cmd_audit, '_scan_native', lambda ctx: [])
+	monkeypatch.setattr(
+		common,
+		'monorepo_config',
+		lambda root: {
+			'executor-lines': {
+				'v0.4': {
+					'status': 'current',
+					'audit-ignores': [
+						{'id': id, 'package': package, 'reason': 'unreachable'}
+						for id, package in ignores
+					],
+				}
+			}
+		},
 	)
-	with pytest.raises(ValueError):
-		cmd_audit.load_waivers(path)
+	args = types.SimpleNamespace(
+		markdown=None,
+		sarif=None,
+		gate=True,
+		**{'no_lockfiles': False, 'no_vendored': False, 'no_native': False, **flags},
+	)
+	return cmd_audit.main(_ctx(tmp_path), args)
+
+
+@pytest.mark.parametrize(
+	('findings', 'ignores', 'code'),
+	[
+		([_at(LINE_V04, 9.9)], [('GHSA-1', 'zip')], 0),
+		([_at(LINE_V04, None)], [], 1),
+		([], [('GHSA-1', 'zip')], 1),
+	],
+)
+def test_gate_exits_1_on_a_finding_not_ignored_or_an_ignore_with_no_finding(
+	monkeypatch, tmp_path, findings, ignores, code
+):
+	assert _gate(monkeypatch, tmp_path, findings, ignores) == code
+
+
+@pytest.mark.parametrize('flag', ['no_lockfiles', 'no_vendored', 'no_native'])
+def test_gate_refuses_a_skipped_pass(monkeypatch, tmp_path, flag):
+	with pytest.raises(common.ToolError):
+		_gate(monkeypatch, tmp_path, [], [], **{flag: True})

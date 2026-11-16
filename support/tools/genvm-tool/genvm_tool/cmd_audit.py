@@ -18,9 +18,9 @@ None of the sources knows which features GenVM disables or what its patches
 change, so a finding is a candidate to rule on, not a proven exposure.
 
 `--markdown` writes a report; `--sarif` writes the findings for GitHub code
-scanning, which is where the nightly run publishes them. Exits 0 whether or not
-anything is found; a scanner failure, or a pass with nothing to scan, exits
-non-zero.
+scanning, which is where the nightly run publishes them. Without `--gate`, exits
+0 whether or not anything is found; a scanner failure, or a pass with nothing to
+scan, exits non-zero.
 """
 
 import dataclasses
@@ -92,13 +92,8 @@ def configure(parser):
 	)
 	parser.add_argument(
 		'--gate',
-		choices=['critical', 'high', 'medium', 'low'],
-		help='exit 1 on a finding of this severity or worse, except in replay-only lines',
-	)
-	parser.add_argument(
-		'--waivers',
-		metavar='FILE',
-		help='JSON list of {"id", "path", "message"} of dismissed code scanning alerts, which the gate skips',
+		action='store_true',
+		help=f'exit 1 on a finding that the `audit-ignores` of its manager or executor line in {common.MONOREPO_MARKER} do not list, or on an ignore that matches nothing; refuses the --no-* flags',
 	)
 
 
@@ -512,50 +507,69 @@ def _severity(score: float | None) -> str:
 	return 'none'
 
 
-def blocking(
-	findings: list[Finding],
-	statuses: dict[str, str],
-	waivers: set[tuple[str, str, str]],
-	floor: float,
-) -> list[Finding]:
-	"""
-	Findings at `floor` or above that block a release.
+MANAGER_SCOPE = 'manager'
+# Scope to the `(id, package)` pairs it ignores
+Ignores = dict[str, set[tuple[str, str]]]
 
-	Only a `replay-only` line is exempt: it replays finalized history, so no
-	attacker reaches it. Unscored findings (unmaintained, unsound) never block.
-	`waivers` holds `(id, path, package)` of dismissed code scanning alerts.
+
+def _scope(f: Finding) -> str:
+	line = _LINE_RE.match(f.path)
+	return line.group(1) if line else MANAGER_SCOPE
+
+
+def load_ignores(config: dict) -> Ignores:
 	"""
-	out = []
-	for f in findings:
-		if f.score is None or f.score < floor or (f.id, f.path, f.package) in waivers:
-			continue
-		line = _LINE_RE.match(f.path)
-		if line and statuses.get(line.group(1)) == 'replay-only':
-			continue
-		out.append(f)
-	return out
+	`(id, package)` pairs of the `audit-ignores` of the manager and of each line.
+	"""
+
+	def pairs(entries: list[dict]) -> set[tuple[str, str]]:
+		out = {(e['id'], e['package']) for e in entries}
+		if len(out) != len(entries):
+			raise common.ToolError(f'duplicate `audit-ignores` entry among {entries}')
+		return out
+
+	return {
+		MANAGER_SCOPE: pairs(config.get('manager', {}).get('audit-ignores', [])),
+		**{
+			line: pairs(entry.get('audit-ignores', []))
+			for line, entry in config['executor-lines'].items()
+		},
+	}
+
+
+def _ignored_by(f: Finding, ignores: Ignores) -> set[tuple[str, str]]:
+	return {
+		(id, package)
+		for id, package in ignores.get(_scope(f), set())
+		if package == f.package and id in (f.id, *f.aliases)
+	}
+
+
+def blocking(findings: list[Finding], ignores: Ignores) -> list[Finding]:
+	"""
+	Findings, of any severity, that the `audit-ignores` of their scope do not list.
+	"""
+	return [f for f in findings if not _ignored_by(f, ignores)]
+
+
+def stale_ignores(
+	findings: list[Finding], ignores: Ignores
+) -> list[tuple[str, str, str]]:
+	"""
+	`(scope, id, package)` of each ignore that matches no finding.
+	"""
+	used = {(_scope(f), *pair) for f in findings for pair in _ignored_by(f, ignores)}
+	return sorted(
+		(scope, *pair)
+		for scope, pairs in ignores.items()
+		for pair in pairs
+		if (scope, *pair) not in used
+	)
 
 
 def _alert_message(f: Finding) -> str:
 	fixed = f' Fixed in {", ".join(f.fixed)}.' if f.fixed else ''
 	return f'{f.package}@{f.version} is affected by {f.id}.{fixed}'
-
-
-# Inverts `_alert_message`; a version holds neither `@` nor spaces
-_ALERT_PACKAGE_RE = re.compile(r'(.+)@[^@\s]+ is affected by ')
-
-
-def load_waivers(path: Path) -> set[tuple[str, str, str]]:
-	"""
-	`[{"id", "path", "message"}]` of dismissed alerts, keyed like a finding.
-	"""
-	out = set()
-	for w in json.loads(path.read_text()):
-		package = _ALERT_PACKAGE_RE.match(w['message'])
-		if package is None:
-			raise ValueError(f'no package in the message of waiver {w}')
-		out.add((w['id'], w['path'], package.group(1)))
-	return out
 
 
 def _by_severity(findings: list[Finding]) -> list[Finding]:
@@ -669,13 +683,16 @@ def _sarif(findings: list[Finding]) -> dict:
 
 def not_yet_reported(earlier: list[Finding], later: list[Finding]) -> list[Finding]:
 	"""
-	`later` without the advisories `earlier` already reports, under any of their ids.
+	`later` without the advisories `earlier` already reports in the same scope, under any of their ids.
 	"""
-	seen = {id for f in earlier for id in (f.id, *f.aliases)}
-	return [f for f in later if not seen & {f.id, *f.aliases}]
+	seen = {(_scope(f), id) for f in earlier for id in (f.id, *f.aliases)}
+	return [f for f in later if not seen & {(_scope(f), id) for id in (f.id, *f.aliases)}]
 
 
 def main(ctx: common.Context, args) -> int:
+	# A skipped pass would make every ignore of its findings look stale
+	if args.gate and (args.no_lockfiles or args.no_vendored or args.no_native):
+		raise common.ToolError('--gate runs every pass; drop the --no-* flags')
 	tracked = _tracked(ctx.root)
 	findings: list[Finding] = []
 	if not args.no_lockfiles:
@@ -690,16 +707,17 @@ def main(ctx: common.Context, args) -> int:
 		_write(Path(args.markdown), _markdown(findings))
 	if args.sarif:
 		_write(Path(args.sarif), json.dumps(_sarif(findings), indent=1) + '\n')
-	if args.gate is None:
+	if not args.gate:
 		return 0
-	config = common.monorepo_config(ctx.root)
-	statuses = {line: entry['status'] for line, entry in config['executor-lines'].items()}
-	waivers = load_waivers(Path(args.waivers)) if args.waivers else set()
-	blocked = blocking(findings, statuses, waivers, SEVERITY_FLOORS[args.gate])
+	ignores = load_ignores(common.monorepo_config(ctx.root))
+	blocked = blocking(findings, ignores)
 	for f in _by_severity(blocked):
 		print(f'blocking: {f.path}:{f.line}: {f.package}@{f.version} {f.id} {f.url}')
-	print(f'{len(blocked)} finding(s) block at {args.gate}')
-	return 1 if blocked else 0
+	stale = stale_ignores(findings, ignores)
+	for scope, id, package in stale:
+		print(f'blocking: stale ignore: {scope}: {id} {package} matches no finding')
+	print(f'{len(blocked)} finding(s) and {len(stale)} stale ignore(s) block')
+	return 1 if blocked or stale else 0
 
 
 def _write(path: Path, text: str) -> None:

@@ -5,6 +5,22 @@
   "type": "object",
   "required": ["version", "executor-lines"],
   "additionalProperties": false,
+  "definitions": {
+    "audit-ignores": {
+      "description": "Advisories `genvm-tool audit --gate` lets through, each ruled not to apply. An entry that matches no finding fails the gate",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "package", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "description": "The advisory, under any of its ids", "type": "string", "minLength": 1 },
+          "package": { "description": "The affected package, any version", "type": "string", "minLength": 1 },
+          "reason": { "description": "Why it does not apply", "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
   "properties": {
     "$schema": { "type": "string" },
     "version": {
@@ -41,7 +57,22 @@
                 "description": "Only replays finalized history from reduced sources; gets fixes for selected bugs only"
               }
             ]
+          },
+          "audit-ignores": {
+            "$ref": "#/definitions/audit-ignores",
+            "description": "Of the findings under `executors/<line>.x`"
           }
+        }
+      }
+    },
+    "manager": {
+      "description": "Settings of the manager, as opposed to an executor line",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audit-ignores": {
+          "$ref": "#/definitions/audit-ignores",
+          "description": "Of the findings outside `executors/`"
         }
       }
     },

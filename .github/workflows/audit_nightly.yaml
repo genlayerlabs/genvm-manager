@@ -2,7 +2,8 @@ name: audit / nightly
 
 # Publishes `genvm-tool audit` findings to code scanning (Security → Code
 # scanning, tool "genvm-tool audit"). An alert closes by itself once a run no
-# longer reports it; dismissing one there is the ruling that it does not apply.
+# longer reports it. The release gate reads its rulings from the `audit-ignores`
+# of `.genvm-monorepo-root`, not from dismissals here.
 #
 # GitHub only schedules workflows from the DEFAULT branch, so this file has to
 # reach it before the cron fires.
