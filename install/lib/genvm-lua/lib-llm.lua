@@ -263,9 +263,9 @@ M.exec_prompt_template_transform = function(args)
 	lib.log { level = "debug", message = "exec_prompt_template_transform", args = args }
 
 	local my_data = {
-		EqComparative = { template_id = "eq_comparative", format = "bool" },
-		EqNonComparativeValidator = { template_id = "eq_non_comparative_validator", format = "bool" },
-		EqNonComparativeLeader = { template_id = "eq_non_comparative_leader", format = "text" },
+		EqComparative = { template_id = "eq_comparative", format = "bool", escape = true },
+		EqNonComparativeValidator = { template_id = "eq_non_comparative_validator", format = "bool", escape = true },
+		EqNonComparativeLeader = { template_id = "eq_non_comparative_leader", format = "text", escape = false },
 	}
 
 	my_data = my_data[args.template]
@@ -278,8 +278,19 @@ M.exec_prompt_template_transform = function(args)
 	-- a function is not rescanned, so a value that itself contains `#{key}`
 	-- (a leader answer, for instance) is inserted literally instead of being
 	-- expanded by a later substitution. Unknown placeholders stay as they are.
+	-- Judge templates HTML-escape values so they cannot close the tags wrapping them;
+	-- a non-scalar value leaves its placeholder as is.
 	local as_user_text = string.gsub(my_template.user, "#{([%w_]+)}", function(key)
-		return vars[key]
+		local value = vars[key]
+		local kind = type(value)
+		if kind ~= "string" and kind ~= "number" and kind ~= "boolean" then
+			return nil
+		end
+		value = tostring(value)
+		if my_data.escape then
+			value = lib.rs.escape_html(value)
+		end
+		return value
 	end)
 
 	local format = my_data.format

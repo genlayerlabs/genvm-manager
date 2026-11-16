@@ -726,19 +726,26 @@ fn ipv4_is_bad(ip: std::net::Ipv4Addr) -> bool {
         || ip.is_link_local()
         || ip.is_documentation()
         || ip.is_broadcast()
+        || ip.is_multicast()
     {
         return true;
     }
 
-    let [a, b, _, _] = ip.octets();
+    let [a, b, c, _] = ip.octets();
     a == 0                                    // "this" network 0.0.0.0/8
         || a == 10                            // private 10.0.0.0/8
+        || (a == 100 && (64..=127).contains(&b)) // CGNAT 100.64.0.0/10
         || a == 127                           // loopback 127.0.0.0/8
         || (a == 169 && b == 254)             // link-local 169.254.0.0/16
         || (a == 172 && (16..=31).contains(&b)) // private 172.16.0.0/12
+        || (a == 192 && b == 0 && c == 0)     // IETF protocol assignments 192.0.0.0/24, including .9 and .10
+        || (a == 192 && b == 0 && c == 2)     // documentation 192.0.2.0/24
+        || (a == 192 && b == 88 && c == 99)   // 6to4 relay anycast 192.88.99.0/24
         || (a == 192 && b == 168)             // private 192.168.0.0/16
-        || (a == 100 && (64..=127).contains(&b)) // CGNAT 100.64.0.0/10
-        || a >= 224 // multicast/reserved/broadcast 224.0.0.0/3
+        || (a == 198 && (18..=19).contains(&b)) // benchmarking 198.18.0.0/15
+        || (a == 198 && b == 51 && c == 100)  // documentation 198.51.100.0/24
+        || (a == 203 && b == 0 && c == 113)   // documentation 203.0.113.0/24
+        || a >= 224 // multicast 224.0.0.0/4, reserved 240.0.0.0/4, broadcast
 }
 
 /// Whether an IPv6 address is not safe to connect to (not globally routable).
@@ -748,15 +755,35 @@ fn ipv6_is_bad(ip: std::net::Ipv6Addr) -> bool {
         return ipv4_is_bad(v4);
     }
 
-    if ip.is_unspecified() || ip.is_loopback() || ip.is_unique_local() || ip.is_unicast_link_local()
+    let s = ip.segments();
+
+    // so are NAT64 64:ff9b::/96 and IPv4-translated ::ffff:0:0:0/96
+    if s[..6] == [0x64, 0xff9b, 0, 0, 0, 0] || s[..6] == [0, 0, 0, 0, 0xffff, 0] {
+        return ipv4_is_bad(std::net::Ipv4Addr::from(
+            (u32::from(s[6]) << 16) | u32::from(s[7]),
+        ));
+    }
+
+    if ip.is_unspecified()
+        || ip.is_loopback()
+        || ip.is_unique_local()
+        || ip.is_unicast_link_local()
+        || ip.is_multicast()
     {
         return true;
     }
 
-    let group = ip.segments()[0];
-    (0xfc00..=0xfdff).contains(&group)        // unique-local fc00::/7
-        || (0xfe80..=0xfebf).contains(&group) // link-local fe80::/10
-        || group >= 0xff00 // multicast ff00::/8
+    s[..6] == [0; 6]                                         // unspecified, loopback, IPv4-compatible ::/96
+        || (s[0] == 0x64 && s[1] == 0xff9b && s[2] == 1)     // local-use NAT64 64:ff9b:1::/48
+        || (s[0] == 0x100 && s[1..4] == [0; 3])              // discard-only 100::/64
+        || (s[0] == 0x2001 && s[1] < 0x200)                  // IETF protocol assignments 2001::/23 (Teredo, benchmarking, ORCHID, ORCHIDv2, AMT, AS112)
+        || (s[0] == 0x2001 && s[1] == 0xdb8)                 // documentation 2001:db8::/32
+        || s[0] == 0x2002                                    // 6to4 2002::/16
+        || (s[0] == 0x3fff && s[1] < 0x1000)                 // documentation 3fff::/20
+        || s[0] == 0x5f00                                    // SRv6 SIDs 5f00::/16
+        || (0xfc00..=0xfdff).contains(&s[0])                 // unique-local fc00::/7
+        || (0xfe80..=0xfeff).contains(&s[0])                 // link-local fe80::/10 and site-local fec0::/10
+        || s[0] >= 0xff00 // multicast ff00::/8
 }
 
 /// Whether a resolved address must not be connected to (SSRF guard).
@@ -1456,6 +1483,17 @@ mod ip_filter_tests {
             "100.127.255.255",
             "224.0.0.1",
             "255.255.255.255",
+            "192.0.0.1",
+            "192.0.0.9",
+            "192.0.0.255",
+            "192.0.2.1",
+            "192.88.99.1",
+            "198.18.0.1",
+            "198.19.255.255",
+            "198.51.100.1",
+            "203.0.113.1",
+            "240.0.0.1",
+            "0.255.255.255",
         ] {
             assert!(bad(ip), "{ip} should be filtered");
         }
@@ -1468,6 +1506,15 @@ mod ip_filter_tests {
             "172.32.0.1",
             "100.63.0.1",
             "93.184.216.34",
+            "192.0.1.1",
+            "192.88.98.1",
+            "192.88.100.1",
+            "198.17.255.255",
+            "198.20.0.1",
+            "198.51.101.1",
+            "203.0.114.1",
+            "223.255.255.255",
+            "1.0.0.0",
         ] {
             assert!(!bad(ip), "{ip} should be allowed");
         }
@@ -1485,6 +1532,28 @@ mod ip_filter_tests {
             "ff02::1",
             "::ffff:127.0.0.1",
             "::ffff:10.0.0.1",
+            "::ffff:192.168.1.1",
+            "::ffff:169.254.169.254",
+            "::ffff:0:127.0.0.1",
+            "64:ff9b::7f00:1",
+            "64:ff9b::a9fe:a9fe",
+            "64:ff9b:1::1",
+            "::127.0.0.1",
+            "::8.8.8.8",
+            "100::1",
+            "2001::1",
+            "2001:0:4136:e378:8000:63bf:3fff:fdd2",
+            "2001:2::1",
+            "2001:10::1",
+            "2001:20::1",
+            "2001:db8::1",
+            "2002::1",
+            "2002:7f00:1::1",
+            "3fff::1",
+            "3fff:fff:ffff::1",
+            "5f00::1",
+            "fec0::1",
+            "febf::1",
         ] {
             assert!(bad(ip), "{ip} should be filtered");
         }
@@ -1494,6 +1563,17 @@ mod ip_filter_tests {
             "2606:4700:4700::1111",
             "2001:4860:4860::8888",
             "::ffff:8.8.8.8",
+            "64:ff9b::808:808",
+            "100:0:0:1::1",
+            "2000::1",
+            "2001:200::1",
+            "2001:4860::1",
+            "2001:db9::1",
+            "2003::1",
+            "3ffe::1",
+            "3fff:1000::1",
+            "5f01::1",
+            "64:ff9b:2::1",
         ] {
             assert!(!bad(ip), "{ip} should be allowed");
         }

@@ -16,6 +16,7 @@ RUN \
     apt-get install -y --no-install-recommends \
         unzip \
         curl \
+        tini \
         gnupg \
         ca-certificates \
         fonts-liberation \
@@ -49,20 +50,7 @@ HEALTHCHECK \
     --start-period=10s \
     CMD curl -sf 'http://localhost:'"${PORT:-4444}"'/healthcheck?mode=text&url=https%3A%2F%2Ftest-server.genlayer.com%2Fstatic%2Fgenvm%2Fhello.html' || exit 1
 
-ENV TINI_VERSION=v0.19.0
-RUN \
-    set -ex && \
-    ARCH=$(dpkg --print-architecture) && \
-    if [ "$ARCH" = "amd64" ]; then \
-        TINI_ARCH="tini-amd64"; \
-    elif [ "$ARCH" = "arm64" ]; then \
-        TINI_ARCH="tini-arm64"; \
-    else \
-        TINI_ARCH="tini"; \
-    fi && \
-    curl -fsSL -o /tini https://github.com/krallin/tini/releases/download/${TINI_VERSION}/${TINI_ARCH} && \
-    chmod +x /tini
-ENTRYPOINT ["/tini", "--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 
 COPY ./src /src
 

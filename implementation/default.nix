@@ -24,7 +24,6 @@ let
       "install"
       "libs/unhardcoded-engine/llm_policy"
       "libs/unhardcoded-engine/llm_policy.lua"
-      "support/manifest-base.yaml"
     ]
     ++ builtins.map (line: "executors/${line}.x/manifest.json") (
       builtins.attrNames monorepo.executor-lines
