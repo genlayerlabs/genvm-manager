@@ -4,6 +4,7 @@ import { Command } from 'commander';
 
 import * as logger from './logging.js';
 import * as chromeBrowser from './browser/chrome.js';
+import { isBrowserFailure } from './browser/index.js';
 import { abortable, disconnectSignal } from './cancellation.js';
 import {
 	renderPageWithBrowser,
@@ -112,13 +113,20 @@ async function renderPage(
 		signal?.throwIfAborted();
 		const browserInstance = browserManager.getBrowser();
 		try {
-			return await renderPageWithBrowser(
+			const result = await renderPageWithBrowser(
 				browserInstance.get(),
 				targetUrl,
 				mode,
 				options,
 				signal,
 			);
+			browserManager.report(browserInstance, false);
+			return result;
+		} catch (e) {
+			if (isBrowserFailure(e)) {
+				browserManager.report(browserInstance, true);
+			}
+			throw e;
 		} finally {
 			browserInstance.close();
 		}
