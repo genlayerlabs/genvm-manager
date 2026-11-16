@@ -9,12 +9,19 @@ export class BrowserHolder {
 	counter: number;
 	id: number;
 
+	/** Settles once the browser is really closed; `false` if closing failed. */
+	readonly closed: Promise<boolean>;
+	private settleClosed!: (ok: boolean) => void;
+
 	static nextId = 1;
 
 	constructor(browser: pup.Browser) {
 		this.browser = browser;
 		this.counter = 1;
 		this.id = BrowserHolder.nextId++;
+		this.closed = new Promise((resolve) => {
+			this.settleClosed = resolve;
+		});
 		logger.log('info', 'created browser', { id: this.id });
 	}
 
@@ -22,7 +29,13 @@ export class BrowserHolder {
 		this.counter--;
 		if (this.counter === 0) {
 			logger.log('info', 'closing browser instance', { id: this.id });
-			await this.browser.close();
+			try {
+				await this.browser.close();
+				this.settleClosed(true);
+			} catch (error) {
+				this.settleClosed(false);
+				throw error;
+			}
 		}
 	}
 
@@ -65,7 +78,8 @@ export class RotatingManager implements browser.Manager {
 		this.holder = holder;
 		this.now = options.now ?? Date.now;
 		this.sleep =
-			options.sleep ?? ((ms, signal) => delay(ms, undefined, { signal }));
+			options.sleep ??
+			((ms, signal) => delay(ms, undefined, { signal, ref: false }));
 		this.lastRotationTime = this.now();
 	}
 
@@ -111,7 +125,9 @@ export class RotatingManager implements browser.Manager {
 
 	private async rotationCheck(): Promise<void> {
 		const { options } = this;
+		// Consumed before measuring so activity during the measurement counts for the next interval
 		const used = this.used;
+		this.used = false;
 		const lastMemoryMB = this.lastMemoryMB;
 		const old = this.holder;
 		const usedRAMMB = await options.memoryMB(old.browser.process()?.pid);
@@ -170,30 +186,32 @@ export class RotatingManager implements browser.Manager {
 		const next = await options.launch();
 		this.holder = next;
 		this.lastMemoryMB = null;
-		this.used = false;
 		this.consecutiveFailures = 0;
 		this.lastRotationTime = this.now();
-		await this.retire(old);
+		// Not awaited: the check is done once `next` serves, and the new holder may need a check meanwhile
+		this.retire(old).catch((error) => {
+			logger.log('error', 'retiring old browser failed', { id: old.id, error });
+		});
 	}
 
-	/** Close the old browser, killing its process if that does not finish in time. */
+	/**
+	 * Close the old browser once its last render lets go, killing its process if
+	 * it is not really closed within the bound, which starts now.
+	 */
 	private async retire(old: BrowserHolder): Promise<void> {
 		const bound = new AbortController();
-		const closed = old.close().then(
-			() => 'closed' as const,
-			(error) => {
-				logger.log('error', 'closing old browser failed', {
-					id: old.id,
-					error,
-				});
-				return 'failed' as const;
-			},
-		);
+		// Renders still holding `old` delay the real close; the bound covers them too
+		old.close().catch((error) => {
+			logger.log('error', 'closing old browser failed', { id: old.id, error });
+		});
 		const expired = this.sleep(this.options.closeTimeoutMs, bound.signal).then(
 			() => 'timeout' as const,
-			() => 'closed' as const,
+			() => 'cancelled' as const,
 		);
-		const outcome = await Promise.race([closed, expired]);
+		const outcome = await Promise.race([
+			old.closed.then((ok) => (ok ? ('closed' as const) : ('failed' as const))),
+			expired,
+		]);
 		bound.abort();
 		if (outcome === 'closed') {
 			return;
