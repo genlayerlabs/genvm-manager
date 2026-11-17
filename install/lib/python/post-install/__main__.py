@@ -107,7 +107,11 @@ parser.add_argument(
 	'--bin-patch',
 	type=str_to_bool_or_none,
 	default=None,
-	help='Enable/disable bin patch step (default: use --default-steps)',
+	help=(
+		'Enable/disable pointing Linux binaries at the bundled lib/libc.so when '
+		'their interpreter is missing on this host; that needs patchelf on PATH '
+		'(default: use --default-steps)'
+	),
 )
 parser.add_argument(
 	'--bin-check',

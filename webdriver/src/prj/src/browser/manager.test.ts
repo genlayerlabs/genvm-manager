@@ -216,8 +216,120 @@ test('a hung close of the old browser is killed after the bound and does not blo
 	assert.deepEqual(first.kills, []);
 	timers.fireAll();
 	await rotation;
+	await nextTurn();
 	assert.deepEqual(first.kills, ['SIGKILL']);
 	assert.equal(timers.pending.size, 0);
+});
+
+test('a close performed by the last render is bounded too', async (t) => {
+	captureLogs(t);
+	const first = fakeBrowser('hang');
+	const second = fakeBrowser();
+	const { manager, timers } = await setup(first, [second], {
+		failureThreshold: 1,
+	});
+
+	const render = manager.getBrowser();
+	manager.report(render, true);
+	await manager.check();
+	await nextTurn();
+	assert.equal(timers.pending.size, 1, 'deadline must outlive retire()');
+
+	void render.close();
+	await nextTurn();
+	assert.deepEqual(first.kills, []);
+	timers.fireAll();
+	await nextTurn();
+	assert.deepEqual(first.kills, ['SIGKILL']);
+});
+
+test('a render still running when the deadline fires loses its browser', async (t) => {
+	captureLogs(t);
+	const first = fakeBrowser();
+	const second = fakeBrowser();
+	const { manager, timers } = await setup(first, [second], {
+		failureThreshold: 1,
+	});
+
+	const render = manager.getBrowser();
+	manager.report(render, true);
+	await manager.check();
+	await nextTurn();
+	assert.equal(first.closes, 0);
+	timers.fireAll();
+	await nextTurn();
+	assert.deepEqual(first.kills, ['SIGKILL']);
+});
+
+test('the last render closing in time cancels the deadline', async (t) => {
+	captureLogs(t);
+	const first = fakeBrowser();
+	const second = fakeBrowser();
+	const { manager, timers } = await setup(first, [second], {
+		failureThreshold: 1,
+	});
+
+	const render = manager.getBrowser();
+	manager.report(render, true);
+	await manager.check();
+	await nextTurn();
+	assert.equal(timers.pending.size, 1);
+	await render.close();
+	await nextTurn();
+	assert.equal(timers.pending.size, 0);
+	assert.deepEqual(first.kills, []);
+});
+
+test('a failure streak on the new browser rotates while the old one is still closing', async (t) => {
+	captureLogs(t);
+	const first = fakeBrowser('hang');
+	const second = fakeBrowser();
+	const third = fakeBrowser();
+	const { manager } = await setup(first, [second, third]);
+
+	fail(manager, 3);
+	await nextTurn();
+	assert.equal(manager.getBrowser().get(), second.holder.get());
+	fail(manager, 3);
+	await nextTurn();
+	assert.equal(manager.getBrowser().get(), third.holder.get());
+});
+
+test('idle memory growth is judged per interval, not only before the first render', async (t) => {
+	captureLogs(t);
+	const first = fakeBrowser();
+	const second = fakeBrowser();
+	let memory = 100;
+	const { manager } = await setup(first, [second], {
+		memoryMB: async () => memory,
+	});
+
+	void manager.getBrowser().close();
+	await manager.check();
+	await manager.check();
+	memory = 500;
+	await manager.check();
+	assert.equal(manager.getBrowser().get(), second.holder.get());
+});
+
+test('activity during a measurement counts for the next interval', async (t) => {
+	captureLogs(t);
+	const first = fakeBrowser();
+	let memory = 100;
+	let onMeasure = () => {};
+	const { manager } = await setup(first, [], {
+		memoryMB: async () => {
+			onMeasure();
+			return memory;
+		},
+	});
+
+	onMeasure = () => void manager.getBrowser();
+	await manager.check();
+	onMeasure = () => {};
+	memory = 500;
+	await manager.check();
+	assert.equal(manager.getBrowser().get(), first.holder.get());
 });
 
 test('a rejecting close kills the old browser too', async (t) => {
@@ -228,6 +340,7 @@ test('a rejecting close kills the old browser too', async (t) => {
 
 	fail(manager, 1);
 	await manager.check();
+	await nextTurn();
 	assert.deepEqual(first.kills, ['SIGKILL']);
 });
 
@@ -241,6 +354,7 @@ test('a clean close is not killed and leaves no timer behind', async (t) => {
 
 	fail(manager, 1);
 	await manager.check();
+	await nextTurn();
 	assert.deepEqual(first.kills, []);
 	assert.equal(timers.pending.size, 0);
 });
@@ -258,6 +372,7 @@ test('a hung close without a process handle does not throw', async (t) => {
 	await nextTurn();
 	timers.fireAll();
 	await rotation;
+	await nextTurn();
 	assert.equal(manager.getBrowser().get(), second.holder.get());
 });
 
