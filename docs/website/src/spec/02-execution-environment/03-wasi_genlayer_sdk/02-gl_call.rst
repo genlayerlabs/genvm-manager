@@ -79,6 +79,9 @@ Requirements
 
 #. :ref:`gvm-perm-deterministic`
 #. :ref:`gvm-perm-call-others`
+#. From v0.4, ``calldata`` is at most
+   :ref:`gvm-def-const-external-call-calldata-max`
+   bytes, otherwise the call is rejected with ``Inval``
 
 .. _gvm-def-gl-call-call-contract:
 
