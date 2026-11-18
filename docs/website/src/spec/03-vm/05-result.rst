@@ -184,7 +184,8 @@ with the following keys (in this order):
 
 #. ``backtrace``
 #. ``data`` — the contract result value
-#. ``data_fees_consumed``
+#. ``data_fees_consumed`` — ``U256`` consumed per fee kind; a kind that charges
+   several buckets reports only its first
 #. ``data_fees_remaining`` — map from each fee-bucket name to its remaining
    ``U256`` balance
 #. ``emissions`` — emitted messages and events, in emission order
