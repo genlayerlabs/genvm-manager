@@ -238,3 +238,30 @@ init_action_depth
 ~~~~~~~~~~~~~~~~~
 
 Value: ``128``
+
+.. _gvm-def-const-root-reserved-len:
+
+root_reserved_len
+-----------------
+
+Type: u32
+
+Value: ``69``
+
+.. _gvm-def-const-host-storage-read-chunk:
+
+host_storage_read_chunk
+-----------------------
+
+Type: u32
+
+Value: ``16777216``
+
+.. _gvm-def-const-external-call-calldata-max:
+
+external_call_calldata_max
+--------------------------
+
+Type: u32
+
+Value: ``262144``

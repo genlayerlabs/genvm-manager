@@ -88,7 +88,7 @@ result, clean-finish vs crash) is reported by the manager's terminal event
          address := read_bytes(ACCOUNT_ADDR_SIZE)
          slot := read_bytes(SLOT_ID_SIZE)
          offset := read_u32_le
-         len := read_u32_le
+         len := read_u32_le # v0.4+: at most host_storage_read_chunk
          data, err := host_storage_read(read_type, address, slot, offset, len)
          if err != json/errors/ok:
            write_byte err

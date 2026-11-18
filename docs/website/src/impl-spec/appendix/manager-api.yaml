@@ -858,7 +858,9 @@ components:
           type: string
           format: binary
           nullable: true
-          description: Contract bytecode for a deployment, or null for a call
+          description: |
+            Contract bytecode for a deployment, or null for a call. From v0.4,
+            must be null when `is_init` is false
         leader_public_data:
           type: string
           format: binary
