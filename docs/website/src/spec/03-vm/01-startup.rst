@@ -16,6 +16,8 @@ Before executing the root :term:`sub-VM`, :term:`GenVM`:
 
 #. Validates the entry payload against :ref:`gvm-def-contract-call-conv` (see
    below).
+#. From v0.4, a deployment refuses an address that already holds a contract, as
+   specified in :doc:`../04-contract-interface/05-execution-flow`.
 #. Reads the contract's root-slot data, and its locked slots when the run may
    write storage. Locked slots only constrain writes, so a run without that
    permission does not read them.
@@ -29,7 +31,8 @@ Before executing the root :term:`sub-VM`, :term:`GenVM`:
 
 If code is supplied with the execution request, that code is the runner source
 for the deployment execution. Otherwise, the runner source is the contract code
-resolved from storage.
+resolved from storage; a deployment without code on an empty address therefore
+finds no runner.
 
 .. _gvm-vm-startup-entry-validation:
 

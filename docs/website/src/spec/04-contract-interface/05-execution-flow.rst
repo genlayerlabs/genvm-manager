@@ -12,7 +12,10 @@ Deployment and Calls
 #. On deployment, contract code is stored under the contract
    :ref:`genvm-def-root-slot` layout, either in the root code field or through
    its configured code slot. The deployment call is executed with ``is_init``
-   set.
+   set. From v0.4, a deployment to an address whose root slot holds a non-zero
+   byte in its first :ref:`gvm-def-const-root-reserved-len` bytes, or whose
+   default code slot has a non-zero length, fails with
+   :ref:`gvm-def-str-trie-value-vm-error-forbidden`.
 #. On a normal call, ``entry_data`` contains
    :ref:`Calldata Encoded <gvm-def-calldata-encoding>` method-call data as
    described by :ref:`gvm-def-contract-call-conv`.
