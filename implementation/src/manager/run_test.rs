@@ -60,7 +60,7 @@ fn module_request() -> Request {
         signer_address: calldata::Address::from([0; 20]),
         chain_id: 0.into(),
         value: 0.into(),
-        is_init: false,
+        is_init: None,
         transaction_timestamp: chrono::Utc::now(),
     };
     serde_json::from_value(serde_json::json!({
@@ -73,7 +73,6 @@ fn module_request() -> Request {
         "is_sync": false,
         "bucket_totals": {},
         "host_data": "",
-        "timestamp": message.transaction_timestamp,
         "host": "",
         "calldata": [],
         "initial_time_units_allocation": 0,
@@ -144,6 +143,26 @@ fn fake_execution_with_host_id(
     }
 
     exec
+}
+
+#[test]
+fn top_level_timestamp_may_be_absent_or_equal() {
+    let mut req = module_request();
+    check_top_level_request(&req, true).unwrap();
+
+    req.timestamp = Some(req.message.transaction_timestamp);
+    check_top_level_request(&req, true).unwrap();
+}
+
+#[test]
+fn top_level_timestamp_must_match_the_message() {
+    let mut req = module_request();
+    req.timestamp = Some(req.message.transaction_timestamp + chrono::Duration::seconds(1));
+    let err = check_top_level_request(&req, true).unwrap_err();
+    assert!(
+        err.to_string().contains("timestamp"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

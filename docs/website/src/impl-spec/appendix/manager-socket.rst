@@ -230,8 +230,8 @@ the calls entirely when the blobs are empty
                     "network_hash": bytes } }
 
 Answers which forks ``network`` has active at ``timestamp``, exactly as a
-``run`` with that ``network`` and ``timestamp`` resolves them. ``timestamp``
-has the format of ``run``'s ``timestamp``. The request needs no run, so it is
+``run`` with that ``network`` and ``message.transaction_timestamp`` resolves
+them, and in the same format. The request needs no run, so it is
 valid on any connection, including one that never sends ``run``. ``network``
 is required: ``default_network`` does not apply. Response::
 

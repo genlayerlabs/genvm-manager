@@ -29,10 +29,10 @@ Before executing the root :term:`sub-VM`, :term:`GenVM`:
    with node-granted VM permissions.
 #. Creates a deterministic root VM with the initial message described below.
 
-If code is supplied with the execution request, that code is the runner source
-for the deployment execution. Otherwise, the runner source is the contract code
-resolved from storage; a deployment without code on an empty address therefore
-finds no runner.
+An execution request is a deployment exactly when it supplies code, and that
+code is the runner source. Otherwise, the runner source is the contract code
+resolved from storage. A host-supplied ``is_init`` that contradicts this is a
+host error.
 
 .. _gvm-vm-startup-entry-validation:
 
