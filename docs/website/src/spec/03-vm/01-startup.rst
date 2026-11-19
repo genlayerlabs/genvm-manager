@@ -29,10 +29,10 @@ Before executing the root :term:`sub-VM`, :term:`GenVM`:
    with node-granted VM permissions.
 #. Creates a deterministic root VM with the initial message described below.
 
-If code is supplied with the execution request, that code is the runner source
-for the deployment execution. Otherwise, the runner source is the contract code
-resolved from storage; a deployment without code on an empty address therefore
-finds no runner.
+An execution request is a deployment exactly when it supplies code, and that
+code is the runner source. Otherwise, the runner source is the contract code
+resolved from storage. A host-supplied ``is_init`` that contradicts this is a
+host error.
 
 .. _gvm-vm-startup-entry-validation:
 
@@ -164,11 +164,11 @@ The child is read-only.
 
 - :ref:`gvm_vm_field_state_mode` is the requested storage view (*param*
   ``state``); a request of :ref:`gvm-def-enum-value-storage-view-default`
-  keeps the parent's value (the plain copy rule), so by default the callee
-  observes a view at least as recent as its caller's. Because the child
-  cannot write, its :ref:`gvm-def-enum-value-storage-view-default` view is
-  the decided state: it never includes the calling transaction's uncommitted
-  writes (see :ref:`contract-execution-flow`).
+  keeps the parent's value, and a parent value of
+  :ref:`gvm-def-enum-value-storage-view-default` becomes
+  :ref:`gvm-def-enum-value-storage-view-latest-decided`, so by default the
+  callee observes a view at least as recent as its caller's and never the
+  calling transaction's uncommitted writes (see :ref:`contract-execution-flow`).
 - :ref:`gvm_vm_field_topmost_runner_id` is the callee's contract runner.
 - :ref:`gvm_vm_field_granted_custom` is the caller's entire loaded
   custom-runner set (see `Custom-Runner Grants`_). A call the host delegates to

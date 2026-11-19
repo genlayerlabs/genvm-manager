@@ -718,7 +718,6 @@ components:
         - signer_address
         - chain_id
         - value
-        - is_init
       properties:
         contract_address:
           $ref: '#/components/schemas/Address'
@@ -737,7 +736,9 @@ components:
           example: 0
         is_init:
           type: boolean
-          description: Whether this is a contract initialization call
+          nullable: true
+          deprecated: true
+          description: Leave out; when sent, must equal whether `code` is present
         transaction_timestamp:
           type: string
           format: date-time
@@ -790,7 +791,6 @@ components:
         - is_sync
         - bucket_totals
         - host_data
-        - timestamp
         - host
         - calldata
         - code
@@ -840,7 +840,9 @@ components:
         timestamp:
           type: string
           format: date-time
-          description: Execution timestamp
+          nullable: true
+          deprecated: true
+          description: Leave out; when sent, must equal `message.transaction_timestamp`
         host:
           type: string
           description: Address of host connection 0, `unix://<path>` or a TCP `host:port`
@@ -859,8 +861,8 @@ components:
           format: binary
           nullable: true
           description: |
-            Contract bytecode for a deployment, or null for a call. From v0.4,
-            must be null when `is_init` is false
+            Contract bytecode for a deployment, or null for a call; its presence
+            is what makes the run a deployment
         leader_public_data:
           type: string
           format: binary
@@ -1028,7 +1030,7 @@ components:
           nullable: true
           default: null
           description: |
-            Network of the chainforks schedule whose forks, active at `timestamp`,
+            Network of the chainforks schedule whose forks, active at `message.transaction_timestamp`,
             decide which executor lines and runners are available. Null means the
             manager's `default_network`. An unknown network, or none when the manager
             has no `default_network`, fails the run with `failed_to_start` before an

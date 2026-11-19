@@ -192,7 +192,7 @@ pub struct NestedRunEnvelope {
     /// Host-minted routing data, opaque to both executor lines.
     pub routing_payload: Bytes,
     pub calldata: Bytes,
-    /// The caller sets `value` to zero and `is_init` to false.
+    /// The caller sets `value` to zero and `is_init` to null.
     pub message: MessageData,
     /// View-call stack with the caller's contract address appended.
     pub stack: Vec<genlayer_calldata::Address>,

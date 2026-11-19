@@ -881,13 +881,24 @@ pub(super) fn decode_datetime_rfc3339(
     }
 }
 
-fn encode_datetime_rfc3339<W: calldata::Writer>(
-    dt: &chrono::DateTime<chrono::Utc>,
+fn decode_optional_datetime_rfc3339(
+    val: calldata::Value,
+) -> std::result::Result<Option<chrono::DateTime<chrono::Utc>>, calldata::codec::DecodeError> {
+    match val {
+        calldata::Value::Null => Ok(None),
+        val => decode_datetime_rfc3339(val).map(Some),
+    }
+}
+
+fn encode_optional_datetime_rfc3339<W: calldata::Writer>(
+    dt: &Option<chrono::DateTime<chrono::Utc>>,
     enc: &mut calldata::Encoder<W>,
 ) -> std::result::Result<(), W::Error> {
     use chrono::SecondsFormat;
-    let s = dt.to_rfc3339_opts(SecondsFormat::AutoSi, true);
-    enc.push_str(&s)
+    match dt {
+        Some(dt) => enc.push_str(&dt.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
+        None => enc.push_null(),
+    }
 }
 
 fn default_extra_args() -> Vec<String> {
@@ -972,8 +983,14 @@ pub struct Request {
     pub max_execution_minutes: u64,
     pub bucket_totals: std::collections::BTreeMap<String, num_bigint::BigInt>,
     pub host_data: String,
-    #[calldata(serialize_with = encode_datetime_rfc3339, deserialize_with = decode_datetime_rfc3339)]
-    pub timestamp: chrono::DateTime<chrono::Utc>,
+    /// Deprecated; when present, must equal `message.transaction_timestamp`
+    #[serde(default)]
+    #[calldata(
+        default = Option::default,
+        serialize_with = encode_optional_datetime_rfc3339,
+        deserialize_with = decode_optional_datetime_rfc3339
+    )]
+    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
     pub host: String,
     #[serde(default)]
     #[calldata(default = default_extra_args)]
@@ -2152,10 +2169,6 @@ impl Ctx {
         caller_stream: Arc<ManagerHostStreamState>,
     ) -> anyhow::Result<genvm_modules_interfaces::NestedRunReply> {
         anyhow::ensure!(
-            !envelope.message.is_init,
-            "nested CallContract message cannot be an init"
-        );
-        anyhow::ensure!(
             envelope.message.value == num_bigint::BigInt::from(0),
             "nested CallContract message value must be zero"
         );
@@ -2196,7 +2209,7 @@ impl Ctx {
             max_execution_minutes: parent_req.max_execution_minutes,
             bucket_totals: std::collections::BTreeMap::new(),
             host_data: parent_req.host_data.clone(),
-            timestamp: envelope.message.transaction_timestamp,
+            timestamp: None,
             host: parent_req.host.clone(),
             extra_args: Vec::new(),
             calldata: envelope.calldata.clone(),
@@ -2268,6 +2281,11 @@ fn check_top_level_request(req: &Request, has_modules_lock: bool) -> anyhow::Res
             .get(1)
             .is_none_or(|data| data.is_empty()),
         "host_hello_data for manager-owned host index 1 is not allowed"
+    );
+    anyhow::ensure!(
+        req.timestamp
+            .is_none_or(|t| t == req.message.transaction_timestamp),
+        "timestamp differs from message.transaction_timestamp"
     );
     Ok(())
 }
@@ -2462,7 +2480,9 @@ async fn run_genvm_process(
     resources: RunResources,
 ) -> anyhow::Result<std::process::ExitStatus> {
     let network = full_ctx.config.network(req.network.as_deref())?.to_owned();
-    let forks = full_ctx.ver_ctx.active_forks(&network, req.timestamp)?;
+    let forks = full_ctx
+        .ver_ctx
+        .active_forks(&network, req.message.transaction_timestamp)?;
     req.network = Some(network);
 
     let is_top_level = resources.is_top_level();
