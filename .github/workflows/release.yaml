@@ -25,6 +25,10 @@ on:
         type: string
         required: false
         description: "Override release tag and embedded version (e.g., v1.2.3). Defaults to `version` from .genvm-monorepo-root"
+      bypass_blocking_advisories:
+        type: boolean
+        default: false
+        description: "Release despite blocking advisories of the audit gate (repository admins only)"
 
 defaults:
   run:
@@ -63,6 +67,8 @@ jobs:
       contents: read
       security-events: read
     uses: ./.github/workflows/audit_gate.yaml
+    with:
+      bypass_blocking_advisories: ${{ inputs.bypass_blocking_advisories }}
     secrets: inherit
 
   # Plan -> build every artifact -> test every platform. Its matrices are an
