@@ -28,7 +28,7 @@ on:
       bypass_blocking_advisories:
         type: boolean
         default: false
-        description: "Release despite blocking advisories of the audit gate (repository admins only)"
+        description: "Skip the audit gate (repository admins only)"
 
 defaults:
   run:

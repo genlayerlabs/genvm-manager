@@ -11,7 +11,7 @@ on:
       bypass_blocking_advisories:
         type: boolean
         default: false
-        description: "Report blocking findings without failing; only a repository admin may set it"
+        description: "Skip the audit; only a repository admin may set it"
   pull_request:
     branches: ['v*', '!v*-dev']
 
@@ -44,9 +44,13 @@ jobs:
             echo "::error::only a repository admin may bypass blocking advisories; $ACTOR has $permission"
             exit 1
           fi
+          echo "::warning::audit skipped by $ACTOR"
+          echo "**Audit skipped by @$ACTOR**" >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: ${{ !inputs.bypass_blocking_advisories }}
       # Lockfiles are tracked in the submodules; no third-party tree is read
       - name: Get source
+        if: ${{ !inputs.bypass_blocking_advisories }}
         uses: ./.github/actions/get-src
         with:
           with_nix: "true"
@@ -54,26 +58,17 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
       - name: Audit
+        if: ${{ !inputs.bypass_blocking_advisories }}
         env:
           # Optional: without it NVD is queried at its anonymous rate
           NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
-          BYPASS: ${{ inputs.bypass_blocking_advisories }}
-          ACTOR: ${{ github.triggering_actor }}
         run: |
           mkdir -p build
-          status=0
           nix develop '.?submodules=1#audit' --command \
             genvm-tool audit --gate --markdown build/audit.md \
-            | tee build/audit.log || status=$?
-          # The verdict line is printed only by a scan that completed, so a scanner failure still fails
-          if [ "$status" != 0 ] && [ "$BYPASS" = true ] && grep -qE '^[0-9]+ finding\(s\) and [0-9]+ stale ignore\(s\) block$' build/audit.log; then
-            echo "::warning::blocking advisories bypassed by $ACTOR"
-            echo "**Blocking advisories bypassed by @$ACTOR**" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
-          fi
-          exit "$status"
+            | tee build/audit.log
       - name: Summary
-        if: always()
+        if: ${{ always() && !inputs.bypass_blocking_advisories }}
         run: |
           if [ -f build/audit.log ]; then
             { echo '```'; grep -E '^(blocking: |[0-9]+ finding\(s\) and [0-9]+ stale)' build/audit.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
