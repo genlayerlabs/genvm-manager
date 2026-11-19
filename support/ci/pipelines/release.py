@@ -168,7 +168,8 @@ def _cell_amd64_linux() -> dict:
 
 def _cell_arm64_linux() -> dict:
 	qemu_shell = '.?submodules=1#check-qemu'
-	qemu = 'qemu-aarch64'
+	# The host has no /lib/ld-musl-aarch64.so.1, so the bundled musl runs the binary as its loader
+	qemu = ['qemu-aarch64', './build/out/lib/libc.so']
 	return _test_cell(
 		'arm64-linux',
 		[
@@ -181,12 +182,12 @@ def _cell_arm64_linux() -> dict:
 			),
 			step_nix_develop(
 				qemu_shell,
-				[qemu, './build/out/bin/genvm-modules', '--version'],
+				[*qemu, './build/out/bin/genvm-modules', '--version'],
 				subcommand_group='version under qemu',
 			),
 			step_nix_develop(
 				qemu_shell,
-				['timeout', str(SMOKE_TIMEOUT_SECONDS), qemu, *SMOKE_MODULES],
+				['timeout', str(SMOKE_TIMEOUT_SECONDS), *qemu, *SMOKE_MODULES],
 				subcommand_group='smoke test modules startup',
 				expect_exit_codes=SMOKE_EXIT_CODES,
 			),
