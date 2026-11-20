@@ -257,7 +257,7 @@ impl Request {
             writeln!(signature_value, "\"{c}\": {value}").map_err(map_fmt_to_fatal)?;
         }
 
-        let created = chrono::Utc::now().timestamp();
+        let created = jiff::Timestamp::now().as_second();
         write!(
             signature_params,
             ");created={created};alg=\"{SIGN_ALGORITHM}\""
