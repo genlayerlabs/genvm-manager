@@ -31,8 +31,7 @@ Before executing the root :term:`sub-VM`, :term:`GenVM`:
 
 An execution request is a deployment exactly when it supplies code, and that
 code is the runner source. Otherwise, the runner source is the contract code
-resolved from storage. A host-supplied ``is_init`` that contradicts this is a
-host error.
+resolved from storage.
 
 .. _gvm-vm-startup-entry-validation:
 
@@ -64,7 +63,8 @@ The message contains:
   transaction. :term:`GenVM` treats it as opaque and forwards it unchanged to
   every child :term:`sub-VM`.
 - :ref:`gvm_vm_field_stack`: the view-call stack, empty for a top-level entry
-- ``chain_id``, ``value``, ``is_init``, ``datetime``
+- ``chain_id``, ``value``, ``datetime``
+- ``is_init``: true exactly when the request is a deployment
 - From v0.4, ``create2``: the host-supplied ``deployer`` address and 32-byte
   ``code_hash`` of the settlement chain's CREATE2 derivation, forwarded unchanged
   to every child :term:`sub-VM`

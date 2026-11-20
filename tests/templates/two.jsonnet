@@ -10,7 +10,6 @@ local msg = import './message.json';
 
 		"message": msg + {
 			"contract_address": "AwAAAAAAAAAAAAAAAAAAAAAAAAA=",
-			is_init: true,
 		},
 
 		"calldata": "{}",
@@ -23,9 +22,7 @@ local msg = import './message.json';
 				},
 				"code": scriptfilefrom,
 
-				"message": msg + {
-					is_init: true,
-				},
+				"message": msg,
 
 				"calldata": "{}",
 

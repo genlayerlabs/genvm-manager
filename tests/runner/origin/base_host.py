@@ -165,7 +165,6 @@ class Message(typing.TypedDict):
 	signer_address: Address
 	chain_id: int
 	value: typing.NotRequired[int]
-	is_init: bool
 	transaction_timestamp: typing.NotRequired[str]
 
 
@@ -330,7 +329,9 @@ async def _try_predict_ghost(
 	return bytes(12) + predicted.as_bytes
 
 
-async def read_contract_major(handler: IHost, message: Message) -> int:
+async def read_contract_major(
+	handler: IHost, message: Message, code: bytes | None
+) -> int:
 	"""
 	Reads the public-ABI major the run's contract was deployed against.
 
@@ -343,7 +344,7 @@ async def read_contract_major(handler: IHost, message: Message) -> int:
 	no contract reads back `0`, which is indistinguishable from major `0`; that
 	stays a fallback for now.
 	"""
-	if message.get('is_init', False):
+	if code is not None:
 		return UNDEPLOYED_MAJOR
 	octet = await handler.storage_read(
 		public_abi.StorageView.LATEST_DECIDED,
@@ -1302,7 +1303,6 @@ async def run_genvm(
 		max_exec_mins = 20
 		if timeout is not None:
 			max_exec_mins = int(max(max_exec_mins, (timeout * 1.5 + 59) // 60))
-		timestamp = message.get('transaction_timestamp', '2024-11-26T06:42:42.424242Z')
 		deadline = _duration_string(timeout)
 		host_genvm_id = typing.cast(str | None, request_extra.get('host_genvm_id'))
 		if host_genvm_id is None:
@@ -1311,7 +1311,7 @@ async def run_genvm(
 			'selector': {
 				'kind': 'major',
 				'major': (
-					await read_contract_major(handler, message) if major is None else major
+					await read_contract_major(handler, message, code) if major is None else major
 				),
 			},
 			'message': message,
@@ -1319,7 +1319,6 @@ async def run_genvm(
 			'debug_mode': debug_mode,
 			'host_data': host_data,
 			'max_execution_minutes': max_exec_mins,
-			'timestamp': timestamp,
 			'host': host,
 			'extra_args': list(extra_args),
 			'code': code,

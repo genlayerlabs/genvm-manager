@@ -813,8 +813,6 @@ class IntegrationSingleStep(genvm_tool.tests.exec.step.Python):
 					for allocation in message_fee_allocation
 				]
 
-				if not single_conf['message'].get('is_init', False):
-					code = None
 				mode = single_conf.get('mode', 'l')
 				async with base_host.ManagerClient(
 					manager_uri,
