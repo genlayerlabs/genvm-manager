@@ -55,10 +55,6 @@ pub struct MessageData {
 
     pub chain_id: num_bigint::BigInt,
     pub value: num_bigint::BigInt,
-    /// Deprecated; the executor derives it from the presence of code and refuses a mismatch
-    #[serde(default)]
-    #[calldata(default = Option::default)]
-    pub is_init: Option<bool>,
     /// Transaction timestamp
     #[serde(
         default = "default_transaction_timestamp",

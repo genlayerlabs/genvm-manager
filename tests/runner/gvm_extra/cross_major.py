@@ -48,7 +48,7 @@ def contract_source(line: int, name: str, assets_dir: Path) -> bytes:
 	return (assets_dir / f'v0.{line}' / f'{name}.py').read_bytes()
 
 
-def message(address: Address, *, is_init: bool) -> base_host.Message:
+def message(address: Address) -> base_host.Message:
 	return {
 		'contract_address': address,
 		'sender_address': SENDER,
@@ -56,7 +56,6 @@ def message(address: Address, *, is_init: bool) -> base_host.Message:
 		'signer_address': SENDER,
 		'chain_id': 61999,
 		'value': 0,
-		'is_init': is_init,
 		'transaction_timestamp': TIMESTAMP,
 	}
 
@@ -227,7 +226,6 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 		address: Address,
 		calldata: bytes,
 		code: bytes | None,
-		is_init: bool,
 		resolve_hook: ResolveCallContractExecutorHook | None = None,
 		timeout: float = 30,
 		debug_initial_recursion: int | None = None,
@@ -258,7 +256,7 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 						ctx=host.ctx,
 						is_sync=is_sync,
 						leader_public_data=leader_public_data,
-						message=message(address, is_init=is_init),
+						message=message(address),
 						host_data=json.dumps(
 							{'node_address': 'test', 'tx_id': self.host_data_tx_id},
 							separators=(',', ':'),
@@ -293,7 +291,6 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			address=address,
 			calldata=gvm_calldata.encode({}),
 			code=code,
-			is_init=True,
 			timeout=10 * 60,
 		)
 		assert result.result_kind == host_fns.ResultCode.RETURN, result
@@ -318,7 +315,6 @@ class CrossMajorStep(genvm_tool.tests.exec.step.Python):
 			return await self._execute(
 				name=f'{name}-{suffix}',
 				code=None,
-				is_init=False,
 				apply_changes=False,
 				**kwargs,
 				**mode,

@@ -465,6 +465,23 @@ fn decode_payload<T: DecodeTrait>(
     calldata::decode_obj(payload)
 }
 
+/// Older hosts still send `timestamp` and `message.is_init`; both are ignored
+fn decode_run_payload(
+    payload: &[u8],
+) -> std::result::Result<run::Request, calldata::codec::DecodeError> {
+    let mut value = calldata::decode(payload)?;
+    if let calldata::Value::Map(outer) = &mut value {
+        if let Some(calldata::Value::Map(req)) = outer.get_mut("run") {
+            req.remove("timestamp");
+            if let Some(calldata::Value::Map(message)) = req.get_mut("message") {
+                message.remove("is_init");
+            }
+        }
+    }
+    let RunPayload::Run(req) = calldata::from_value(value)?;
+    Ok(req)
+}
+
 struct Connection<R> {
     ctx: sync::DArc<AppContext>,
     reader: R,
@@ -529,7 +546,7 @@ where
     }
 
     async fn handle_run(&mut self, request_id: u64, payload: &[u8]) -> Result<()> {
-        let RunPayload::Run(req) = match decode_payload::<RunPayload>(payload) {
+        let req = match decode_run_payload(payload) {
             Ok(req) => req,
             Err(e) => {
                 self.writer

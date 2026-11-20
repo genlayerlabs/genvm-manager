@@ -60,7 +60,6 @@ fn module_request() -> Request {
         signer_address: calldata::Address::from([0; 20]),
         chain_id: 0.into(),
         value: 0.into(),
-        is_init: None,
         transaction_timestamp: jiff::Timestamp::now(),
     };
     serde_json::from_value(serde_json::json!({
@@ -143,26 +142,6 @@ fn fake_execution_with_host_id(
     }
 
     exec
-}
-
-#[test]
-fn top_level_timestamp_may_be_absent_or_equal() {
-    let mut req = module_request();
-    check_top_level_request(&req, true).unwrap();
-
-    req.timestamp = Some(req.message.transaction_timestamp);
-    check_top_level_request(&req, true).unwrap();
-}
-
-#[test]
-fn top_level_timestamp_must_match_the_message() {
-    let mut req = module_request();
-    req.timestamp = Some(req.message.transaction_timestamp + jiff::SignedDuration::from_secs(1));
-    let err = check_top_level_request(&req, true).unwrap_err();
-    assert!(
-        err.to_string().contains("timestamp"),
-        "unexpected error: {err}"
-    );
 }
 
 #[test]
@@ -1132,7 +1111,6 @@ fn request_field_names() -> Vec<&'static str> {
             max_execution_minutes,
             bucket_totals,
             host_data,
-            timestamp,
             host,
             extra_args,
             calldata,
@@ -1163,7 +1141,6 @@ fn request_field_names() -> Vec<&'static str> {
         "max_execution_minutes",
         "bucket_totals",
         "host_data",
-        "timestamp",
         "host",
         "extra_args",
         "calldata",
@@ -1232,7 +1209,6 @@ fn message_schema_matches_the_rust_struct() {
             signer_address,
             chain_id,
             value,
-            is_init,
             transaction_timestamp,
         } = message;
     };
@@ -1244,7 +1220,6 @@ fn message_schema_matches_the_rust_struct() {
         "signer_address",
         "chain_id",
         "value",
-        "is_init",
         "transaction_timestamp",
     ]
     .map(str::to_owned)

@@ -106,7 +106,6 @@ class ObservabilityStep(cross_major.CrossMajorStep):
 			address=ADDR_CHAIN_V03,
 			calldata=encode_call('hop', 1, ADDR_CHAIN_V02),
 			code=None,
-			is_init=False,
 			resolve_hook=self._route_chain,
 			apply_changes=False,
 			is_sync=False,
@@ -169,7 +168,6 @@ class ObservabilityStep(cross_major.CrossMajorStep):
 			address=ADDR_OBSERVER_V03,
 			calldata=encode_call('debug_alias'),
 			code=None,
-			is_init=False,
 			resolve_hook=self._route_v03,
 			apply_changes=False,
 		)
