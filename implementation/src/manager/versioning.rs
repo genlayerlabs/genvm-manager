@@ -176,7 +176,7 @@ impl Ctx {
     pub fn active_forks(
         &self,
         network: &str,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        timestamp: jiff::Timestamp,
     ) -> Result<chainforks::Active, chainforks::Error> {
         self.chainforks.active(network, timestamp)
     }
