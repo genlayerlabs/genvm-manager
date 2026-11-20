@@ -319,13 +319,12 @@ fn parse_genvm_id(raw: &str) -> Option<run::GenVMId> {
     raw.parse::<u64>().ok().map(run::GenVMId)
 }
 
-fn deployment_timestamp(headers: &HeaderMap) -> anyhow::Result<chrono::DateTime<chrono::Utc>> {
+fn deployment_timestamp(headers: &HeaderMap) -> anyhow::Result<jiff::Timestamp> {
     let value = headers
         .get("Deployment-Timestamp")
         .ok_or_else(|| anyhow::anyhow!("missing Deployment-Timestamp header"))?;
-    Ok(chrono::DateTime::parse_from_rfc3339(value.to_str()?)
-        .with_context(|| "malformed Deployment-Timestamp header")?
-        .with_timezone(&chrono::Utc))
+    genlayer_calldata::codec::rfc3339::parse(value.to_str()?)
+        .with_context(|| "malformed Deployment-Timestamp header")
 }
 
 /// The forks a detect-version request runs under: its `Network` header, else the default network.

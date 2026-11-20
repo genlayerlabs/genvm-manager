@@ -49,12 +49,12 @@ pub enum Error {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Activation {
     Always,
-    At(chrono::DateTime<chrono::Utc>),
+    At(jiff::Timestamp),
     Never,
 }
 
 impl Activation {
-    fn is_active_at(self, timestamp: chrono::DateTime<chrono::Utc>) -> bool {
+    fn is_active_at(self, timestamp: jiff::Timestamp) -> bool {
         match self {
             Activation::Always => true,
             Activation::At(at) => at <= timestamp,
@@ -67,7 +67,7 @@ impl std::str::FromStr for Activation {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, String> {
-        // Stricter than chrono, matching the build-time check: `T`, `Z` and no leap second
+        // Stricter than `rfc3339::parse`, matching the build-time check: `T` and `Z` only
         static TIMESTAMP: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
             regex::Regex::new(
                 r"^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9](\.[0-9]+)?(Z|[+-]([01][0-9]|2[0-3]):[0-5][0-9])$",
@@ -79,8 +79,8 @@ impl std::str::FromStr for Activation {
             ALWAYS => Ok(Activation::Always),
             NEVER => Ok(Activation::Never),
             _ if !TIMESTAMP.is_match(s) => Err(malformed()),
-            _ => chrono::DateTime::parse_from_rfc3339(s)
-                .map(|at| Activation::At(at.with_timezone(&chrono::Utc)))
+            _ => calldata::codec::rfc3339::parse(s)
+                .map(Activation::At)
                 .map_err(|_| malformed()),
         }
     }
@@ -129,10 +129,7 @@ impl TryFrom<RawNetwork> for Network {
 
 impl Network {
     /// Every scheduled fork and whether it is active at `timestamp`.
-    fn forks_at(
-        &self,
-        timestamp: chrono::DateTime<chrono::Utc>,
-    ) -> impl Iterator<Item = (&String, bool)> {
+    fn forks_at(&self, timestamp: jiff::Timestamp) -> impl Iterator<Item = (&String, bool)> {
         self.forks
             .iter()
             .map(move |(fork, activation)| (fork, activation.is_active_at(timestamp)))
@@ -202,11 +199,7 @@ impl Schedule {
         self.network(network).map(|_| ())
     }
 
-    pub fn active(
-        &self,
-        network: &str,
-        timestamp: chrono::DateTime<chrono::Utc>,
-    ) -> Result<Active, Error> {
+    pub fn active(&self, network: &str, timestamp: jiff::Timestamp) -> Result<Active, Error> {
         Ok(Active(
             self.network(network)?
                 .forks_at(timestamp)
@@ -221,7 +214,7 @@ impl Schedule {
     pub fn scheduled_forks(
         &self,
         network: &str,
-        timestamp: chrono::DateTime<chrono::Utc>,
+        timestamp: jiff::Timestamp,
         host_hash: &[u8; 32],
     ) -> Result<BTreeMap<String, bool>, Error> {
         let scheduled = self.network(network)?;

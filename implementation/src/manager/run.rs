@@ -193,7 +193,7 @@ pub enum Event {
         exit_code: Option<i64>,
         consumed_result: Option<Vec<u8>>,
         metrics: serde_json::Value,
-        finished_at: chrono::DateTime<chrono::Utc>,
+        finished_at: jiff::Timestamp,
         version_major: u16,
         version_minor: u16,
         artifact_sizes: ArtifactSizes,
@@ -245,7 +245,7 @@ async fn spawn_module_relay(
 
 #[derive(Debug)]
 pub struct SingleGenVMContextDone {
-    pub finished_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: jiff::Timestamp,
     pub stdout: String,
     pub stderr: String,
     pub genvm_log: Vec<serde_json::Map<String, serde_json::Value>>,
@@ -266,10 +266,10 @@ struct SingleGenVMContext {
     result: tokio::sync::OnceCell<SingleGenVMContextDone>,
     started_event: tokio::sync::OnceCell<Event>,
     terminal_event: tokio::sync::OnceCell<Event>,
-    terminal_at: tokio::sync::OnceCell<chrono::DateTime<chrono::Utc>>,
+    terminal_at: tokio::sync::OnceCell<jiff::Timestamp>,
     events: tokio::sync::watch::Sender<Snapshot>,
-    started_at: chrono::DateTime<chrono::Utc>,
-    strict_deadline: chrono::DateTime<chrono::Utc>,
+    started_at: jiff::Timestamp,
+    strict_deadline: jiff::Timestamp,
 
     stdout_stderr_sem: Arc<tokio::sync::Semaphore>,
     stdout: tokio::sync::OnceCell<String>,
@@ -399,7 +399,7 @@ impl SingleGenVMContext {
     }
 
     fn publish_terminal(&self, event: Event) -> bool {
-        let _ = self.terminal_at.set(chrono::Utc::now());
+        let _ = self.terminal_at.set(jiff::Timestamp::now());
         if self.terminal_event.set(event.clone()).is_err() {
             return false;
         }
@@ -465,7 +465,7 @@ impl Ctx {
         for (genvm_id, exec_ctx) in self.known_executions.pin().iter() {
             let result = if let Some(result) = exec_ctx.result.get() {
                 serde_json::json!({
-                    "finished_at": result.finished_at.to_rfc3339(),
+                    "finished_at": calldata::codec::rfc3339::format(result.finished_at),
                 })
             } else {
                 serde_json::Value::Null
@@ -476,8 +476,8 @@ impl Ctx {
                 serde_json::json!({
                     "result": result,
                     "version": exec_ctx.version(),
-                    "started_at": exec_ctx.started_at.to_rfc3339(),
-                    "strict_deadline": exec_ctx.strict_deadline.to_rfc3339()
+                    "started_at": calldata::codec::rfc3339::format(exec_ctx.started_at),
+                    "strict_deadline": calldata::codec::rfc3339::format(exec_ctx.strict_deadline)
                 }),
             );
         }
@@ -788,7 +788,7 @@ fn gc_interval(ctx: &Ctx) -> std::time::Duration {
 }
 
 async fn gc_step(ctx: &sync::DArc<Ctx>) {
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
 
     // copy-out so that we don't hold the lock while doing async operations
     let keys = ctx
@@ -810,8 +810,8 @@ async fn gc_step(ctx: &sync::DArc<Ctx>) {
     }
 
     // Remove old finished executions
-    let retention = chrono::Duration::from_std(ctx.execution_retention.to_std())
-        .unwrap_or_else(|_| chrono::Duration::hours(24));
+    let retention = jiff::SignedDuration::try_from(ctx.execution_retention.to_std())
+        .unwrap_or(jiff::SignedDuration::from_hours(24));
     let mut expired_host_ids = Vec::new();
     ctx.known_executions.pin().retain(|k, v| {
         let terminal_at = if let Some(result) = v.result.get() {
@@ -821,7 +821,7 @@ async fn gc_step(ctx: &sync::DArc<Ctx>) {
         } else {
             return true;
         };
-        let passed = now.signed_duration_since(terminal_at);
+        let passed = now.duration_since(terminal_at);
         if passed > retention {
             log_warn_into!(@operator, &LoggerWithId, genvm_id:id = k.0; "removing zombie genvm execution context");
             if let Some(host_genvm_id) = &v.host_genvm_id {
@@ -864,41 +864,6 @@ pub async fn start_service(
     });
 
     Ok(())
-}
-
-use serde_with::serde_as;
-
-pub(super) fn decode_datetime_rfc3339(
-    val: calldata::Value,
-) -> std::result::Result<chrono::DateTime<chrono::Utc>, calldata::codec::DecodeError> {
-    let s = match val {
-        calldata::Value::Str(s) => s,
-        _ => return Err(calldata::codec::DecodeError::UnexpectedKind(val.kind())),
-    };
-    match chrono::DateTime::parse_from_rfc3339(&s) {
-        Ok(dt) => Ok(dt.to_utc()),
-        Err(e) => Err(calldata::codec::DecodeError::UserError(Box::new(e))),
-    }
-}
-
-fn decode_optional_datetime_rfc3339(
-    val: calldata::Value,
-) -> std::result::Result<Option<chrono::DateTime<chrono::Utc>>, calldata::codec::DecodeError> {
-    match val {
-        calldata::Value::Null => Ok(None),
-        val => decode_datetime_rfc3339(val).map(Some),
-    }
-}
-
-fn encode_optional_datetime_rfc3339<W: calldata::Writer>(
-    dt: &Option<chrono::DateTime<chrono::Utc>>,
-    enc: &mut calldata::Encoder<W>,
-) -> std::result::Result<(), W::Error> {
-    use chrono::SecondsFormat;
-    match dt {
-        Some(dt) => enc.push_str(&dt.to_rfc3339_opts(SecondsFormat::AutoSi, true)),
-        None => enc.push_null(),
-    }
 }
 
 fn default_extra_args() -> Vec<String> {
@@ -956,7 +921,6 @@ pub struct UnsafeOverrides {
     pub allow_two_workers: Option<bool>,
 }
 
-#[serde_as]
 #[derive(
     Clone,
     serde::Serialize,
@@ -984,13 +948,13 @@ pub struct Request {
     pub bucket_totals: std::collections::BTreeMap<String, num_bigint::BigInt>,
     pub host_data: String,
     /// Deprecated; when present, must equal `message.transaction_timestamp`
-    #[serde(default)]
+    #[serde(default, with = "calldata::codec::rfc3339::serde::option")]
     #[calldata(
         default = Option::default,
-        serialize_with = encode_optional_datetime_rfc3339,
-        deserialize_with = decode_optional_datetime_rfc3339
+        serialize_with = calldata::codec::rfc3339::option::serialize,
+        deserialize_with = calldata::codec::rfc3339::option::deserialize
     )]
-    pub timestamp: Option<chrono::DateTime<chrono::Utc>>,
+    pub timestamp: Option<jiff::Timestamp>,
     pub host: String,
     #[serde(default)]
     #[calldata(default = default_extra_args)]
@@ -1784,7 +1748,7 @@ async fn finish_execution(
     let exit_code = status.and_then(|status| status.code()).map(i64::from);
 
     let done = SingleGenVMContextDone {
-        finished_at: chrono::Utc::now(),
+        finished_at: jiff::Timestamp::now(),
         stdout: stdout.to_owned(),
         stderr: stderr.to_owned(),
         genvm_log,
@@ -1966,7 +1930,7 @@ fn check_stdin_write(
     }
 }
 
-fn strict_deadline_from_request(req: &Request) -> chrono::DateTime<chrono::Utc> {
+fn strict_deadline_from_request(req: &Request) -> jiff::Timestamp {
     let max = std::time::Duration::from_secs(24 * 60 * 60);
     let duration = req
         .deadline
@@ -1975,8 +1939,8 @@ fn strict_deadline_from_request(req: &Request) -> chrono::DateTime<chrono::Utc> 
             std::time::Duration::from_secs(req.max_execution_minutes.min(24 * 60) * 60)
         })
         .min(max);
-    chrono::Utc::now()
-        + chrono::Duration::from_std(duration).unwrap_or_else(|_| chrono::Duration::hours(24))
+    jiff::Timestamp::now()
+        + jiff::SignedDuration::try_from(duration).unwrap_or(jiff::SignedDuration::from_hours(24))
 }
 
 fn execution_data_from_request(
@@ -2128,7 +2092,7 @@ impl Ctx {
                 host_genvm_id: req.host_genvm_id.clone(),
                 process_handle: tokio::sync::Mutex::new(None),
                 spawned: AtomicBool::new(false),
-                started_at: chrono::Utc::now(),
+                started_at: jiff::Timestamp::now(),
                 strict_deadline: strict_deadline_from_request(&req),
 
                 stdout_stderr_sem: Arc::new(tokio::sync::Semaphore::new(2)),
@@ -2661,8 +2625,8 @@ async fn run_genvm_process(
         if let Some(mut stdin_task) = stdin_task {
             let deadline_duration = exec_ctx
                 .strict_deadline
-                .signed_duration_since(chrono::Utc::now())
-                .to_std()
+                .duration_since(jiff::Timestamp::now())
+                .try_into()
                 .unwrap_or_default();
             let stop =
                 wait_for_process_stop(&exec_ctx, caller_stream.as_deref(), deadline_duration);
@@ -2736,8 +2700,8 @@ async fn run_genvm_process(
 
         let deadline_duration = exec_ctx
             .strict_deadline
-            .signed_duration_since(chrono::Utc::now())
-            .to_std()
+            .duration_since(jiff::Timestamp::now())
+            .try_into()
             .unwrap_or_default();
         let mut child = if is_top_level {
             let mut stored_child = exec_ctx.process_handle.lock().await;

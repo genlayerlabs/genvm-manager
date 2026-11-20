@@ -777,7 +777,8 @@ components:
         - `integer` is a calldata number, never a decimal string
         - `format: binary` is calldata bytes
         - `Address` is a calldata address, never a hex string
-        - `date-time` is an RFC 3339 string
+        - `date-time` is an RFC 3339 string; a leap second or an instant after
+          9999-12-30T22:00:00.999999999Z is out of range
         - `format: uint256` is a number in `[0, 2^256)`
 
         A value of another kind or an unknown key fails decoding, which the
