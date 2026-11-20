@@ -1,0 +1,52 @@
+[
+  {
+    "type": "enum",
+    "repr": "u8",
+    "name": "methods",
+    "values": {
+      "storage_read": 0,
+      "consume_time_fee_gen_wei": 1,
+      "external_call": 2,
+      "get_balance_gen_wei": 3,
+      "get_remaining_time_fee_gen_wei": 4,
+      "notify_nondet_disagreement": 5,
+      "consume_result": 6,
+      "resolve_call_contract_executor": 7,
+      "run_nested": 8
+    }
+  },
+  {
+    "type": "enum",
+    "repr": "u8",
+    "name": "result_code",
+    "values": {
+      "return": 0,
+      "user_error": 1,
+      "vm_error": 2,
+      "internal_error": 3,
+      "fatal_vm_error": 4
+    }
+  },
+  {
+    "type": "enum",
+    "repr": "u8",
+    "name": "errors",
+    "values": {
+      "ok": 0,
+      "evm_reverted": 1,
+      "forbidden": 2
+    }
+  },
+  {
+    "type": "const",
+    "name": "current_major",
+    "repr": "u8",
+    "value": 0
+  },
+    {
+    "type": "const",
+    "name": "current_major_str",
+    "repr": "str",
+    "value": "v0.0.0"
+  }
+]

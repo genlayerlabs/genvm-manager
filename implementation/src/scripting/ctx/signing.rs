@@ -52,6 +52,7 @@ impl Request {
             &ctx.sign_vars,
             &ctx.sign_url,
             &genvm_common::templater::HASH_UNFOLDER_RE,
+            usize::MAX,
         )
         .map_err(|e| ModuleError {
             causes: vec!["SIGN_URL_PATCH_FAILED".to_owned()],
@@ -76,6 +77,7 @@ impl Request {
                 &ctx.sign_vars,
                 v,
                 &genvm_common::templater::HASH_UNFOLDER_RE,
+                usize::MAX,
             )
             .map_err(|e| ModuleError {
                 causes: vec!["SIGN_URL_PATCH_FAILED".to_owned()],
@@ -255,7 +257,7 @@ impl Request {
             writeln!(signature_value, "\"{c}\": {value}").map_err(map_fmt_to_fatal)?;
         }
 
-        let created = chrono::Utc::now().timestamp();
+        let created = jiff::Timestamp::now().as_second();
         write!(
             signature_params,
             ");created={created};alg=\"{SIGN_ALGORITHM}\""

@@ -17,11 +17,11 @@ forms (see the ``runner-id`` definition in the runner.json schema):
 - ``<human-readable-id>:<hash>`` — a packaged runner. ``human-readable-id`` is
   provided for convenience; ``hash`` is a hash of its contents (see `Hash Format`_).
 - ``contract`` — the runner of the contract currently being executed.
-- ``chain:<address>[:<a|f>[:<slot>]]`` — a runner code blob read from a storage
-  slot of an arbitrary contract (``a`` = accepted, ``f`` = finalized). ``<address>``
+- ``chain:<address>[:<d|f>[:<slot>]]`` — a runner code blob read from a storage
+  slot of an arbitrary contract (``d`` = decided, ``f`` = finalized). ``<address>``
   is a ``0x`` 20 byte hex address and ``<slot>`` is a :term:`SlotID` encoded with
-  :doc:`../../04-contract-interface/06-gvm32`. Both ``<a|f>`` and ``<slot>`` are
-  optional: ``<a|f>`` defaults to ``a`` and ``<slot>`` to the target contract's
+  :doc:`../04-contract-interface/06-gvm32`. Both ``<d|f>`` and ``<slot>`` are
+  optional: ``<d|f>`` defaults to ``d`` and ``<slot>`` to the target contract's
   root code slot.
 - ``custom:<hash>`` — a runner registered at runtime via the ``RegisterRunner``
   ``gl_call``, looked up by its hash.
@@ -29,35 +29,130 @@ forms (see the ``runner-id`` definition in the runner.json schema):
 ``contract``, ``chain`` and ``custom`` are reserved prefixes and cannot be used
 as human-readable ids.
 
+.. _gvm-def-chain-runner-state:
+
+``chain:`` State Visibility
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A ``chain:`` id is code, but its resolution is an ordinary
+:ref:`gvm-def-det-mode` storage read and is subject to the same rules:
+
+#. The read resolves against the state the executing transaction was fixed to
+   by consensus, not against whatever a node's chain tip happens to be. Every
+   validator of the transaction therefore reads the same octets, whichever
+   :term:`Host` serves them.
+#. ``f`` (finalized) reads the state at the last finalized block; ``d``
+   (decided, the default) reads the decided state — the same view a
+   read-only :ref:`gvm-def-gl-call-call-contract` child observes by default
+   (see :ref:`contract-execution-flow`). Neither view includes the executing
+   transaction's own uncommitted writes, so a contract cannot deploy code and
+   load it as a runner in the same transaction.
+#. The choice between the two is part of the id string and thus part of the
+   runner graph, never a node-local default.
+
+A resolution that finds no code, or code that is not a valid :term:`runner`,
+fails like any other malformed runner rather than falling back to another view.
+
+.. _gvm-def-runner-availability:
+
+Packaged Runner Availability
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+An executor ships a fixed set of packaged runners. Each executor line declares
+the runners it ships, and each declaration is gated by a
+:ref:`fork <gvm-def-fork>`, by default that line's own:
+
+#. A ``<human-readable-id>:<hash>`` the executor does not ship fails as a
+   malformed runner
+#. One that no line up to the running one declares under an active fork fails
+   the same way, so executors that ship it agree with those that do not until
+   such a fork activates
+
 Hash Format
 ~~~~~~~~~~~
 
-``hash`` is the SHA3 256-bit hash of the runner's contents, encoded with
-:doc:`../../04-contract-interface/06-gvm32` (GVM32, a lowercase Crockford
+``hash`` is a 256-bit hash of the runner's contents, encoded with
+:doc:`../04-contract-interface/06-gvm32` (GVM32, a lowercase Crockford
 Base32). This keeps it free of filesystem-illegal characters and
 case-insensitive.
+
+The algorithm differs per id form:
+
+- ``<human-readable-id>:<hash>`` — SHA-256, matching the hash the runner is
+  packaged and distributed under.
+- ``custom:<hash>`` — SHA3-256 of the registered blob.
 
 Runner Layout
 -------------
 
-For any of the layouts a file list is constructed. Each file in this name has:
+For any of the layouts a file list is constructed. Each entry name:
 
-- a name
+- Must not be empty or start with ``/``
+- Must use ``/`` as the path separator; backslashes are forbidden
+- Must not contain empty, ``.`` or ``..`` path components
 
-    #. it must not start with ``/``
-    #. path separator must be ``/``
-    #. it must not contain ``.`` or ``..`` path components
-
-- contents (raw bytes slice)
+Each file also has contents as a raw byte slice
 
 1. ZIP Archive
 ~~~~~~~~~~~~~~
 
-Used if runner bytes represent a ZIP archive
+A ZIP archive is a structured :term:`runner` package
 
-- If successful, extracts the archive contents and processes it as a structured :term:`runner` package
-- This format supports complex :term:`runners <Runner>` with multiple files, dependencies, and configuration
-- Only allowed compression is ``stored`` (no compression)
+From v0.4, used if runner bytes represent a ZIP archive: the last end of central
+directory signature with room for a whole record starts a record whose comment
+runs exactly to the end, that record names disk 0 and equal entry counts, and
+the central directory ends right at the record and consists of exactly that many
+entries, each with a local header offset before the directory. Anything else,
+ZIP64 included, is not a ZIP and the next layout is tried, even if an earlier
+end record would qualify
+
+A ZIP archive with a comment is malformed. Otherwise, once its metadata cost
+fits (see :ref:`runner load charges <gvm-def-runner-load-charge>`), it is
+malformed unless:
+
+- No entry has a comment
+- Entry names are printable ASCII, ``0x20`` to ``0x7e``, follow the rules above,
+  do not end with ``/`` and are unique
+- Every entry is ``stored`` (no compression), with equal compressed and
+  uncompressed sizes, ZIP version needed 2.0, disk 0, no internal attributes,
+  no general-purpose flags, no extra fields, and external attributes with no
+  DOS bits and a Unix file type that is either absent or a regular file, with
+  any permissions
+- The local header agrees with the central directory on the compression method,
+  version needed, time, date, flags, name, CRC-32 and sizes
+- Entries tile every byte before the central directory in directory order: the
+  first local header is at offset 0, and each next one starts where the
+  previous entry's data ends
+- No file name is also a directory of another, as ``a`` is of ``a/b``
+- Each file's contents match its declared CRC-32
+
+Up to v0.3, used if runner bytes represent a ZIP archive, which is malformed
+unless:
+
+- Every entry name follows the rules above, and does not end with ``/`` unless
+  the entry is a directory
+- Compression is ``stored`` (no compression), declared by both the central
+  directory and the entry's local header
+- A stored entry's compressed and uncompressed sizes are equal
+- A stored file's contents match its declared CRC-32
+- The local header agrees with the central directory on the entry name, and,
+  unless the entry has a data descriptor (general-purpose flag bit 3), on the
+  CRC-32 and the sizes. The local name must be valid UTF-8 and equal, as raw
+  bytes, to the decoded central name: the Unicode Path extra field if present,
+  otherwise the name as UTF-8 with general-purpose flag bit 11 and as CP437
+  without it
+- No entry is encrypted (general-purpose flag bit 0)
+- An entry ending with ``/`` is a directory; its size and CRC-32 are 0, and it
+  is omitted from the file list
+- If several entries share a name, the file list holds the last of them
+- Once every rule above holds for every entry and the metadata cost is charged,
+  the archive is also checked against the following, in order:
+
+  #. The local header and the central directory carry the same general-purpose flags
+  #. No 2 entries overlap, directories included: an entry spans its local
+     header through the end of its data
+  #. No file name is also a directory: neither of another file, as ``a`` is of
+     ``a/b``, nor of a directory entry, as ``a`` is of ``a/`` or ``a/b/``
 
 2. Raw WASM
 ~~~~~~~~~~~
@@ -71,6 +166,11 @@ Creates a minimal :term:`runner` configuration
     version = v0.1.0
     runner.json = { "StartWasm": "file" }
     file = # source bytes
+
+Both defaults can be overridden by the module itself, through custom sections:
+``genvm.version`` supplies the version string and ``genvm.runner.json`` the
+whole ``runner.json``. This is how a single wasm file declares dependencies
+without being repackaged as a ZIP
 
 3. Text-based
 ~~~~~~~~~~~~~
@@ -128,10 +228,29 @@ Schema is available in :doc:`../appendix/runner-schema`\.
 
 It must be a valid JSON object with described below structure
 
+Each action object accepts exactly the fields shown below. The top-level object may also contain a string ``$schema``
+annotation
+
+``Seq``, ``When`` and ``With`` nest actions. Nesting deeper than
+:ref:`gvm-def-consts-value-runner-limits-init-action-depth`, or a NUL octet in
+any action string, is rejected with
+:ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-malformed`\.
+
 AddEnv
 ~~~~~~
 
 Adds an environment variable to the GenVM environment with variable interpolation support using ``${}`` syntax.
+
+The name is at most :ref:`gvm-def-consts-value-runner-limits-env-name-len`
+octets and consists of ASCII characters other than ``=``, whitespace and control
+characters. The value after interpolation is at most
+:ref:`gvm-def-consts-value-runner-limits-env-value-len` octets. Violating either
+is rejected with
+:ref:`gvm-def-str-trie-value-vm-error-invalid-contract-runner-malformed`\.
+
+The interpolated value's length in octets is charged as
+:ref:`gvm-def-ram-consumption`; exceeding the budget results in
+:ref:`gvm-def-str-trie-value-vm-error-out-of-memory`\.
 
 Example
 ^^^^^^^
@@ -262,7 +381,7 @@ Conditionally executes an action based on WebAssembly execution mode.
 Properties
 ^^^^^^^^^^
 
-- ``cond``: WebAssembly mode, either ``det`` (deterministic) or ``nondet`` (non-deterministic)
+- ``cond``: WebAssembly mode, either ``det`` (deterministic) or ``!det`` (non-deterministic)
 - ``action``: Action to execute when condition is met
 
 Example
@@ -298,8 +417,74 @@ Startup
 -------
 
 Runner actions are executed left-recursively, until :ref:`gvm-def-start-wasm` is reached.
-If it was not reached, it will result in a :ref:`gvm-def-vm-error` with ``error_inval`` code.
+If it was not reached, it will result in a :ref:`gvm-def-vm-error` with
+``invalid_contract runner malformed`` code.
 
-Loading a :term:`runner` implies :ref:`gvm-def-ram-consumption` of its size in octets.
-Each loading in a single contract, but different :term:`sub-VM` instances, leads to additional RAM consumption.
-:ref:`gvm-def-det-mode` and :ref:`gvm-def-non-det-mode` have separate RAM limits.
+.. _gvm-def-runner-load-charge:
+
+Loading a :term:`runner` goes through a single **load action**, defined per
+:term:`sub-VM`. Each :term:`sub-VM` owns a **loaded-runner set**: the runner
+ids it has already loaded. The load action for an id is:
+
+- if the id is already in the :term:`sub-VM`'s loaded set, nothing is charged;
+- otherwise, when the loaded set already holds
+  :ref:`gvm-def-consts-value-top-limits-max-runners` ids, the load fails with
+  :ref:`gvm-def-str-trie-value-vm-error-out-of-memory` and nothing is charged —
+  a count cap is refused exactly like an exhausted RAM budget;
+- otherwise :ref:`gvm-def-consts-value-memory-limiter-consts-runner-load-cost`
+  plus the runner's raw size and metadata cost in octets is charged as
+  :ref:`gvm-def-ram-consumption` against the :term:`sub-VM`'s RAM budget, and
+  the id is then added to the loaded set.
+
+The raw size is the length of the runner's code or archive bytes. For a ZIP
+runner, the metadata cost is the sum of
+:ref:`gvm-def-consts-value-memory-limiter-consts-zip-file-cost` plus the name
+length in octets for each entry:
+
+#. From v0.4, each central directory entry counts. The cost must fit after the
+   archive comment is checked and before any entry is, so an archive without a
+   comment that is over the budget is out of memory even if an entry is also
+   malformed
+#. Up to v0.3, each distinct non-directory entry counts, with the UTF-8 name
+   length; repeated names count once, using the last entry. It is charged per
+   entry, in central-directory order, after that entry's checks
+
+Non-ZIP runners have no additional metadata charge. Insufficient RAM for either charge exits the :term:`sub-VM`
+with :ref:`gvm-def-str-trie-value-vm-error-out-of-memory`
+
+Whether the executor has the archive cached internally is not observable: the
+charge depends only on the :term:`sub-VM`'s own load history, never on cache
+state. The same runner loaded by different :term:`sub-VM` instances is charged
+once per :term:`sub-VM`. :ref:`gvm-def-det-mode` and
+:ref:`gvm-def-non-det-mode` have separate RAM budgets and separate loaded sets.
+
+A load action occurs when:
+
+- spawning the :term:`sub-VM`'s main (entry-point) runner;
+- resolving a ``Depends`` or ``With`` action in a ``runner.json``;
+- executing the ``MapFile`` ``gl_call``;
+- registering a runner via the ``RegisterRunner`` ``gl_call``;
+- receiving a custom-runner grant at :term:`sub-VM` creation
+  (see :ref:`gvm-meta-property-custom-runners`).
+
+For a ``chain:`` runner the raw size is the length of the code blob read from
+storage. The same content has the same load charge regardless of its source;
+there is no doubled charge and no separate fee component
+
+.. _gvm-def-custom-runner-visibility:
+
+Custom :term:`Runner` Loading
+-----------------------------
+
+A ``custom:<hash>`` id resolves *iff* ``<hash>`` is in the resolving
+:term:`sub-VM`'s own loaded set; otherwise loading it fails with a
+:ref:`gvm-def-vm-error`. There is no separate registry lookup at resolution — a
+:term:`sub-VM` can use exactly the custom runners it has loaded, whether by
+registering them itself via the ``RegisterRunner`` ``gl_call`` or by receiving
+grants from its parent at creation time
+(:ref:`gvm-meta-property-custom-runners`).
+
+Registered content lives while at least one :term:`sub-VM` has it loaded; once
+no loaded set holds it, it is freed. Registering the same ``code`` again while
+it is still loaded somewhere is deduplicated by hash; re-registering it after it
+has been freed re-parses and charges again.

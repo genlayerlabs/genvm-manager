@@ -1,3 +1,5 @@
+.. _gvm-def-gvm32:
+
 GVM32 (Base32)
 ==============
 
@@ -65,4 +67,4 @@ Usage
 - **Custom runner ids** — ``custom:<hash>`` where ``<hash>`` is the GVM32 encoding
   of the SHA3-256 of the registered code.
 - **Slot ids** — a :term:`SlotID` is rendered in GVM32, including the ``<slot>``
-  component of a ``chain:<address>:<a|f>:<slot>`` runner id.
+  component of a ``chain:<address>:<d|f>:<slot>`` runner id.

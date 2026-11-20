@@ -1,0 +1,17 @@
+{
+   "foo": [
+        "bar",
+        "baz\n\\{",
+        -0,
+        1e20,
+        null,
+        true,
+   [1, 2, 3]
+    ],
+    "barrrrrrrrrr": [ ],
+    "brrrr": [ ],
+    "bar": [
+        "русские mbbbbbbbbb",
+        "mbbbbbbbbbbbbbbaz\t\\uabbbbb"
+    ]
+}

@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+
+# NOTE: This script is a wrapper for the actual post-install script.
+
+import subprocess
+import sys
+from pathlib import Path
+
+genvm_root_dir = Path(__file__).parent.parent
+
+sys.exit(
+	subprocess.run(
+		[
+			sys.executable,
+			'-B',
+			genvm_root_dir.joinpath('lib', 'python', 'post-install', '__main__.py'),
+			*sys.argv[1:],
+		],
+	).returncode
+)

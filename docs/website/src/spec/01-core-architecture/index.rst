@@ -8,3 +8,4 @@ Overview of GenVM's core architectural components and design patterns.
 
    01-components
    02-vm
+   03-versioning
