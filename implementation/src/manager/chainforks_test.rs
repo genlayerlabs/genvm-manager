@@ -3,8 +3,8 @@ use super::*;
 const LINE: &str = "genvm/executor/v0.3";
 const FIX: &str = "genvm/executor/v0.3/fix";
 
-fn at(s: &str) -> chrono::DateTime<chrono::Utc> {
-    s.parse().unwrap()
+fn at(s: &str) -> jiff::Timestamp {
+    calldata::codec::rfc3339::parse(s).unwrap()
 }
 
 /// A line and a behaviour fork inside it, scheduled on network `net`.
@@ -189,7 +189,7 @@ fn a_date_must_be_rfc3339_or_a_builtin() {
 }
 
 #[test]
-fn dates_chrono_alone_would_accept_are_rejected() {
+fn dates_outside_the_strict_activation_form_are_rejected() {
     for date in [
         "2025-01-01t00:00:00Z",
         "2025-01-01 00:00:00Z",

@@ -9,8 +9,8 @@ default = []
 [dependencies]
 anyhow = "1.0.97"
 bytes = { version = "1.11.0", features = ["serde"] }
-chrono = "0.4.45"
 genlayer_calldata = { path = "../../executors/v0.4.x/executor/crates/calldata" }
+jiff = { version = "0.2.39", default-features = false, features = ["std"] }
 num-bigint = "0.4"
 num-traits = "0.2"
 primitive-types = { version = "0.13", features = ["impl-serde"] }
