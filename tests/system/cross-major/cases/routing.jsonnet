@@ -9,7 +9,6 @@ local deploy(slug, address, code) = {
 	code: '${jsonnetDir}/../assets/' + code,
 	message: message + {
 		contract_address: address,
-		is_init: true,
 	},
 	calldata: '{}',
 	modes: 'l',

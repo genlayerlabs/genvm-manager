@@ -32,7 +32,6 @@ FAKE_MESSAGE: base_host.Message = {
 	'signer_address': Address('0x' + '01' * 20),
 	'chain_id': 0,
 	'value': 0,
-	'is_init': True,
 }
 
 
@@ -220,7 +219,6 @@ class PermitsTestStep(genvm_tool.tests.exec.step.Python):
 			'debug_mode': 'unsafe',
 			'host_data': '{"node_address":"test","tx_id":"test"}',
 			'max_execution_minutes': 20,
-			'timestamp': '2024-11-26T06:42:42.424242Z',
 			'host': 'unix:///tmp/genvm-test-permits-socket-cancel.sock',
 			'extra_args': [],
 			'code': code,

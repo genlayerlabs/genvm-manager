@@ -378,3 +378,66 @@ fn get_forks_rejects_a_malformed_payload() {
         );
     }
 }
+
+fn run_payload(edit: impl FnOnce(&mut calldata::Map<calldata::Value>)) -> Vec<u8> {
+    let req: run::Request = serde_json::from_value(serde_json::json!({
+        "selector": genvm_modules_interfaces::ExecutorSelector::MajorOverride { major: 0 },
+        "message": genvm_modules_interfaces::MessageData {
+            contract_address: calldata::Address::from([1; 20]),
+            sender_address: calldata::Address::from([2; 20]),
+            origin_address: calldata::Address::from([2; 20]),
+            signer_address: calldata::Address::from([2; 20]),
+            chain_id: 0.into(),
+            value: 0.into(),
+            transaction_timestamp: jiff::Timestamp::UNIX_EPOCH,
+        },
+        "create2": genvm_modules_interfaces::Create2Data {
+            deployer: calldata::Address::from([0; 20]),
+            code_hash: [0; 32],
+        },
+        "is_sync": false,
+        "bucket_totals": {},
+        "host_data": "",
+        "host": "",
+        "calldata": [],
+        "initial_time_units_allocation": 0,
+    }))
+    .unwrap();
+    let calldata::Value::Map(mut req) = calldata::to_value(&req) else {
+        unreachable!("a request encodes as a map");
+    };
+    edit(&mut req);
+    calldata::encode_obj(&calldata::Value::Map(
+        [("run".to_owned(), calldata::Value::Map(req))].into(),
+    ))
+}
+
+#[test]
+fn run_ignores_the_keys_older_hosts_send() {
+    let expected = calldata::to_value(&decode_run_payload(&run_payload(|_| {})).unwrap());
+    let legacy = run_payload(|req| {
+        req.insert(
+            "timestamp".to_owned(),
+            calldata::Value::Str("2024-11-26T06:42:42.424242Z".to_owned()),
+        );
+        let Some(calldata::Value::Map(message)) = req.get_mut("message") else {
+            unreachable!("message encodes as a map");
+        };
+        message.insert("is_init".to_owned(), calldata::Value::Bool(true));
+    });
+    assert_eq!(
+        calldata::to_value(&decode_run_payload(&legacy).unwrap()),
+        expected
+    );
+}
+
+#[test]
+fn run_rejects_other_unknown_keys() {
+    let payload = run_payload(|req| {
+        req.insert("is_init".to_owned(), calldata::Value::Bool(true));
+    });
+    let Err(err) = decode_run_payload(&payload) else {
+        panic!("a top-level is_init decoded");
+    };
+    assert!(err.to_string().contains("unknown field `is_init`"), "{err}");
+}

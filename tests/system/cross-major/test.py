@@ -13,7 +13,6 @@ import genvm_tool.tests.stage.collection
 import origin.calldata as gvm_calldata
 from gvm_extra import cross_major, wat2wasm
 from gvm_extra.cross_major import (
-	TIMESTAMP,
 	assert_hashes_agree,
 	encode_call,
 	encode_leader_public_data,
@@ -237,13 +236,12 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 	) -> dict[str, typing.Any]:
 		return {
 			'selector': {'kind': 'major', 'major': base_host.UNDEPLOYED_MAJOR},
-			'message': message(address, is_init=False),
+			'message': message(address),
 			'create2': base_host.DEFAULT_CREATE2,
 			'is_sync': True,
 			'debug_mode': 'unsafe',
 			'host_data': '{"node_address":"test","tx_id":"cross-major-lifecycle"}',
 			'max_execution_minutes': 20,
-			'timestamp': TIMESTAMP,
 			'host': 'unix://' + host_path,
 			'extra_args': [],
 			'code': None,
@@ -318,7 +316,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_BLOB_CALLER_V02,
 			calldata=encode_call('send', ADDR_BLOB_V03, BLOB_BYTES),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
 				self._route(3) if address == ADDR_BLOB_V03 else None
 			),
@@ -338,7 +335,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_CALLER_V03,
 			calldata=encode_call('call', ADDR_BUSY_V02),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
 				self._route(2) if address == ADDR_BUSY_V02 else None
 			),
@@ -357,7 +353,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_CALLER_V03,
 			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
 				self._route(2) if address == ADDR_CALLEE_V02 else None
 			),
@@ -374,7 +369,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 				address=address,
 				calldata=gvm_calldata.encode({}),
 				code=None,
-				is_init=False,
 				apply_changes=False,
 				is_sync=False,
 				leader_public_data=b'\xc0',
@@ -422,7 +416,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_CALLER_V03,
 			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
-			is_init=False,
 			resolve_hook=resolve,
 			apply_changes=False,
 			hook_cross_contract_calls=False,
@@ -445,7 +438,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_CALLER_V03,
 			calldata=encode_call('call', ADDR_CALLEE_V03),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda _address, _state, _major: None,
 			apply_changes=False,
 		)
@@ -455,7 +447,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_CALLER_V03,
 			calldata=encode_call('call', ADDR_CALLEE_V03),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
 				self._route(3) if address == ADDR_CALLEE_V03 else None
 			),
@@ -497,7 +488,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 				address=ADDR_STATE_CALLER_V03,
 				calldata=encode_call('call', ADDR_CALLEE_V03, final),
 				code=None,
-				is_init=False,
 				resolve_hook=resolve,
 				apply_changes=False,
 				read_log=read_log,
@@ -558,7 +548,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_CALLER_V03,
 			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
 				self._route(2) if address == ADDR_CALLEE_V02 else None
 			),
@@ -572,7 +561,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_CALLER_V03,
 			calldata=encode_call('call', ADDR_CALLEE_V02),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
 				self._route(2) if address == ADDR_CALLEE_V02 else None
 			),
@@ -605,7 +593,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=caller,
 			calldata=encode_call('call', callee),
 			code=None,
-			is_init=False,
 			resolve_hook=lambda address, _state, _major: (
 				self._route(major) if address == callee else None
 			),
@@ -636,7 +623,6 @@ class CrossMajorStep(cross_major.CrossMajorStep):
 			address=ADDR_LOOP_V02,
 			calldata=gvm_calldata.encode({}),
 			code=None,
-			is_init=False,
 			resolve_hook=resolve,
 			timeout=30,
 			# One executor process per unit of budget, so the real limit would

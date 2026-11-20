@@ -947,14 +947,6 @@ pub struct Request {
     pub max_execution_minutes: u64,
     pub bucket_totals: std::collections::BTreeMap<String, num_bigint::BigInt>,
     pub host_data: String,
-    /// Deprecated; when present, must equal `message.transaction_timestamp`
-    #[serde(default, with = "calldata::codec::rfc3339::serde::option")]
-    #[calldata(
-        default = Option::default,
-        serialize_with = calldata::codec::rfc3339::option::serialize,
-        deserialize_with = calldata::codec::rfc3339::option::deserialize
-    )]
-    pub timestamp: Option<jiff::Timestamp>,
     pub host: String,
     #[serde(default)]
     #[calldata(default = default_extra_args)]
@@ -2173,7 +2165,6 @@ impl Ctx {
             max_execution_minutes: parent_req.max_execution_minutes,
             bucket_totals: std::collections::BTreeMap::new(),
             host_data: parent_req.host_data.clone(),
-            timestamp: None,
             host: parent_req.host.clone(),
             extra_args: Vec::new(),
             calldata: envelope.calldata.clone(),
@@ -2245,11 +2236,6 @@ fn check_top_level_request(req: &Request, has_modules_lock: bool) -> anyhow::Res
             .get(1)
             .is_none_or(|data| data.is_empty()),
         "host_hello_data for manager-owned host index 1 is not allowed"
-    );
-    anyhow::ensure!(
-        req.timestamp
-            .is_none_or(|t| t == req.message.transaction_timestamp),
-        "timestamp differs from message.transaction_timestamp"
     );
     Ok(())
 }

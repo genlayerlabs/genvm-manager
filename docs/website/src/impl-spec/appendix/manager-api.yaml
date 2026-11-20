@@ -734,11 +734,6 @@ components:
           type: integer
           description: Transaction value
           example: 0
-        is_init:
-          type: boolean
-          nullable: true
-          deprecated: true
-          description: Leave out; when sent, must equal whether `code` is present
         transaction_timestamp:
           type: string
           format: date-time
@@ -782,8 +777,10 @@ components:
         - `format: uint256` is a number in `[0, 2^256)`
 
         A value of another kind or an unknown key fails decoding, which the
-        socket answers with `malformed_frame`. A required nullable property must
-        be present, possibly as null. The range and non-empty-map constraints on
+        socket answers with `malformed_frame`. The exceptions are `timestamp`
+        and `message.is_init`, which older hosts send: the manager ignores both,
+        whatever their value. A required nullable property must be present,
+        possibly as null. The range and non-empty-map constraints on
         `bucket_totals` are checked when the run starts, not at decode
       required:
         - selector
@@ -838,12 +835,6 @@ components:
           type: string
           description: JSON object carrying at least string `node_address` and `tx_id`
           example: '{"node_address":"0x00","tx_id":"0x00"}'
-        timestamp:
-          type: string
-          format: date-time
-          nullable: true
-          deprecated: true
-          description: Leave out; when sent, must equal `message.transaction_timestamp`
         host:
           type: string
           description: Address of host connection 0, `unix://<path>` or a TCP `host:port`

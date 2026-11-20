@@ -33,7 +33,6 @@ FAKE_MESSAGE: base_host.Message = {
 	'signer_address': Address('0x' + '01' * 20),
 	'chain_id': 0,
 	'value': 0,
-	'is_init': True,
 }
 
 
@@ -177,7 +176,6 @@ def _run_request(
 			'debug_mode': 'unsafe',
 			'host_data': '{"node_address":"test","tx_id":"test"}',
 			'max_execution_minutes': 20,
-			'timestamp': '2024-11-26T06:42:42.424242Z',
 			'host': 'unix://' + str(host_path),
 			'extra_args': extra_args or [],
 			'code': (root / HELLO_WORLD).read_bytes(),

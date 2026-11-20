@@ -6,9 +6,7 @@ local msg = import './message.json';
 		{
 			"vars": {},
 			"code": scriptfile,
-			"message": msg + {
-				"is_init": true,
-			},
+			"message": msg,
 			"calldata": if std.length(ctor_args) == 0 then "{}" else std.manifestJsonEx({
 				"args": ctor_args,
 			}, "    "),
