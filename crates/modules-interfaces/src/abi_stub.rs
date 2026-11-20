@@ -60,13 +60,16 @@ pub struct MessageData {
     #[calldata(default = Option::default)]
     pub is_init: Option<bool>,
     /// Transaction timestamp
-    #[serde(default = "default_transaction_timestamp")]
+    #[serde(
+        default = "default_transaction_timestamp",
+        with = "::genlayer_calldata::codec::rfc3339::serde"
+    )]
     #[calldata(
-        serialize_with = encode_transaction_timestamp_rfc3339,
-        deserialize_with = decode_transaction_timestamp_rfc3339
+        serialize_with = ::genlayer_calldata::codec::rfc3339::serialize,
+        deserialize_with = ::genlayer_calldata::codec::rfc3339::deserialize
     )]
     #[calldata(default = default_transaction_timestamp)]
-    pub transaction_timestamp: chrono::DateTime<chrono::Utc>,
+    pub transaction_timestamp: jiff::Timestamp,
 }
 
 /// Inputs of the settlement chain's CREATE2 address derivation for salted deploys
@@ -89,30 +92,6 @@ pub struct Create2Data {
     pub code_hash: [u8; 32],
 }
 
-fn decode_transaction_timestamp_rfc3339(
-    val: genlayer_calldata::Value,
-) -> Result<chrono::DateTime<chrono::Utc>, genlayer_calldata::codec::DecodeError> {
-    let genlayer_calldata::Value::Str(s) = val else {
-        return Err(genlayer_calldata::codec::DecodeError::Unexpected(
-            "expected string for transaction_timestamp",
-        ));
-    };
-    chrono::DateTime::parse_from_rfc3339(&s)
-        .map(|dt| dt.to_utc())
-        .map_err(|e| genlayer_calldata::codec::DecodeError::UserError(Box::new(e)))
-}
-
-fn encode_transaction_timestamp_rfc3339<W: genlayer_calldata::Writer>(
-    dt: &chrono::DateTime<chrono::Utc>,
-    enc: &mut genlayer_calldata::Encoder<W>,
-) -> Result<(), W::Error> {
-    use chrono::SecondsFormat;
-    let s = dt.to_rfc3339_opts(SecondsFormat::AutoSi, true);
-    enc.push_str(&s)
-}
-
-fn default_transaction_timestamp() -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::parse_from_rfc3339("2024-11-26T06:42:42.424242Z")
-        .unwrap()
-        .to_utc()
+fn default_transaction_timestamp() -> jiff::Timestamp {
+    genlayer_calldata::codec::rfc3339::parse("2024-11-26T06:42:42.424242Z").unwrap()
 }

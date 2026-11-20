@@ -61,7 +61,7 @@ fn module_request() -> Request {
         chain_id: 0.into(),
         value: 0.into(),
         is_init: None,
-        transaction_timestamp: chrono::Utc::now(),
+        transaction_timestamp: jiff::Timestamp::now(),
     };
     serde_json::from_value(serde_json::json!({
         "selector": genvm_modules_interfaces::ExecutorSelector::MajorOverride { major: 0 },
@@ -82,14 +82,14 @@ fn module_request() -> Request {
 
 fn fake_execution(
     genvm_id: GenVMId,
-    finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    finished_at: Option<jiff::Timestamp>,
 ) -> sync::DArc<SingleGenVMContext> {
     fake_execution_with_host_id(genvm_id, finished_at, None)
 }
 
 fn fake_execution_with_host_id(
     genvm_id: GenVMId,
-    finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    finished_at: Option<jiff::Timestamp>,
     host_genvm_id: Option<String>,
 ) -> sync::DArc<SingleGenVMContext> {
     let events = tokio::sync::watch::Sender::new(Snapshot::Queued {
@@ -107,8 +107,8 @@ fn fake_execution_with_host_id(
         terminal_event: tokio::sync::OnceCell::new(),
         terminal_at: tokio::sync::OnceCell::new(),
         events,
-        started_at: chrono::Utc::now(),
-        strict_deadline: chrono::Utc::now() + chrono::Duration::hours(1),
+        started_at: jiff::Timestamp::now(),
+        strict_deadline: jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
         stdout_stderr_sem: Arc::new(tokio::sync::Semaphore::new(2)),
         stdout: tokio::sync::OnceCell::new(),
         stderr: tokio::sync::OnceCell::new(),
@@ -157,7 +157,7 @@ fn top_level_timestamp_may_be_absent_or_equal() {
 #[test]
 fn top_level_timestamp_must_match_the_message() {
     let mut req = module_request();
-    req.timestamp = Some(req.message.transaction_timestamp + chrono::Duration::seconds(1));
+    req.timestamp = Some(req.message.transaction_timestamp + jiff::SignedDuration::from_secs(1));
     let err = check_top_level_request(&req, true).unwrap_err();
     assert!(
         err.to_string().contains("timestamp"),
@@ -249,7 +249,7 @@ fn ack_removes_retained_result() {
         genvm_id,
         fake_execution_with_host_id(
             genvm_id,
-            Some(chrono::Utc::now()),
+            Some(jiff::Timestamp::now()),
             Some(host_genvm_id.to_owned()),
         ),
     );
@@ -309,7 +309,7 @@ fn ack_does_not_orphan_reused_token() {
         old_id,
         fake_execution_with_host_id(
             old_id,
-            Some(chrono::Utc::now()),
+            Some(jiff::Timestamp::now()),
             Some(host_genvm_id.to_owned()),
         ),
     );
@@ -368,7 +368,7 @@ async fn ttl_expiry_removes_finished_execution() {
         genvm_id,
         fake_execution(
             genvm_id,
-            Some(chrono::Utc::now() - chrono::Duration::seconds(2)),
+            Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(2)),
         ),
     );
 
@@ -389,7 +389,7 @@ async fn gc_does_not_orphan_reused_token() {
         old_id,
         fake_execution_with_host_id(
             old_id,
-            Some(chrono::Utc::now() - chrono::Duration::seconds(2)),
+            Some(jiff::Timestamp::now() - jiff::SignedDuration::from_secs(2)),
             Some(host_genvm_id.to_owned()),
         ),
     );

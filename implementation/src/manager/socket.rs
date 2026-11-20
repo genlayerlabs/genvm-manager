@@ -179,8 +179,8 @@ struct GetArtifactRequest {
 #[derive(Decode)]
 struct GetForksRequest {
     network: String,
-    #[calldata(deserialize_with = run::decode_datetime_rfc3339)]
-    timestamp: chrono::DateTime<chrono::Utc>,
+    #[calldata(deserialize_with = calldata::codec::rfc3339::deserialize)]
+    timestamp: jiff::Timestamp,
     #[calldata(deserialize_with = calldata::codec::as_bytes::deserialize)]
     network_hash: [u8; 32],
 }
@@ -367,7 +367,7 @@ fn event_payload(event: run::Event) -> EventPayload {
             exit_code,
             consumed_result: consumed_result.map(bytes::Bytes::from),
             metrics,
-            finished_at: finished_at.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+            finished_at: calldata::codec::rfc3339::format(finished_at),
             version_major: u32::from(version_major),
             version_minor: u32::from(version_minor),
             artifact_sizes: ArtifactSizesPayload {
