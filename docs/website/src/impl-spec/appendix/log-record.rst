@@ -32,8 +32,22 @@ Fields
      - Wall-clock timestamp
    * - *anything else*
      - any
-     - Structured captures of the call site. Long strings and byte buffers are truncated
-       to a per-record byte limit, currently 128 bytes
+     - Structured captures of the call site, see `Limits`_
+
+Limits
+------
+
+1. Outside ``trace`` level, a byte buffer keeps at most 128 bytes and a string
+   at most 1024: the first and last halves, joined by ``...``. An interpolated
+   ``message`` counts as a string; a literal one is kept whole. An integer
+   wider than 256 bits is shown by its width
+2. A record dumps at most 256 values in all, nested ones, map keys and error
+   sources included. A value past that is written as ``"$TooMany"``, and a map
+   past it ends with ``"$TooMany": true``. Elements a long sequence drops spend
+   the budget too
+3. Nesting, error source chains included, stops at depth 64 with ``"$TooDeep"``;
+   a sequence of more than 128 elements keeps its first and last 64 around a
+   ``"$TooMany"``
 
 ``audience`` is a reserved key: a capture named that way fails to compile and a
 hand-built record carrying one has it dropped.
@@ -64,8 +78,8 @@ Rules that follow from the tag:
 
 1. A ``user`` record may only carry scalar captures (display, error, debug,
    id); bulk dumps such as calldata, byte buffers and serialised values are
-   rejected at compile time, and the byte limit is clamped to 128 regardless of
-   configuration
+   rejected at compile time, and both the byte and the string limit are clamped
+   to 128, ``trace`` level included
 2. Panics are ``operator``
 3. Records from a v0.2.x executor, which knows nothing about audiences, are
    tagged ``introspector`` by the manager
@@ -91,5 +105,8 @@ than by age:
    ``user`` or ``operator`` record; ``introspector`` records stay discarded
 
 The marker counts toward the cap. ``unbounded`` capture keeps every record.
+A line that is not a JSON record keeps at most 4 KiB, cut as strings are. A
+log line over 1 MiB is never parsed: only its first 1 MiB is read, and it is
+kept as such a text line.
 The manager reads each executor's log pipe to EOF before collecting the
 execution result, including on early process exit

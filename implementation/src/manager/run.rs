@@ -1065,7 +1065,12 @@ trait LogAppender {
         audience: logger::Audience,
         data: serde_json::Map<String, serde_json::Value>,
     );
-    async fn append_text(&mut self, serde_err: serde_json::Error, text: &str);
+    /// Takes a line that is not a JSON record, with why it is not
+    async fn append_text(
+        &mut self,
+        reason: &(dyn std::error::Error + Send + Sync + 'static),
+        text: &str,
+    );
 }
 
 /// Used when capture is `disabled`: forwards the executor's logs to the
@@ -1098,8 +1103,12 @@ impl LogAppender for LogAppenderToLog {
         log_with_level_into!(level, @(audience), &LoggerWithId, log:serde = data, genvm_id:id = self.0.0; "genvm log");
     }
     #[inline(always)]
-    async fn append_text(&mut self, serde_err: serde_json::Error, text: &str) {
-        log_info_into!(&LoggerWithId, error:err = serde_err, genvm_id:id = self.0.0, line = text; "genvm log raw");
+    async fn append_text(
+        &mut self,
+        reason: &(dyn std::error::Error + Send + Sync + 'static),
+        text: &str,
+    ) {
+        log_info_into!(&LoggerWithId, error:err = *reason, genvm_id:id = self.0.0, line = text; "genvm log raw");
     }
 }
 
@@ -1122,8 +1131,16 @@ impl LogAppender for LogAppenderToValue {
     }
 
     #[inline(always)]
-    async fn append_text(&mut self, _serde_err: serde_json::Error, text: &str) {
-        self.0.push(LogSinkElement::Line(text.to_owned()));
+    async fn append_text(
+        &mut self,
+        _reason: &(dyn std::error::Error + Send + Sync + 'static),
+        text: &str,
+    ) {
+        self.0
+            .push(LogSinkElement::Line(calldata::elide::format_string(
+                TEXT_LOG_LINE_KEPT,
+                format_args!("{text}"),
+            )));
     }
 }
 
@@ -1134,17 +1151,64 @@ fn take_string(map: &mut serde_json::Map<String, serde_json::Value>, key: &str) 
     }
 }
 
+/// Longest executor log line read whole; a longer one is kept as cut text
+const MAX_LOG_LINE: usize = 1 << 20;
+
+/// What a line that is not a JSON record keeps in the sink, cut as strings are
+const TEXT_LOG_LINE_KEPT: usize = 4 * 1024;
+
+/// Reads the next `\n`-terminated line into `line`, keeping at most `limit` bytes of
+/// it. Returns `None` at the end of input, otherwise whether the line was cut
+async fn read_line_capped(
+    reader: &mut (impl tokio::io::AsyncBufRead + Unpin),
+    line: &mut Vec<u8>,
+    limit: usize,
+) -> std::io::Result<Option<bool>> {
+    line.clear();
+    let mut cut = false;
+    let mut read_any = false;
+
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            return Ok(read_any.then_some(cut));
+        }
+        read_any = true;
+
+        let newline = buf.iter().position(|&b| b == b'\n');
+        let chunk = &buf[..newline.unwrap_or(buf.len())];
+        let room = limit - line.len();
+        if chunk.len() > room {
+            cut = true;
+        }
+        line.extend_from_slice(&chunk[..chunk.len().min(room)]);
+
+        let used = newline.map_or(buf.len(), |at| at + 1);
+        reader.consume(used);
+
+        if newline.is_some() {
+            return Ok(Some(cut));
+        }
+    }
+}
+
 async fn read_log_pipe<LA: LogAppender>(
     reader_fd: std::os::unix::io::OwnedFd,
     mut sink: impl DerefMut<Target = LA>,
 ) -> std::io::Result<()> {
     let file = AsyncCustomFD::new(reader_fd)?;
 
-    let reader = tokio::io::BufReader::new(file);
+    let mut reader = tokio::io::BufReader::new(file);
+    let mut raw = Vec::new();
 
-    let mut lines = reader.lines();
+    while let Some(cut) = read_line_capped(&mut reader, &mut raw, MAX_LOG_LINE).await? {
+        let line = String::from_utf8_lossy(&raw);
+        if cut {
+            let err = std::io::Error::other(format!("log line over {MAX_LOG_LINE} bytes"));
+            sink.append_text(&err, &line).await;
+            continue;
+        }
 
-    while let Some(line) = lines.next_line().await? {
         let line = line.trim();
         if line.is_empty() {
             continue;
@@ -1162,7 +1226,7 @@ async fn read_log_pipe<LA: LogAppender>(
                 sink.append_structured(level, audience, log_record).await;
             }
             Err(e) => {
-                sink.append_text(e, line).await;
+                sink.append_text(&e, line).await;
             }
         }
     }
