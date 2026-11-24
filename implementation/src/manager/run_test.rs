@@ -1048,6 +1048,81 @@ async fn safe_capture_bounds_bytes_from_rejected_gl_call_logs() {
     );
 }
 
+/// Every line of `input` as `read_line_capped` returns it, read through a buffer
+/// of `capacity` bytes so lines straddle refills
+async fn capped_lines(input: &[u8], limit: usize, capacity: usize) -> Vec<(Vec<u8>, bool)> {
+    let mut reader = tokio::io::BufReader::with_capacity(capacity, input);
+    let mut line = Vec::new();
+    let mut ret = Vec::new();
+    while let Some(cut) = read_line_capped(&mut reader, &mut line, limit)
+        .await
+        .unwrap()
+    {
+        ret.push((line.clone(), cut));
+    }
+    ret
+}
+
+#[tokio::test]
+async fn capped_lines_split_like_lines_and_cut_only_long_ones() {
+    let input = b"short\n0123456789abc\n\nno newline at the end";
+    for capacity in [1, 3, 64] {
+        assert_eq!(
+            capped_lines(input, 10, capacity).await,
+            [
+                (b"short".to_vec(), false),
+                (b"0123456789".to_vec(), true),
+                (b"".to_vec(), false),
+                (b"no newline".to_vec(), true),
+            ],
+            "capacity {capacity}"
+        );
+    }
+    assert_eq!(capped_lines(b"", 10, 4).await, []);
+    assert_eq!(
+        capped_lines(b"exactly 10\n", 10, 4).await,
+        [(b"exactly 10".to_vec(), false)]
+    );
+}
+
+#[tokio::test]
+async fn text_log_lines_are_kept_cut_and_the_next_one_still_parses() {
+    use std::io::Write;
+
+    let sink = Arc::new(LogSinkInner::new(false));
+    let (read_fd, write_fd) = create_log_pipe().unwrap();
+    let writer = tokio::task::spawn_blocking(move || {
+        let mut file = std::fs::File::from(write_fd);
+        file.write_all(&vec![b'x'; MAX_LOG_LINE * 3]).unwrap();
+        file.write_all(b"\n\xff{\"level\":\"info\"}\n").unwrap();
+        file.write_all(&vec![b'y'; MAX_LOG_LINE / 2]).unwrap();
+        writeln!(file).unwrap();
+        writeln!(
+            file,
+            r#"{{"level":"warn","audience":"user","message":"after"}}"#
+        )
+        .unwrap();
+    });
+    read_log_pipe(read_fd, &mut LogAppenderToValue(sink.clone()))
+        .await
+        .unwrap();
+    writer.await.unwrap();
+
+    let entries = sink.drain();
+    assert_eq!(entries.len(), 4, "{entries:?}");
+    for (at, filler) in [(0, "x"), (2, "y")] {
+        let line = entries[at]["line"].as_str().unwrap();
+        assert!(
+            line.len() <= TEXT_LOG_LINE_KEPT + 3,
+            "{} bytes kept",
+            line.len()
+        );
+        assert!(line.contains(&format!("{filler}...{filler}")), "{line}");
+    }
+    assert_eq!(entries[1]["line"], "\u{fffd}{\"level\":\"info\"}");
+    assert_eq!(entries[3]["message"], "after");
+}
+
 #[tokio::test]
 async fn spawn_failure_closes_the_log_pipe() {
     let (read_fd, write_fd) = create_log_pipe().unwrap();

@@ -120,7 +120,7 @@ cc = "1"
 
 [dev-dependencies]
 afl = { version = "0.15.18", features = ["no_cfg_fuzzing"] }
-genlayer_sdk = { path = "../executors/v0.3.x/executor/crates/sdk-rs", default-features = false }
+genlayer_sdk = { path = "../executors/v0.4.x/executor/crates/sdk-rs", default-features = false }
 resolv-conf = "0.7"
 
 [profile.dev]
