@@ -4,7 +4,7 @@ A deployed contract is bytes on a chain that nobody can migrate, so the
 semantics it was validated against must stay reachable for as long as it does. A
 breaking change is therefore a new executor beside the old one, with the
 contract naming the one it wants — normatively
-[`03-versioning.rst`](../../website/src/spec/01-core-architecture/03-versioning.rst),
+[`03-versioning.rst`](../../../executors/v0.4.x/docs/website/src/spec/01-core-architecture/03-versioning.rst),
 decided in [ADR-010](<../../adr/010. versions.md>)
 
 That constraint explains most of the repository's shape

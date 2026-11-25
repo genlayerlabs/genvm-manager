@@ -2,7 +2,7 @@ Consensus Mechanics
 ===================
 
 This page documents how the GenVM implementation realises the leader/validator
-execution split sketched in :doc:`/spec/01-core-architecture/02-vm`. The actual
+execution split sketched in :external+executor:doc:`spec/01-core-architecture/02-vm`. The actual
 consensus algorithm (block production, voting, finality) is owned by the node, not
 by GenVM; what follows is the GenVM-side machinery that produces the artifacts the
 node consumes.
@@ -70,7 +70,7 @@ Anti-Cheating
 -------------
 
 The error fingerprinting mechanism described in
-:doc:`/spec/01-core-architecture/02-vm` "Error Fingerprinting" is what prevents a
+:external+executor:doc:`spec/01-core-architecture/02-vm` "Error Fingerprinting" is what prevents a
 validator from voting "agree" without doing the work: any error result is bundled
 with a BLAKE3 hash of the WASM memory at the failure point, and a node fabricating
 errors without execution cannot produce a matching hash. There is no analogous

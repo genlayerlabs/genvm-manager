@@ -13,7 +13,7 @@ each executor line's docs sub-site):
 - ``POST /contract/detect-version`` returns the public-ABI ``specified_major`` that the
   node MUST persist into the contract's root-slot ``major`` field (see
   :doc:`/impl-spec/02-vm/02-version-management` and
-  :doc:`/spec/04-contract-interface/03-storage`).
+  :external+executor:doc:`spec/04-contract-interface/03-storage`).
 - ``POST /manifest/reload`` re-reads the runner manifest from disk; until reload, runner
   versions added to the JSON are not visible to the manager.
 
