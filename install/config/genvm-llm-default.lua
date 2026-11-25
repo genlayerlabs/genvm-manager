@@ -525,6 +525,19 @@ function ExecPromptTemplate(ctx, args, remaining_gen)
 		return llm.exhaust()
 	end
 
+	-- Template values (principle, criteria, leader and validator answers) reach
+	-- the model like a prompt does, so they get the same text normalization
+	-- ExecPrompt applies.
+	for key, value in pairs(args) do
+		if key ~= "template" and type(value) == "string" then
+			args[key] = lib.rs.filter_text(value, {
+				"NFKC",
+				"RmZeroWidth",
+				"NormalizeWS",
+			})
+		end
+	end
+
 	local mapped = llm.exec_prompt_template_transform(args)
 
 	return dispatch_prompt(ctx, mapped, remaining_gen)
