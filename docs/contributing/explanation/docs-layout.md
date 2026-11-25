@@ -8,7 +8,7 @@ question, never mixed on one page
 |---|---|---|
 | Tutorial | How do I get my first change landed? | `docs/contributing/tutorial/` |
 | How-To | How do I do this one task? | `docs/contributing/howto/` |
-| Reference | What exactly does it do? | `docs/website/src/spec`, `impl-spec` |
+| Reference | What exactly does it do? | `executors/<line>.x/docs/website/src/spec`, `docs/website/src/impl-spec` |
 | Explanation | Why is it like this? | `docs/contributing/explanation/` |
 
 The cut that matters in practice: **anything normative is reference**. A

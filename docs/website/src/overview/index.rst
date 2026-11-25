@@ -7,10 +7,10 @@ Overview
    key-concepts
    glossary
 
-Executor lines
+Executor Lines
 --------------
 
-Each executor line ships its own docs (the Python SDK reference and runner
-versions) as a standalone sub-site:
+This manager ships the following executors, each with its own specification,
+Python SDK guides and runner list:
 
 .. include:: executor-lines_generated.rst

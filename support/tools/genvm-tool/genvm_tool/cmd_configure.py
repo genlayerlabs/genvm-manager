@@ -329,16 +329,14 @@ def main(ctx: common.Context, args) -> int:
 		source_dir / 'docs/website/src/impl-spec/appendix/manager-socket-consts.rst'
 	)
 	public_abi_py = source_dir / 'tests/runner/origin/public_abi.py'
-	constants_rst = source_dir / 'docs/website/src/spec/appendix/constants.rst'
-	internal_constants_rst = (
-		source_dir / 'docs/website/src/spec/appendix/internal-constants.rst'
-	)
+	# The spec lives in the line it specifies
+	spec_appendix = primary_exec_root / 'docs/website/src/spec/appendix'
+	constants_rst = spec_appendix / 'constants.rst'
+	internal_constants_rst = spec_appendix / 'internal-constants.rst'
 	# Public-ABI constants staged for a future release: documented in their own
 	# appendix page so the spec can reference them, without feeding the
 	# runner-hashed `public_abi.py`. Empty while nothing is staged.
-	constants_pending_rst = (
-		source_dir / 'docs/website/src/spec/appendix/constants-pending.rst'
-	)
+	constants_pending_rst = spec_appendix / 'constants-pending.rst'
 
 	n.codegen(host_fns_rs, 'rust', shared_data / 'host-fns.json')
 	n.codegen(host_fns_py, 'python', shared_data / 'host-fns.json')

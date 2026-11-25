@@ -1,0 +1,6 @@
+<nav class="gl-site-nav" aria-label="Site">
+  {%- for label, href in gl_crumbs %}
+  <a class="gl-site-nav__crumb" href="{{ pathto('', 1) }}{{ href }}index.html">{{ label }}</a>
+  {%- endfor %}
+  <a class="gl-site-nav__all" href="{{ pathto('', 1) }}{{ gl_version_root }}index.html">All parts</a>
+</nav>
