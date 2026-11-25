@@ -32,9 +32,9 @@ Per line, with the manager-global outputs taken from the primary line only:
 
 | Data | Per-line output | From the primary line only |
 |---|---|---|
-| `public-abi.json` | `executor/crates/sdk-rs/src/abi/consts.rs`, `runners/genlayer-py-std/src/genlayer/vm/public_abi.py` | `tests/runner/origin/public_abi.py`, `docs/website/src/spec/appendix/constants.rst` |
-| `public-abi-pending.json` | `executor/crates/common/src/public_abi_pending.rs` | `docs/website/src/spec/appendix/constants-pending.rst` |
-| `internal-constants.json` | `executor/crates/common/src/internal_constants.rs` | `docs/website/src/spec/appendix/internal-constants.rst` |
+| `public-abi.json` | `executor/crates/sdk-rs/src/abi/consts.rs`, `runners/genlayer-py-std/src/genlayer/vm/public_abi.py` | `tests/runner/origin/public_abi.py`, `executors/<line>.x/docs/website/src/spec/appendix/constants.rst` |
+| `public-abi-pending.json` | `executor/crates/common/src/public_abi_pending.rs` | `executors/<line>.x/docs/website/src/spec/appendix/constants-pending.rst` |
+| `internal-constants.json` | `executor/crates/common/src/internal_constants.rs` | `executors/<line>.x/docs/website/src/spec/appendix/internal-constants.rst` |
 
 ## Suite Layout
 

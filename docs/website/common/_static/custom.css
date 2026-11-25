@@ -41,6 +41,42 @@ html[data-theme="dark"] {
   max-height: 28px;
 }
 
+/* Its `col-lg-3` caps it at a quarter of the header, too narrow for the logo,
+   title and version switcher together */
+.bd-header .navbar-header-items__start {
+  width: auto;
+  gap: 1rem;
+}
+
+/* Keep the header on 1 row down to where the theme collapses it into a menu
+   (960px): drop the search field's text and tighten the gaps */
+.bd-header .navbar-header-items {
+  flex-wrap: nowrap;
+}
+
+@media (max-width: 1320px) {
+  .bd-header .search-button-field .search-button__default-text,
+  .bd-header .search-button-field .search-button__kbd-shortcut {
+    display: none;
+  }
+
+  .bd-header .navbar-header-items__center,
+  .bd-header .navbar-header-items__end {
+    column-gap: 0.6rem;
+  }
+
+  .bd-header .navbar-nav .nav-link {
+    white-space: nowrap;
+  }
+}
+
+/* Only GitHub stays among the icon links just above the menu breakpoint */
+@media (max-width: 1100px) {
+  .bd-header .navbar-icon-links .nav-item:not(:first-child) {
+    display: none;
+  }
+}
+
 /* ── Headings — use text color, not brand color ── */
 h1, h2, h3, h4, h5, h6 {
   color: var(--pst-color-primary);
@@ -102,4 +138,60 @@ details summary:hover {
 
 .navbar-icon-links .nav-link {
   padding: 0.25rem 0.35rem;
+}
+
+/* ── Site navigation: manager / executor / runner crumbs + catalog ── */
+.gl-site-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.25rem 0.75rem;
+  font-size: 0.85rem;
+}
+
+.gl-site-nav a {
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.gl-site-nav a:hover {
+  text-decoration: underline;
+}
+
+.gl-site-nav__crumb + .gl-site-nav__crumb::before,
+.gl-site-nav__all::before {
+  content: "·";
+  display: inline-block;
+  margin-right: 0.75rem;
+  color: var(--pst-color-text-muted);
+}
+
+.gl-site-nav__all {
+  color: var(--pst-color-text-muted);
+}
+
+/* Latest hash of a runner, colored by its executor line status */
+.gl-latest {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 0.6rem;
+  font-size: 0.75em;
+  font-weight: 600;
+  white-space: nowrap;
+  color: #fff;
+  background: #6b6b6b;
+}
+
+.gl-latest.current {
+  background: #1a7f37;
+}
+
+.gl-latest.maintained {
+  color: #2b2b2b;
+  background: #e3b341;
+}
+
+.gl-latest.replay-only {
+  background: #cf222e;
 }
