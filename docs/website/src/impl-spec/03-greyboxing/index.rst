@@ -105,6 +105,9 @@ LLM module:
   ``EqNonComparativeLeader`` / ``EqNonComparativeValidator`` templates. The template
   name is in ``args.template``; the remaining keys are the template's named slots
   (e.g. ``leader_answer``, ``validator_answer``, ``principle`` for ``EqComparative``).
+  The default script runs every string slot through the same text filters
+  ``ExecPrompt`` applies to its prompt (NFKC, zero-width removal, whitespace
+  normalization) before filling the template.
 
 Web module:
 
