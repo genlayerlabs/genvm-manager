@@ -156,7 +156,7 @@ Template Contracts
 ------------------
 
 The three template entry points feed into
-:doc:`/spec/02-execution-environment/03-wasi_genlayer_sdk/02-gl_call`
+:external+executor:doc:`spec/02-execution-environment/03-wasi_genlayer_sdk/02-gl_call`
 ``ExecPromptTemplate``. Their wire-level payload is fixed by the spec; the template
 body strings interpolated into the LLM prompt come from the ``prompt_templates`` block
 of the LLM module config and MUST contain the documented ``#{...}`` placeholders:

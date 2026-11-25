@@ -1,7 +1,7 @@
-# Docs view for docs/website/generate.py: maps every accumulated runner to
-#   { <executor-version> = { <id> = [ <hash32> ]; }; }
-# Each runner already carries the version of the executor line it came from, so
-# the grouping is just by `version` (no git-history / commit-to-tag lookup).
+# Docs view for docs/website/generate.py: every accumulated runner as
+#   [ { id; hash32; version; fork; supersedes; from-source; } ]
+# `from-source` marks a runner the line builds from its own tree (it has a pin
+# hash), as opposed to a legacy one the line only ships by uid
 {
   ...
 }:
@@ -19,21 +19,11 @@ let
     # Nix base32 on the legacy one. Either way `uid` is the source of truth.
     else
       builtins.head (builtins.match "[^:]+:(.*)" r.uid);
-
-  res = builtins.foldl' (
-    acc: r:
-    let
-      byId = acc.${r.version} or { };
-      hashes = byId.${r.id} or { };
-    in
-    acc
-    // {
-      ${r.version} = byId // {
-        ${r.id} = hashes // {
-          ${hash32 r} = true;
-        };
-      };
-    }
-  ) { } list;
 in
-builtins.mapAttrs (_version: builtins.mapAttrs (_id: builtins.attrNames)) res
+builtins.map (r: {
+  inherit (r) id version;
+  hash32 = hash32 r;
+  fork = r.fork or null;
+  supersedes = r.supersedes or null;
+  from-source = (r.hash or null) != null;
+}) list

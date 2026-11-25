@@ -1,11 +1,11 @@
 ---
 name: spec
-description: How to write GenVM spec pages (docs/website/src/spec). Use when adding or editing spec sections — brevity, linking constants/errors/terms instead of inlining them, spec vs impl-spec split, and how to verify the build.
+description: How to write GenVM spec pages (executors/<line>.x/docs/website/src/spec). Use when adding or editing spec sections — brevity, linking constants/errors/terms instead of inlining them, spec vs impl-spec split, and how to verify the build.
 ---
 
 # Writing spec
 
-The spec (`docs/website/src/spec/`) describes **observable behavior** — what a
+The spec (`executors/<line>.x/docs/website/src/spec/`, in the line it specifies) describes **observable behavior** — what a
 contract or validator can detect. How this codebase achieves it goes to
 `impl-spec/`. If a sentence starts describing internals (caches, native limits,
 threads), either drop it or reduce it to one normative requirement on
