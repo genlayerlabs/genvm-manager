@@ -44,7 +44,7 @@ version when it runs. A helper that cannot be started or read answers ``500``.
 
 The node MUST store the returned value in the contract's :ref:`genvm-def-root-slot` at
 offset :ref:`gvm-def-consts-value-root-offsets-major`. See
-:doc:`/spec/04-contract-interface/03-storage` for the root-slot layout.
+:external+executor:doc:`spec/04-contract-interface/03-storage` for the root-slot layout.
 On every subsequent load :term:`GenVM` re-reads that byte and refuses to execute when it
 does not match its own ``CURRENT_MAJOR``. Without this check a node running a newer
 GenVM could silently mis-interpret an older contract's calldata or storage.

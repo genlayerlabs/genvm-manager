@@ -26,7 +26,7 @@ Framing
 Every protocol message is one **binary** WebSocket message; WebSocket already
 delimits messages, so there is no length prefix. Header integers are
 big-endian. Payloads are calldata-encoded (see
-:doc:`/spec/04-contract-interface/01-calldata`).
+:external+executor:doc:`spec/04-contract-interface/01-calldata`).
 
 ::
 
