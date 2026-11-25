@@ -8,30 +8,38 @@ Sphinx, with its toolchain from the `gen-docs` nix shell — no poetry, no venv:
 ./support/ci/run.sh pipeline docs
 ```
 
-That regenerates the derived pages, builds the manager site (`html` plus `text`
-merged into `_static/ai/*.txt`), then each active line's sub-site in that
-line's own `gen-docs` shell, into `build/doc/html/executors/<line>/`. Details:
-`support/ci/pipelines/docs.py`. To iterate on sphinx alone:
+The site lands in `build/doc/html/`; open its `index.html`.
+Runner pages show their manifest and contents only for runners built into
+`build/out/runners/` ([runners.md](runners.md)). Details:
+`support/ci/pipelines/docs.py`
 
-```bash
-nix develop '.?submodules=1#gen-docs' --command \
-  sphinx-build -q -b dirhtml docs/website/src <out>
-```
+## Site Layout
 
-## Source Layout
+Each site version directory (see Publishing) holds what its manager ships, and
+its `index.html` lists them:
 
-Under `docs/website/src/`: `spec/` specifies observable behavior, `impl-spec/`
-how this codebase does it, `overview/` is intro material. The Python SDK reference and
-the runner-version pages live in the line that ships them,
-`executors/<line>.x/docs/website/src/python-sdk/`. Cross-linking is one-way: a
-sub-site references the manager through intersphinx, the manager only links out
+| Directory | Content | Source |
+|---|---|---|
+| `manager/` | overview, impl-spec | `docs/website/src/` |
+| `executor/<version>/` | spec, Python SDK guides, runner table | `executors/<line>.x/docs/website/src/` |
+| `runner/<id>/<hash>/` | 1 page per runner content hash | `docs/website/runner_pages.py` |
+
+A runner page renders the runner's `runner.json` with each
+dependency linked, and
+`executors/<line>.x/runners/<dir>/docs/<id>.rst` when that exists, with an
+optional `docs/conf.py` beside it; `docs/` sits outside the hashed sources
+
+The manager, executor and runner pages reference each other through
+intersphinx, as `:external+executor:`, `:external+manager:` and
+`:external+sdk:`, so the pipeline builds them twice. `docs/website/common/`
+holds the theme and settings all 3 share
 
 Generated, never edited by hand:
 
 | Page | Generator |
 |---|---|
-| `spec/appendix/constants.rst`, `impl-spec/appendix/manager-socket-consts.rst` | codegen ([genvm-tool.md](../genvm-tool.md)) |
-| `available-runners.rst`, `runners-versions.json`, SDK `changelog.rst`, in the primary line | `docs/website/generate.py` |
+| executor `spec/appendix/constants.rst`, `impl-spec/appendix/manager-socket-consts.rst` | codegen ([genvm-tool.md](../genvm-tool.md)) |
+| `available-runners.rst`, `reference.rst`, `runners-versions.json`, SDK `changelog.rst` | `docs/website/generate.py` |
 | `overview/executor-lines_generated.rst` | `docs/website/generate.py` |
 
 ## Publishing

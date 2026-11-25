@@ -23,10 +23,10 @@ A pin in `current.nix` may set 2 optional attributes, which end up in the
 line's `data/all.json`:
 
 1. `fork = "genvm/executor/v0.<N>/runners-<batch>";` — the
-   [fork](../../../website/src/spec/01-core-architecture/03-versioning.rst) that
+   [fork](../../../../executors/v0.4.x/docs/website/src/spec/01-core-architecture/03-versioning.rst) that
    makes the runner visible. Without it the pin gets the line's own fork, from
    `manifest.json`. A runner new to a released line must name a fork of its own
-   ([spec](../../../website/src/spec/02-execution-environment/04-runners.rst)),
+   ([spec](../../../../executors/v0.4.x/docs/website/src/spec/02-execution-environment/04-runners.rst)),
    or it activates for every network the moment validators upgrade
 2. `supersedes = "<gvm32 hash>";` — the hash of the same id this one replaces.
    The old hash must still be shipped, or evaluation fails

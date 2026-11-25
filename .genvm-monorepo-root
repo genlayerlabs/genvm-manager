@@ -9,7 +9,7 @@
             ]
         },
         "v0.3": {
-            "status": "maintained",
+            "status": "replay-only",
             "audit-ignores": [
                 { "id": "RUSTSEC-2024-0449", "package": "unsafe-libyaml", "reason": "unmaintained notice; YAML is read only from the host config" },
                 { "id": "GHSA-4684-h2q9-2vcp", "package": "zip", "reason": "archives are read in memory; nothing calls extract or writes them to disk" },

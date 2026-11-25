@@ -5,7 +5,7 @@ Paths are relative to `executors/<line>.x/`
 ## Through gl_call — Preferred
 
 A new gl_call method is a minor-compatible ABI addition, see the
-[versioning spec](../../../website/src/spec/01-core-architecture/03-versioning.rst)
+[versioning spec](../../../../executors/v0.4.x/docs/website/src/spec/01-core-architecture/03-versioning.rst)
 
 1. `executor/crates/sdk-rs/src/abi/gl_call.rs` — add the message shape
 2. `executor/src/wasi/genlayer_sdk/` — implement the handler, with a version
