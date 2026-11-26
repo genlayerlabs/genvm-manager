@@ -34,9 +34,6 @@ class Docs(ci_lib.Pipeline):
 		return 'docs'
 
 	def handler(self, args: argparse.Namespace) -> int:
-		os.environ['COPYRIGHT_YEAR'] = ci_lib.output(
-			['git', 'log', '-1', '--date=format:%Y', '--format=%ad']
-		).strip()
 		os.environ['GENVM_DOCS_SITE_OUT'] = str(SITE_DIR)
 
 		with ci_lib.github_group('generate runner pages data'):
