@@ -910,6 +910,9 @@ async fn invalid_mutate_recipes_and_params_are_rejected_at_load() {
         serde_json::json!({ "jitter": { "seed": 3 } }),
         serde_json::json!({ "set_param": { "max_tokens": 10 } }),
         serde_json::json!({ "set_param": { "temperature": "hot" } }),
+        serde_json::json!({ "set_param": { "temperature": 2 }, "clamp": { "temperature": 1 } }),
+        serde_json::json!({ "pipe": [{ "jitter": { "temperature": 1 }, "filter_text": ["NFKC"] }] }),
+        serde_json::json!(false),
     ] {
         let error = load_error(
             serde_json::json!({ "mutate": mutate.clone() }),
@@ -927,6 +930,7 @@ async fn malformed_greybox_tables_are_rejected_at_load() {
         serde_json::json!({}),
         serde_json::json!({ "txt": 1 }),
         serde_json::json!([1]),
+        serde_json::json!(false),
     ] {
         let error = load_error(
             serde_json::Value::Null,
@@ -935,6 +939,43 @@ async fn malformed_greybox_tables_are_rejected_at_load() {
         .await;
         assert!(error.contains("meta.greybox"), "{greybox}: {error}");
     }
+}
+
+fn many_models(count: usize) -> Vec<FakeBackend> {
+    let hits = Arc::new(Mutex::new(Vec::new()));
+    (0..count)
+        .map(|i| spawn_fake(format!("b{i:03}").leak(), vec![200], hits.clone()))
+        .collect()
+}
+
+#[tokio::test]
+async fn catalog_at_the_chain_limit_loads() {
+    common::tests::setup();
+    let fakes = many_models(64);
+    let specs: Vec<_> = fakes
+        .iter()
+        .map(|f| BackendSpec::new(f, 0).model_meta(serde_json::json!({ "greybox": { "text": 1 } })))
+        .collect();
+    let (config, _providers) = build_config_from(&specs, serde_json::Value::Null);
+    if let Err(e) = create_vm(&config).await {
+        panic!("64 models must load: {e:#}");
+    }
+}
+
+#[tokio::test]
+async fn catalog_over_the_chain_limit_names_the_limit() {
+    common::tests::setup();
+    let fakes = many_models(65);
+    let specs: Vec<_> = fakes.iter().map(|f| BackendSpec::new(f, 0)).collect();
+    let (config, _providers) = build_config_from(&specs, serde_json::Value::Null);
+    let error = match create_vm(&config).await {
+        Ok(_) => panic!("65 models must fail to load"),
+        Err(e) => format!("{e:#}"),
+    };
+    assert!(
+        error.contains("65 models") && error.contains("64"),
+        "{error}"
+    );
 }
 
 // An image the filter cannot decode is the contract's fault: a user error, not

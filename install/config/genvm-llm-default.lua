@@ -103,6 +103,7 @@ end
 -- Lower N goes first; ties are ordered by sha256("<node address>/<catalog key>"),
 -- fixed for one node and different across nodes.
 local PROFILE_NAME = "compat"
+local MAX_CHAIN_ENTRIES = require("llm_policy.term").LIMITS.max_param_entries
 local GREYBOX_PROFILES = { text = "greybox_text", image = "greybox_image" }
 
 local function sorted_greybox_chain(entries, node_address)
@@ -140,6 +141,15 @@ local function check_mutate(spec)
 	end
 	if type(spec) ~= "table" then
 		error("meta.mutate: invalid step " .. tostring(spec))
+	end
+	-- the engine compiles only the first operation it finds in a record
+	local key_count, named = 0, false
+	for key, _ in pairs(spec) do
+		key_count = key_count + 1
+		named = named or type(key) ~= "number"
+	end
+	if named and key_count > 1 then
+		error("meta.mutate: a step holds 1 operation; compose several with pipe")
 	end
 	for key, value in pairs(spec) do
 		if type(key) == "number" then
@@ -233,7 +243,10 @@ local function build_policy_config()
 
 			table.insert(chain, { provider = provider_name, model = family })
 
-			local greybox_meta = type(model_data.meta) == "table" and model_data.meta.greybox or nil
+			local greybox_meta = nil
+			if type(model_data.meta) == "table" then
+				greybox_meta = model_data.meta.greybox
+			end
 			if greybox_meta ~= nil then
 				if type(greybox_meta) ~= "table" or next(greybox_meta) == nil then
 					error(family .. ": meta.greybox must be a table setting text and/or image")
@@ -257,9 +270,17 @@ local function build_policy_config()
 		end
 	end
 
+	-- greybox chains are subsets of this one
+	if #chain > MAX_CHAIN_ENTRIES then
+		error(string.format("the catalog has %d models; the engine routes at most %d", #chain, MAX_CHAIN_ENTRIES))
+	end
+
 	-- `meta.mutate` is the engine's declarative mutate spec, applied per attempt;
 	-- absent means the request goes out as the prompt built it.
-	local mutate = type(llm.rs.meta) == "table" and llm.rs.meta.mutate or nil
+	local mutate = nil
+	if type(llm.rs.meta) == "table" then
+		mutate = llm.rs.meta.mutate
+	end
 	check_mutate(mutate)
 
 	local profiles = {

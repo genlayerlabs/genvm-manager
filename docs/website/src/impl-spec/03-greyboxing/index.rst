@@ -38,7 +38,9 @@ Default Policy
 
 The default Lua script routes through the ``llm_policy`` engine. The chain and
 mutation keys below are optional; a config without them keeps the
-``meta.priority`` order and the prompt's own text, images and temperature
+``meta.priority`` order and the prompt's own text, images and temperature. The
+catalog holds at most 64 models, the engine's chain limit; a larger one fails
+when the script loads
 
 - **Chains:** once any model sets ``meta.greybox = { text = N, image = M }``, text
   prompts try the ``text`` chain and image prompts the ``image`` chain, lower
@@ -63,8 +65,9 @@ mutation keys below are optional; a config without them keeps the
   cannot decode fails with ``INVALID_IMAGE``. ``jitter``, ``set_param`` and
   ``clamp`` accept ``temperature`` only; the result never goes below 0, and the
   upper bound is the operator's ``clamp``, since providers differ (Anthropic
-  stops at 1). All attempts of one prompt get the same mutation. Any other step
-  or parameter fails when the script loads
+  stops at 1). All attempts of one prompt get the same mutation. A step holds 1
+  operation; ``pipe`` composes several. Any other step or parameter, or a step
+  with several operations, fails when the script loads
 - **Seed:** every prompt gets a fresh random sampling seed, logged as
   ``llm call seed``. It seeds ``jitter`` and is sent to OpenAI-compatible and
   Ollama backends
