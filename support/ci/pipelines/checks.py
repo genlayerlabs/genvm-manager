@@ -102,6 +102,9 @@ class CommitMessages(ci_lib.Pipeline):
 			head = info.get('branch_commit')
 			if not base or not head:
 				continue
+			# Libraries are separate projects with their own commit conventions
+			if directory.startswith('libs/'):
+				continue
 
 			label = 'manager' if directory == '.' else directory
 			checker = (

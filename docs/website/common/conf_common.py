@@ -12,9 +12,10 @@ The version directory's `index.html` lists its parts (`catalog.py`); the
 switcher picks a version from the site root `versions.json`.
 """
 
-import datetime
 import json
 import os
+import subprocess
+import time
 import typing
 from pathlib import Path
 
@@ -25,6 +26,22 @@ MANAGER_ROOT = next(
 MONOREPO = json.loads((MANAGER_ROOT / '.genvm-monorepo-root').read_text())
 
 Kind = typing.Literal['manager', 'executor', 'runner']
+
+
+def source_date_epoch() -> int:
+	"""
+	Commit time of the manager ``HEAD``, or now outside a git checkout
+	"""
+	try:
+		out = subprocess.run(
+			['git', '-C', str(MANAGER_ROOT), 'log', '-1', '--format=%ct'],
+			capture_output=True,
+			text=True,
+			check=True,
+		).stdout
+		return int(out.strip())
+	except (OSError, subprocess.CalledProcessError, ValueError):
+		return int(time.time())
 
 
 def current_line() -> str:
@@ -97,7 +114,11 @@ def apply(
 	:param title: ``project`` shown in the navbar and page titles
 	:param crumbs: ``(label, path from the version directory)`` pairs shown in the navbar
 	"""
-	year = os.environ.get('COPYRIGHT_YEAR', str(datetime.date.today().year))
+	# The nix shell pins SOURCE_DATE_EPOCH to 1980, and Sphinx rewrites the
+	# copyright year to match it after this file runs
+	epoch = source_date_epoch()
+	os.environ['SOURCE_DATE_EPOCH'] = str(epoch)
+	year = time.gmtime(epoch).tm_year
 	ns['project'] = title
 	ns['author'] = 'GenLayer Labs'
 	ns['copyright'] = f'{year}, GenLayer Labs'

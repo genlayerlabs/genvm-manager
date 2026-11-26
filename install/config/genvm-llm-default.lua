@@ -97,12 +97,88 @@ end
 -- backends may serve the same name with different capabilities, and one key
 -- would let one backend's capabilities vouch for another's. The chain reproduces
 -- the pre-engine ordering: priority desc, provider name desc, model name asc.
+--
+-- Once any model declares `meta.greybox = { text = N, image = M }`, prompts walk
+-- the chain for their modality instead and models outside it are never tried.
+-- Lower N goes first; ties are ordered by sha256("<node address>/<catalog key>"),
+-- fixed for one node and different across nodes.
 local PROFILE_NAME = "compat"
+local GREYBOX_PROFILES = { text = "greybox_text", image = "greybox_image" }
+
+local function sorted_greybox_chain(entries, node_address)
+	-- hex, since `<` on strings goes through the locale-dependent strcoll
+	local tie_key = {}
+	for _, e in ipairs(entries) do
+		local digest = lib.rs.sha2_256(node_address .. "/" .. e.model)
+		tie_key[e.model] = digest:gsub(".", function(c)
+			return string.format("%02x", c:byte())
+		end)
+	end
+	local sorted = table.move(entries, 1, #entries, 1, {})
+	table.sort(sorted, function(a, b)
+		if a.priority ~= b.priority then
+			return a.priority < b.priority
+		end
+		return tie_key[a.model] < tie_key[b.model]
+	end)
+	local chain = {}
+	for _, e in ipairs(sorted) do
+		table.insert(chain, { provider = e.provider, model = e.model })
+	end
+	return chain
+end
+
+-- Image filters a flat recipe record can express; Denoise is unimplemented and
+-- Unsharpen takes two numbers.
+local MUTATE_IMAGE_FILTERS = { GuassianNoise = true, JPEG = true }
+-- Only temperature reaches the provider call; other params would be dropped.
+local MUTATE_PARAM_OPS = { jitter = true, set_param = true, clamp = true }
+
+local function check_mutate(spec)
+	if spec == nil or spec == "identity" then
+		return
+	end
+	if type(spec) ~= "table" then
+		error("meta.mutate: invalid step " .. tostring(spec))
+	end
+	for key, value in pairs(spec) do
+		if type(key) == "number" then
+			check_mutate(value)
+		elseif key == "pipe" then
+			for _, step in ipairs(value) do
+				check_mutate(step)
+			end
+		elseif key == "filter_text" then
+			local ok, err = pcall(lib.rs.filter_text, "", value)
+			if not ok then
+				error("meta.mutate: invalid filter_text recipe: " .. tostring(err))
+			end
+		elseif key == "filter_image" then
+			for _, filter in ipairs(value) do
+				local name = type(filter) == "table" and next(filter) or nil
+				local arg = name ~= nil and filter[name] or nil
+				if not MUTATE_IMAGE_FILTERS[name] or type(arg) ~= "number" or next(filter, name) ~= nil then
+					error("meta.mutate: filter_image supports { GuassianNoise = n } and { JPEG = q } only")
+				end
+			end
+		elseif MUTATE_PARAM_OPS[key] then
+			for param, arg in pairs(value) do
+				if param ~= "temperature" or type(arg) ~= "number" then
+					error("meta.mutate: " .. key .. " supports a numeric temperature only")
+				end
+			end
+		else
+			error("meta.mutate: unknown step " .. tostring(key))
+		end
+	end
+end
 
 local function build_policy_config()
 	local providers = {}
 	local models = {}
 	local chain = {}
+	local greybox = { text = {}, image = {} }
+	local has_greybox = false
 
 	local provider_names = {}
 	for provider_name, _ in pairs(llm.providers) do
@@ -156,19 +232,62 @@ local function build_policy_config()
 			}
 
 			table.insert(chain, { provider = provider_name, model = family })
+
+			local greybox_meta = type(model_data.meta) == "table" and model_data.meta.greybox or nil
+			if greybox_meta ~= nil then
+				if type(greybox_meta) ~= "table" or next(greybox_meta) == nil then
+					error(family .. ": meta.greybox must be a table setting text and/or image")
+				end
+				for key, _ in pairs(greybox_meta) do
+					if greybox[key] == nil then
+						error(family .. ": unknown meta.greybox key " .. tostring(key))
+					end
+				end
+				has_greybox = true
+				for modality, entries in pairs(greybox) do
+					local priority = greybox_meta[modality]
+					if priority ~= nil then
+						if type(priority) ~= "number" then
+							error(family .. ": meta.greybox." .. modality .. " must be a number")
+						end
+						table.insert(entries, { provider = provider_name, model = family, priority = priority })
+					end
+				end
+			end
 		end
+	end
+
+	-- `meta.mutate` is the engine's declarative mutate spec, applied per attempt;
+	-- absent means the request goes out as the prompt built it.
+	local mutate = type(llm.rs.meta) == "table" and llm.rs.meta.mutate or nil
+	check_mutate(mutate)
+
+	local profiles = {
+		[PROFILE_NAME] = {
+			selector = "chain",
+			chain = chain,
+			retry_policy = PROFILE_NAME,
+			mutate = mutate,
+		},
+	}
+	if has_greybox then
+		-- the per-node chain comes with each contract; this one only has to compile
+		for modality, entries in pairs(greybox) do
+			profiles[GREYBOX_PROFILES[modality]] = {
+				selector = "chain",
+				chain = sorted_greybox_chain(entries, ""),
+				retry_policy = PROFILE_NAME,
+				mutate = mutate,
+			}
+		end
+	else
+		greybox = nil
 	end
 
 	return {
 		providers = providers,
 		models = models,
-		profiles = {
-			[PROFILE_NAME] = {
-				selector = "chain",
-				chain = chain,
-				retry_policy = PROFILE_NAME,
-			},
-		},
+		profiles = profiles,
 		-- Every failure kind falls through to the next candidate, preserving the
 		-- pre-engine behaviour of retrying on any user error, overloaded or not.
 		retry_policies = {
@@ -176,7 +295,8 @@ local function build_policy_config()
 				unknown = { action = "next_candidate" },
 			},
 		},
-	}
+	},
+		greybox
 end
 
 -- The engine reads `host` as a plain global. Omitting `call_provider`/`sleep_ms`
@@ -190,7 +310,8 @@ _G.host = {
 	end,
 }
 
-local POLICY_CONFIG = build_policy_config()
+-- GREYBOX_ENTRIES: { text = {...}, image = {...} } unsorted, nil without meta.greybox
+local POLICY_CONFIG, GREYBOX_ENTRIES = build_policy_config()
 
 do
 	-- Reject a bad catalog at module start, not on the first prompt.
@@ -198,16 +319,33 @@ do
 	if not ok then
 		error("llm_policy rejected the generated catalog: " .. tostring(err))
 	end
+	-- profiles compile lazily; ranking each one surfaces a bad `meta.mutate` now
+	for name, _ in pairs(POLICY_CONFIG.profiles) do
+		local ok, ranked, rank_err = pcall(llm_policy.rank, { profile = name })
+		if not ok or ranked == nil then
+			error("llm_policy rejected profile " .. name .. ": " .. tostring(ok and rank_err or ranked))
+		end
+	end
 end
 
 --- Describe a mapped prompt to the engine: which capabilities a candidate must
 --- have to be eligible. Mirrors the checks `llm.select_providers_for` performs.
 ---@param mapped_prompt MappedPrompt
+---@param seed integer
 ---@return table
-local function build_contract(ctx, mapped_prompt)
+local function build_contract(ctx, mapped_prompt, seed)
 	local needs = {}
+	local modality = "text"
 	if lib.get_first_from_table(mapped_prompt.prompt.images) ~= nil then
 		table.insert(needs, "vision")
+		modality = "image"
+	end
+
+	local profile = PROFILE_NAME
+	local chain = nil
+	if ctx.greybox_chains ~= nil then
+		profile = GREYBOX_PROFILES[modality]
+		chain = ctx.greybox_chains[modality]
 	end
 
 	local response_format = nil
@@ -217,10 +355,12 @@ local function build_contract(ctx, mapped_prompt)
 	end
 
 	return {
-		profile = PROFILE_NAME,
+		profile = profile,
+		chain = chain,
 		requirements = { needs = needs },
 		response_format = response_format,
-		seed = ctx.policy_seed,
+		seed = seed,
+		temperature = mapped_prompt.prompt.temperature,
 	}
 end
 
@@ -235,12 +375,43 @@ local function run_candidate(ctx, mapped_prompt, timeout, request)
 	local model_name = request.served_model_id
 	local model_data = llm.providers[provider_name].models[model_name]
 
-	mapped_prompt.prompt.use_max_completion_tokens = model_data.use_max_completion_tokens
+	local prompt = {}
+	for k, v in pairs(mapped_prompt.prompt) do
+		prompt[k] = v
+	end
+	prompt.use_max_completion_tokens = model_data.use_max_completion_tokens
+	prompt.seed = request.seed
+	prompt.temperature = math.max(0, request.temperature or prompt.temperature)
+
+	-- filter directives attached by `meta.mutate`; the engine only records them
+	local filters = request._filters or {}
+	if filters.text ~= nil then
+		prompt.user_message = lib.rs.filter_text(prompt.user_message, filters.text.recipe)
+		if prompt.system_message ~= nil then
+			prompt.system_message = lib.rs.filter_text(prompt.system_message, filters.text.recipe)
+		end
+	end
+	if filters.image ~= nil then
+		local images = {}
+		for i, img in ipairs(prompt.images) do
+			local ok, filtered = pcall(lib.rs.filter_image, img, filters.image.recipe)
+			if not ok then
+				lib.log { level = "warning", message = "image filter failed", index = i, error = tostring(filtered) }
+				lib.rs.user_error {
+					causes = { "INVALID_IMAGE" },
+					fatal = false,
+					ctx = { index = i },
+				}
+			end
+			images[i] = filtered
+		end
+		prompt.images = images
+	end
 
 	local call = {
 		provider = provider_name,
 		model = model_name,
-		prompt = mapped_prompt.prompt,
+		prompt = prompt,
 		format = mapped_prompt.format,
 		timeout = timeout,
 	}
@@ -309,7 +480,20 @@ local function dispatch_prompt(ctx, mapped_prompt, remaining_gen)
 		llm.exhaust()
 	end
 
-	local contract = build_contract(ctx, mapped_prompt)
+	-- Per-call sampling seed: true randomness so validators diverge, logged so a
+	-- call can be matched to its record.
+	local b1, b2, b3, b4 = string.byte(lib.rs.random_bytes(4), 1, 4)
+	local seed = (((b1 * 256 + b2) * 256 + b3) * 256 + b4) % 2147483647
+	local host_data = ctx.host_data or {}
+	lib.log {
+		level = "info",
+		message = "llm call seed",
+		seed = seed,
+		tx_id = host_data.tx_id,
+		node_address = host_data.node_address,
+	}
+
+	local contract = build_contract(ctx, mapped_prompt, seed)
 
 	lib.log {
 		level = "debug",
@@ -366,19 +550,13 @@ function Setup(ctx)
 		error("llm_policy rejected the generated catalog: " .. tostring(err))
 	end
 
-	-- Per-session routing seed: true randomness so validators diverge, logged so
-	-- the decision can be replayed from the record. Under the compat chain it is
-	-- inert (only sampling selectors read it); wired now for auditability.
-	local host_data = ctx.host_data or {}
-	local b1, b2, b3, b4 = string.byte(lib.rs.random_bytes(4), 1, 4)
-	ctx.policy_seed = (((b1 * 256 + b2) * 256 + b3) * 256 + b4) % 2147483647
-	lib.log {
-		level = "info",
-		message = "llm policy seed",
-		seed = ctx.policy_seed,
-		tx_id = host_data.tx_id,
-		node_address = host_data.node_address,
-	}
+	if GREYBOX_ENTRIES ~= nil then
+		local node_address = (ctx.host_data or {}).node_address or ""
+		ctx.greybox_chains = {}
+		for modality, entries in pairs(GREYBOX_ENTRIES) do
+			ctx.greybox_chains[modality] = sorted_greybox_chain(entries, node_address)
+		end
+	end
 
 	local gen_per_time_unit_str = ctx.gas_data and ctx.gas_data.genPerTimeUnit
 	local gen_per_time_unit = nil
@@ -523,6 +701,19 @@ function ExecPromptTemplate(ctx, args, remaining_gen)
 
 	if ctx.policy.exhausted then
 		return llm.exhaust()
+	end
+
+	-- Template values (principle, criteria, leader and validator answers) reach
+	-- the model like a prompt does, so they get the same text normalization
+	-- ExecPrompt applies.
+	for key, value in pairs(args) do
+		if key ~= "template" and type(value) == "string" then
+			args[key] = lib.rs.filter_text(value, {
+				"NFKC",
+				"RmZeroWidth",
+				"NormalizeWS",
+			})
+		end
 	end
 
 	local mapped = llm.exec_prompt_template_transform(args)
