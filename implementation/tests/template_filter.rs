@@ -109,10 +109,7 @@ async fn template_values_are_normalized_like_prompts() {
         .unwrap();
 
     let res: anyhow::Result<mlua::Value> = user_vm
-        .call_fn(
-            &user_vm.data.exec_prompt_template,
-            (ctx_lua, payload, fuel),
-        )
+        .call_fn(&user_vm.data.exec_prompt_template, (ctx_lua, payload, fuel))
         .await;
     assert!(res.is_err(), "the probe must stop the call");
 
