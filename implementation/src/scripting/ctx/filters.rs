@@ -134,3 +134,17 @@ pub fn apply_image_filters(s: &[u8], filters: &[ImageFilter]) -> anyhow::Result<
     )?;
     Ok(bytes)
 }
+
+/// Escapes `&`, `<` and `>` byte-wise, so non-UTF-8 input passes through unchanged
+pub fn escape_html(s: &[u8]) -> Vec<u8> {
+    let mut res = Vec::with_capacity(s.len());
+    for &b in s {
+        match b {
+            b'&' => res.extend_from_slice(b"&amp;"),
+            b'<' => res.extend_from_slice(b"&lt;"),
+            b'>' => res.extend_from_slice(b"&gt;"),
+            _ => res.push(b),
+        }
+    }
+    res
+}

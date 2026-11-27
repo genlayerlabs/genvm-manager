@@ -1,0 +1,7 @@
+[
+  "afl",
+  "mutatis",
+  "mutatis-derive",
+  "lua-src",
+  "luajit-src"
+]

@@ -1,0 +1,78 @@
+name: audit / release gate
+
+# Blocks a release on any advisory (`genvm-tool audit --gate`) in the manager or
+# an executor line that the `audit-ignores` of `.genvm-monorepo-root` do not
+# list, or on an ignore that no longer matches. Runs from release.yaml and on
+# PRs into a release branch
+
+on:
+  workflow_call:
+    inputs:
+      bypass_blocking_advisories:
+        type: boolean
+        default: false
+        description: "Skip the audit; only a repository admin may set it"
+  pull_request:
+    branches: ['v*', '!v*-dev']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-gate-${{ github.ref }}
+  # Never cancel the gate of a running release
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash -exo pipefail {0}
+
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Authorize bypass
+        if: inputs.bypass_blocking_advisories
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ACTOR: ${{ github.triggering_actor }}
+        run: |
+          permission="$(gh api "repos/$REPO/collaborators/$ACTOR/permission" --jq .permission)"
+          if [ "$permission" != admin ]; then
+            echo "::error::only a repository admin may bypass blocking advisories; $ACTOR has $permission"
+            exit 1
+          fi
+          echo "::warning::audit skipped by $ACTOR"
+          echo "**Audit skipped by @$ACTOR**" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: ${{ !inputs.bypass_blocking_advisories }}
+      # Lockfiles are tracked in the submodules; no third-party tree is read
+      - name: Get source
+        if: ${{ !inputs.bypass_blocking_advisories }}
+        uses: ./.github/actions/get-src
+        with:
+          with_nix: "true"
+          third_party: none
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          nix_cache_pull_token: ${{ secrets.NIX_CACHE_PULL_TOKEN }}
+      - name: Audit
+        if: ${{ !inputs.bypass_blocking_advisories }}
+        env:
+          # Optional: without it NVD is queried at its anonymous rate
+          NVD_API_KEY: ${{ secrets.NVD_API_KEY }}
+        run: |
+          mkdir -p build
+          nix develop '.?submodules=1#audit' --command \
+            genvm-tool audit --gate --markdown build/audit.md \
+            | tee build/audit.log
+      - name: Summary
+        if: ${{ always() && !inputs.bypass_blocking_advisories }}
+        run: |
+          if [ -f build/audit.log ]; then
+            { echo '```'; grep -E '^(blocking: |[0-9]+ finding\(s\) and [0-9]+ stale)' build/audit.log || true; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          if [ -f build/audit.md ]; then
+            cat build/audit.md >> "$GITHUB_STEP_SUMMARY"
+          fi

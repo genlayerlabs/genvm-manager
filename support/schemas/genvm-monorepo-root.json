@@ -1,0 +1,96 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "GenVM monorepo root",
+  "description": "The manager's release version, its executor lines and the test-runner config",
+  "type": "object",
+  "required": ["version", "executor-lines"],
+  "additionalProperties": false,
+  "definitions": {
+    "audit-ignores": {
+      "description": "Advisories `genvm-tool audit --gate` lets through, each ruled not to apply. An entry that matches no finding fails the gate",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "package", "reason"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "description": "The advisory, under any of its ids", "type": "string", "minLength": 1 },
+          "package": { "description": "The affected package, any version", "type": "string", "minLength": 1 },
+          "reason": { "description": "Why it does not apply", "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  },
+  "properties": {
+    "$schema": { "type": "string" },
+    "version": {
+      "description": "The manager's release version, the tag it is released under",
+      "type": "string",
+      "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(-[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?(\\+[0-9A-Za-z-]+(\\.[0-9A-Za-z-]+)*)?$"
+    },
+    "executor-lines": {
+      "description": "Executor lines shipped, each an `executors/<line>.x` submodule. Exactly 1 must be `current`, which `support/ci tool check-versions lines` checks",
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^v(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$" },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["status"],
+        "additionalProperties": false,
+        "properties": {
+          "status": {
+            "oneOf": [
+              {
+                "const": "preview",
+                "description": "Behavior may still change; must not run on a network with real value"
+              },
+              {
+                "const": "current",
+                "description": "The primary line: owns the manager-global generated files and gets features"
+              },
+              {
+                "const": "maintained",
+                "description": "Behavior frozen; gets bug and security fixes that keep replay identical"
+              },
+              {
+                "const": "replay-only",
+                "description": "Only replays finalized history from reduced sources; gets fixes for selected bugs only"
+              }
+            ]
+          },
+          "audit-ignores": {
+            "$ref": "#/definitions/audit-ignores",
+            "description": "Of the findings under `executors/<line>.x`"
+          }
+        }
+      }
+    },
+    "manager": {
+      "description": "Settings of the manager, as opposed to an executor line",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "audit-ignores": {
+          "$ref": "#/definitions/audit-ignores",
+          "description": "Of the findings outside `executors/`"
+        }
+      }
+    },
+    "artifacts_dir": {
+      "description": "Test artifacts directory, relative to the repository root",
+      "type": "string",
+      "minLength": 1
+    },
+    "tags_registry": {
+      "description": "Test tags registry, relative to the repository root",
+      "type": "string",
+      "minLength": 1
+    },
+    "extra_python_paths": {
+      "description": "Directories put on `sys.path` for test plugins, relative to the repository root",
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "uniqueItems": true
+    }
+  }
+}

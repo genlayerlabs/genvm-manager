@@ -7,6 +7,7 @@ __all__ = (
 	'const',
 	'exec',
 	'test',
+	'tags',
 	'stage',
 	'util',
 	'formatter',
@@ -20,9 +21,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from genvm_tool import formatter
+from genvm_tool import common, formatter
 from genvm_tool.formatter import Formatter, Sink
 
+from . import tags
 from .util.watchdog import Watchdog
 
 _UNSAFE_NAME_RE = re.compile(r'[^A-Za-z0-9._-]+')
@@ -50,6 +52,8 @@ class SharedContext:
 	logger: Formatter
 	printer: Sink
 	watchdog: Watchdog = field(default_factory=Watchdog.start)
+	metrics: dict[str, Any] = field(default_factory=dict)
+	_metrics_lock: threading.Lock = field(default_factory=threading.Lock)
 
 	# When running a test case, this points to that case's per-test artifact
 	# directory. ``None`` outside of a test case.
@@ -60,13 +64,23 @@ class SharedContext:
 	# collectors / CLI args.
 	suite: Any = None
 
+	ci: bool = False
+
 	_git_files: list[Path] | None = None
 	_interrupted: threading.Event = field(default_factory=threading.Event)
 	_config: dict[str, Any] | None = None
+	_tags_registry: tags.Registry | None = None
+	_tags_registry_loaded: bool = False
+
+	def bump_metric[T](self, name: str, initial: T, delta: T) -> None:
+		"""Increment a named metric by ``delta``, locked: collectors are threads."""
+		with self._metrics_lock:
+			self.metrics[name] = self.metrics.setdefault(name, initial) + delta
 
 	@property
 	def config(self) -> dict[str, Any]:
-		"""Runner config (``artifacts_dir`` / ``extra_python_paths``).
+		"""
+		Runner config (``artifacts_dir`` / ``extra_python_paths``).
 
 		Read from the monorepo marker ``.genvm-monorepo-root``, which doubles as
 		the top-level runner config.
@@ -81,6 +95,20 @@ class SharedContext:
 			conf = {}
 		self._config = conf
 		return conf
+
+	@property
+	def tags_registry(self) -> tags.Registry | None:
+		if self._tags_registry_loaded:
+			return self._tags_registry
+
+		registry_path = self.config.get('tags_registry')
+		if registry_path is not None:
+			path = Path(registry_path)
+			if not path.is_absolute():
+				path = self.root_dir / path
+			self._tags_registry = tags.load(path)
+		self._tags_registry_loaded = True
+		return self._tags_registry
 
 	@property
 	def artifacts_dir(self) -> Path:
@@ -107,11 +135,22 @@ class SharedContext:
 		if self._git_files is not None:
 			return self._git_files
 
+		# --recurse-submodules so executor crates (each `executors/<line>.x` is a
+		# submodule since the monorepo split) are listed too: the umbrella's
+		# collect_rust is the only path that discovers Cargo.toml/fuzz targets, and
+		# executors carry no tests() hook of their own. Without it only the two
+		# manager crates are seen and every executor rust crate goes untested.
+		# Uninitialized submodules are simply skipped (not an error).
 		r = subprocess.run(
-			['git', 'ls-files'],
+			['git', 'ls-files', '--recurse-submodules'],
 			check=True,
 			capture_output=True,
 			text=True,
+			env=common.git_env(),
+			# The paths below are resolved against the root, so they have to be
+			# listed from there: run from a subdirectory, git would print them
+			# relative to that instead
+			cwd=self.root_dir,
 		)
 
 		r = [

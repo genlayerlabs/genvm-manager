@@ -6,19 +6,9 @@ import * as logger from './logging.js';
 /**
  * SSRF guard for the webdriver.
  *
- * Chrome resolves DNS and follows redirects itself, so it never passes through
- * any host-side filter. Without this guard a contract could point an otherwise
- * valid public URL (or one of the page's sub-resources) at an internal address
- * such as cloud metadata (169.254.169.254), loopback or an RFC1918 host.
- *
- * We intercept every request the page makes (top-level navigation,
- * sub-resources and each redirect hop), resolve the host ourselves and abort
- * the request when any resolved address is not globally routable.
- *
- * NOTE: resolution happens here while Chrome connects separately, so a low-TTL
- * attacker controlling DNS could in theory return a routable address to us and
- * a private one to Chrome. We mitigate by failing closed: if *any* address a
- * host resolves to is private, the host is blocked outright.
+ * Interception rejects unsafe URLs early. The mandatory egress proxy performs
+ * the authoritative address check and connects to that literal IP, preventing
+ * a later DNS answer from redirecting the connection to a private address.
  */
 
 function parseIPv4(ip: string): [number, number, number, number] | null {
@@ -171,7 +161,7 @@ export function ipIsBad(ip: string): boolean {
 }
 
 /** Resolve a URL host to its addresses; IP literals resolve to themselves. */
-async function resolveHost(host: string): Promise<string[]> {
+export async function resolveHost(host: string): Promise<string[]> {
 	const stripped =
 		host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 	if (net.isIP(stripped) !== 0) {

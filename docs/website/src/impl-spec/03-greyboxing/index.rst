@@ -4,8 +4,6 @@ Greyboxing Documentation
 .. toctree::
    :maxdepth: 2
 
-   01-lua-api
-
 It refers to the technique of preventing attacks on LLMs. Implementing it is a responsibility of every node,
 as bundled presets can be attacked.
 
@@ -22,6 +20,57 @@ Retrieving Data from :term:`Host`
 
 Host can provide additional data to the :term:`Module` to help it make decisions,
 only transaction id and node address are required, as they are required for signing requests.
+
+Token Charges
+-------------
+
+The default Lua policy charges 1/4 time unit per 1,000 provider-reported total
+tokens, using the host's ``gas_data.genPerTimeUnit`` price. A model can override
+the rate with ``meta.time_units_per_1k_tokens``, a non-negative rational string
+such as ``"1/2"`` or ``"0"``. Invalid rates fail before calling that provider
+
+The charge is ``ceil(total_tokens * genPerTimeUnit * rate / 1000)`` in GEN-wei,
+computed with exact rational arithmetic. Missing or zero ``genPerTimeUnit``
+keeps the charge at zero
+
+Default Policy
+--------------
+
+The default Lua script routes through the ``llm_policy`` engine. The chain and
+mutation keys below are optional; a config without them keeps the
+``meta.priority`` order and the prompt's own text, images and temperature. The
+catalog holds at most 64 models, the engine's chain limit; a larger one fails
+when the script loads
+
+- **Chains:** once any model sets ``meta.greybox = { text = N, image = M }``, text
+  prompts try the ``text`` chain and image prompts the ``image`` chain, lower
+  number first. Equal numbers are ordered by
+  ``sha256("<node address>/<provider>/<model>")``: fixed for one node, different
+  across nodes. Models outside the
+  prompt's chain are never tried; an empty chain fails with
+  ``NO_PROVIDER_FOR_PROMPT``. Other keys, or neither key, fail when the script loads
+- **Mutation:** the module-level ``meta.mutate`` is an ``llm_policy`` declarative
+  mutate spec, for example::
+
+     meta:
+       mutate:
+         pipe:
+           - filter_text: [NFKC]
+           - filter_image: [{ GuassianNoise: 1.0 }]
+           - jitter: { temperature: 0.3 }
+           - clamp: { temperature: 1.0 }
+
+  ``filter_text`` covers the system and user message. ``filter_image`` accepts
+  ``GuassianNoise`` and ``JPEG``, and re-encodes every image as PNG; an image it
+  cannot decode fails with ``INVALID_IMAGE``. ``jitter``, ``set_param`` and
+  ``clamp`` accept ``temperature`` only; the result never goes below 0, and the
+  upper bound is the operator's ``clamp``, since providers differ (Anthropic
+  stops at 1). All attempts of one prompt get the same mutation. A step holds 1
+  operation; ``pipe`` composes several. Any other step or parameter, or a step
+  with several operations, fails when the script loads
+- **Seed:** every prompt gets a fresh random sampling seed, logged as
+  ``llm call seed``. It seeds ``jitter`` and is sent to OpenAI-compatible and
+  Ollama backends
 
 Current Built-in Filters
 ------------------------
@@ -57,8 +106,8 @@ Example Usage
 
   args.images[0] = lib.rs.filter_image(args.images[0], {
     { Unsharpen = { 2.0, 4.0 } },
-    { GaussianNoise = 0.05 },
-    { JpegRecompress = 0.8 }
+    { GuassianNoise = 0.05 },
+    { JPEG = 0.8 }
   })
 
 Sandbox and Execution Model
@@ -95,6 +144,9 @@ LLM module:
   ``EqNonComparativeLeader`` / ``EqNonComparativeValidator`` templates. The template
   name is in ``args.template``; the remaining keys are the template's named slots
   (e.g. ``leader_answer``, ``validator_answer``, ``principle`` for ``EqComparative``).
+  The default script runs every string slot through the same text filters
+  ``ExecPrompt`` applies to its prompt (NFKC, zero-width removal, whitespace
+  normalization) before filling the template.
 
 Web module:
 
@@ -146,7 +198,7 @@ Template Contracts
 ------------------
 
 The three template entry points feed into
-:doc:`/spec/02-execution-environment/03-wasi_genlayer_sdk/02-gl_call`
+:external+executor:doc:`spec/02-execution-environment/03-wasi_genlayer_sdk/02-gl_call`
 ``ExecPromptTemplate``. Their wire-level payload is fixed by the spec; the template
 body strings interpolated into the LLM prompt come from the ``prompt_templates`` block
 of the LLM module config and MUST contain the documented ``#{...}`` placeholders:
@@ -162,10 +214,3 @@ of the LLM module config and MUST contain the documented ``#{...}`` placeholders
 
 Missing placeholders are a config error and surface as :ref:`gvm-def-internal-error`
 at module startup.
-
-Generated Reference
--------------------
-
-The auto-generated signature reference for the Lua tables exposed to scripts
-(``lib.rs.*``, ``llm.rs.*``, ``web.rs.*``, the ``Prompt`` shape, etc.) lives in
-:doc:`01-lua-api`.

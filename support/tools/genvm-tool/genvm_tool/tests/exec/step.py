@@ -28,6 +28,14 @@ class SetEnv:
 
 
 @dataclass
+class UnsetEnv:
+	key: str
+
+	def to_str(self) -> str:
+		return f'unset {self.key}'
+
+
+@dataclass
 class Run:
 	args: collections.abc.Sequence[str | Path]
 	mode: command.RunMode
@@ -63,13 +71,14 @@ class PythonFunction(Python):
 		return await self.func(previous_results)
 
 
-type Step = SetCwd | SetEnv | Run | MkDir | Python
+type Step = SetCwd | SetEnv | UnsetEnv | Run | MkDir | Python
 
 
 def optimize_steps(steps: list[Step]) -> list[Step]:
 	has_effect = [False] * len(steps)
 	last_cwd_idx: int | None = None
-	last_env: dict[str, tuple[int, str | Path]] = {}
+	# `None` is "unset", which only matters after the key was set
+	last_env: dict[str, tuple[int, str | Path | None]] = {}
 	for i, step in enumerate(steps):
 		if isinstance(step, SetCwd):
 			if last_cwd_idx is None or steps[last_cwd_idx].path != step.path:
@@ -77,6 +86,9 @@ def optimize_steps(steps: list[Step]) -> list[Step]:
 		elif isinstance(step, SetEnv):
 			if step.key not in last_env or last_env[step.key][1] != step.value:
 				last_env[step.key] = (i, step.value)
+		elif isinstance(step, UnsetEnv):
+			if last_env.get(step.key, (0, None))[1] is not None:
+				last_env[step.key] = (i, None)
 		elif isinstance(step, Run):
 			has_effect[i] = True  # run always has effect
 			if last_cwd_idx is not None:
@@ -107,6 +119,8 @@ async def run_steps(ctx: SharedContext, steps: list[Step]) -> list[typing.Any]:
 			cwd = s.path
 		elif isinstance(s, SetEnv):
 			env[s.key] = str(s.value)
+		elif isinstance(s, UnsetEnv):
+			env.pop(s.key, None)
 		elif isinstance(s, Run):
 			cmd = command.Command(s.args, cwd, env)
 			results.append(

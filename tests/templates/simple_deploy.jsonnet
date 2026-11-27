@@ -4,9 +4,7 @@ local msg = import './message.json';
 		{
 			"vars": {},
 			"code": scriptfile,
-			"message": msg + {
-				"is_init": true,
-			},
+			"message": msg,
 			"calldata": "{}",
 		}
 }

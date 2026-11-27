@@ -1,34 +1,64 @@
 #!/usr/bin/env python3
 
 import json
-import os
 import re
 import subprocess
 import sys
 from pathlib import Path
 
-script_dir = Path('__file__').parent.absolute()
+sys.path.insert(0, str(Path(__file__).resolve().parent / 'common'))
+
+import conf_common  # noqa: E402
+
+script_dir = Path(__file__).resolve().parent
 genvm_root_dir = script_dir
 while not genvm_root_dir.joinpath('.genvm-monorepo-root').exists():
 	genvm_root_dir = genvm_root_dir.parent
 
 docs_src_root_dir = genvm_root_dir.joinpath('docs', 'website', 'src')
 
-proc = subprocess.run(
-	['git', 'remote', 'get-url', 'origin'],
-	check=True,
-	capture_output=True,
-	text=True,
-)
+# Runners belong to the EXECUTOR, not the manager: a runner's version is an
+# executor-version, tagged in the executor repo, and its sources live under that
+# repo's runners/. So every git lookup behind this page — tags, tag messages, the
+# log between two runner versions — has to run against an executor checkout, not
+# the manager's. All active lines are branches of ONE repo, so any of them sees
+# every executor tag; take the first.
+monorepo = json.loads(genvm_root_dir.joinpath('.genvm-monorepo-root').read_text())
 
-origin_url = proc.stdout.strip()
 
-proc = subprocess.run(
-	['git', 'ls-remote', '--tags', origin_url],
-	check=True,
-	capture_output=True,
-	text=True,
-)
+def _current_line() -> str:
+	"""
+	The `current` executor line, e.g. `v0.3`.
+
+	Must agree with `support/ci/tools/versions.py:current_line`, which decides
+	the sub-site this page is generated into; otherwise this page renders one
+	line's runner data into another line's site.
+	"""
+	current = [
+		line
+		for line, entry in monorepo['executor-lines'].items()
+		if entry['status'] == 'current'
+	]
+	if len(current) != 1:
+		sys.exit(f'.genvm-monorepo-root: exactly 1 `current` line, found {current}')
+	return current[0]
+
+
+executor_dir = genvm_root_dir.joinpath('executors', f'{_current_line()}.x')
+
+
+def executor_git(*args: str, check: bool = True) -> subprocess.CompletedProcess:
+	return subprocess.run(
+		['git', '-C', str(executor_dir), *args],
+		check=check,
+		capture_output=True,
+		text=True,
+	)
+
+
+origin_url = executor_git('remote', 'get-url', 'origin').stdout.strip()
+
+proc = executor_git('ls-remote', '--tags', origin_url)
 
 commit2tag = {}
 
@@ -45,18 +75,11 @@ for line in proc.stdout.splitlines():
 
 	commit2tag[commit] = bad_id.sub('_', rev)
 
-cwd = Path(os.getcwd())
-
-# Ensure tags are available locally (CI may use shallow checkout)
-subprocess.run(['git', 'fetch', '--tags'], capture_output=True, check=True, text=True)
+# Ensure tags are available locally (CI may use a shallow checkout)
+executor_git('fetch', '--tags', check=False)
 
 # Collect tag messages (one-line) for descriptions
-proc_tags = subprocess.run(
-	['git', 'tag', '-l', '-n1'],
-	check=True,
-	capture_output=True,
-	text=True,
-)
+proc_tags = executor_git('tag', '-l', '-n1')
 tag_messages = {}
 for line in proc_tags.stdout.splitlines():
 	parts = line.split(None, 1)
@@ -65,23 +88,7 @@ for line in proc_tags.stdout.splitlines():
 	elif len(parts) == 1:
 		tag_messages[parts[0]] = ''
 
-current_commit = subprocess.run(
-	['git', 'rev-parse', 'HEAD'],
-	check=True,
-	capture_output=True,
-	text=True,
-)
-
-current_commit = current_commit.stdout.strip()
-
 eval_file = genvm_root_dir.joinpath('runners', 'docs.nix')
-
-build_config = json.loads(genvm_root_dir.joinpath('flake-config.json').read_text())
-build_config['head-revision'] = current_commit
-commit2tag[current_commit] = build_config['executor-version']
-
-print(commit2tag)
-print(build_config)
 
 proc = subprocess.run(
 	[
@@ -93,20 +100,54 @@ proc = subprocess.run(
 		'--show-trace',
 		'--json',
 		'--file',
-		str(eval_file.relative_to(cwd)),
+		str(eval_file),
 		'--apply',
-		'f: f { commitToTagStr = "'
-		+ json.dumps(commit2tag).replace('"', '\\"')
-		+ '"; build-config-str = "'
-		+ json.dumps(build_config).replace('"', '\\"')
-		+ '"; }',
+		'f: f { }',
 	],
 	check=True,
 	capture_output=True,
 	text=True,
 )
 
-res = json.loads(proc.stdout)
+all_runners = json.loads(proc.stdout)
+
+
+def line_of(executor_version: str) -> str:
+	(line,) = (
+		line
+		for line in monorepo['executor-lines']
+		if executor_version.startswith(line + '.')
+	)
+	return line
+
+
+for runner in all_runners:
+	runner['line'] = line_of(runner['version'])
+
+# Latest is what nothing else in its line supersedes; a line without
+# `supersedes` data (the legacy one) keeps every hash of an id, since each is
+# equally accepted
+superseded = {
+	(r['line'], r['id'], r['supersedes']) for r in all_runners if r['supersedes']
+}
+for runner in all_runners:
+	runner['latest'] = (runner['line'], runner['id'], runner['hash32']) not in superseded
+
+# Consumed by runner_pages.py, which runs in each line's own docs shell, and the
+# executor sites' conf.py
+runners_json = genvm_root_dir / 'build' / 'doc' / 'runners.json'
+runners_json.parent.mkdir(parents=True, exist_ok=True)
+runners_json.write_text(json.dumps(all_runners, indent=2))
+
+# The changelog below is per line: post-split the lines are independent — v0.2
+# is not "before" v0.3 — so other lines' hashes must not leak in as history
+_line = _current_line()
+res: dict[str, dict[str, list[str]]] = {}
+for runner in all_runners:
+	if runner['line'] == _line:
+		res.setdefault(runner['version'], {}).setdefault(runner['id'], []).append(
+			runner['hash32']
+		)
 
 # --- Post-process: sort by semver, enrich with descriptions, diffs, commits ---
 
@@ -170,27 +211,26 @@ for i, ver in enumerate(semver_versions):
 	prev_commit_hash = tag2commit.get(prev_ver)
 	curr_commit_hash = tag2commit.get(ver)
 	if prev_commit_hash and curr_commit_hash:
-		try:
-			log_proc = subprocess.run(
-				[
-					'git',
-					'log',
-					'--oneline',
-					f'{prev_commit_hash}..{curr_commit_hash}',
-					'--',
-					'executors/v0.3.x/runners/',
-				],
-				capture_output=True,
-				text=True,
-				check=True,
-			)
-			commits_map[ver] = [
+		# In the executor repo, and over ITS runners/ — the manager's history has
+		# no executor commits (they sit behind a gitlink), so asking it for the
+		# log between two runner versions silently yields nothing.
+		log_proc = executor_git(
+			'log',
+			'--oneline',
+			f'{prev_commit_hash}..{curr_commit_hash}',
+			'--',
+			'runners/',
+			check=False,
+		)
+		commits_map[ver] = (
+			[
 				line.split(None, 1)[1] if len(line.split(None, 1)) > 1 else line
 				for line in log_proc.stdout.strip().splitlines()
 				if line.strip()
 			]
-		except subprocess.CalledProcessError:
-			commits_map[ver] = []
+			if log_proc.returncode == 0
+			else []
+		)
 	else:
 		commits_map[ver] = []
 
@@ -278,20 +318,6 @@ def version_to_anchor(ver):
 	return res
 
 
-# --- Runner tier definitions ---
-
-TIER_1 = ['py-genlayer', 'py-genlayer-multi']
-TIER_2 = ['py-lib-genlayer-embeddings']
-TIER_3 = [
-	'cpython',
-	'softfloat',
-	'py-lib-cloudpickle',
-	'py-lib-genlayer-std',
-	'py-lib-protobuf',
-	'py-lib-word_piece_tokenizer',
-	'models-all-MiniLM-L6-v2',
-]
-
 RUNNER_DESCRIPTIONS = {
 	'py-genlayer': 'Standard runner for single-file Python intelligent contracts. Includes CPython, the genlayer standard library, and all core dependencies.',
 	'py-genlayer-multi': 'Runner for multi-file Python contract packages. Same dependencies as py-genlayer.',
@@ -305,135 +331,94 @@ RUNNER_DESCRIPTIONS = {
 	'models-all-MiniLM-L6-v2': 'Pre-trained sentence embedding model (ONNX).',
 }
 
-# --- Generate runners page ---
-
-latest_ver = semver_versions[-1] if semver_versions else None
-latest_runners = res.get(latest_ver, {}) if latest_ver else {}
+# --- Generate each line's runner table ---
 
 
-def build_runner_version_list(rid):
-	"""Build list of (hash, version_range_str) for previous versions of a runner.
-
-	Groups consecutive versions sharing the same hash into ranges.
-	Skips the current (latest) hash.
+def runner_link(runner: dict, page_depth: int) -> str:
 	"""
-	history = runners_history.get(rid, {}).get('versions', [])
-	if not history:
-		return []
-	# Skip the first entry (current hash)
-	prev = history[1:]
-	return prev
+	RST link from a page `page_depth` directories below an executor site root
+	"""
+	target = '../' * page_depth + conf_common.relative(
+		'executor', conf_common.runner_path(runner['id'], runner['hash32']) + 'index.html'
+	)
+	return f'`{runner["hash32"]} <{target}>`__'
 
 
-def format_version_range(rid):
-	"""For each hash in the runner history (excluding current), compute the version range string."""
-	# Walk through semver_versions ascending to group consecutive versions with same hash
-	version_hash_pairs = []
-	for ver in semver_versions:
-		hashes = res[ver].get(rid)
-		if hashes:
-			version_hash_pairs.append((ver, hashes[0]))
-
-	if not version_hash_pairs:
-		return []
-
-	# Group consecutive versions with same hash
-	groups = []
-	current_hash = version_hash_pairs[0][1]
-	start_ver = version_hash_pairs[0][0]
-	end_ver = version_hash_pairs[0][0]
-	for ver, h in version_hash_pairs[1:]:
-		if h == current_hash:
-			end_ver = ver
-		else:
-			groups.append((current_hash, start_ver, end_ver))
-			current_hash = h
-			start_ver = ver
-			end_ver = ver
-	groups.append((current_hash, start_ver, end_ver))
-
-	# The last group is the "current" hash, skip it
-	prev_groups = groups[:-1]
-	# Reverse so newest first
-	prev_groups.reverse()
-	return prev_groups
-
-
-def render_runner_section(rid, rst_parts):
-	desc = RUNNER_DESCRIPTIONS.get(rid, '')
-	hashes = latest_runners.get(rid, [])
-	current_hash = hashes[0] if hashes else 'N/A'
-
-	rst_parts.append(rst_heading(rid, '^'))
-	rst_parts.append('')
-	if desc:
-		rst_parts.append(desc)
-		rst_parts.append('')
-	rst_parts.append(f'Current hash: ``{current_hash}``')
-	rst_parts.append('')
-
-	prev_groups = format_version_range(rid)
-	if prev_groups:
-		for h, start_v, end_v in prev_groups:
-			if start_v == end_v:
-				anchor = version_to_anchor(start_v)
-				rst_parts.append(f'- ``{h}`` \u2014 `{start_v} <changelog.html#{anchor}>`_')
-			else:
-				anchor = version_to_anchor(end_v)
-				rst_parts.append(
-					f'- ``{h}`` \u2014 {start_v} through `{end_v} <changelog.html#{anchor}>`_'
-				)
-		rst_parts.append('')
+def line_runners_rst(line: str, page_depth: int) -> str:
+	runners = sorted(
+		(r for r in all_runners if r['line'] == line), key=lambda r: (r['id'], r['hash32'])
+	)
+	status = monorepo['executor-lines'][line]['status']
+	parts = [
+		rst_heading('Available Runners', '='),
+		'',
+		f'Every runner executor {runners[0]["version"] if runners else line} ships. '
+		'A runner is addressed by its content hash, so each links to the one page '
+		'for that exact content',
+		'',
+		rst_heading('Latest', '-'),
+		'',
+	]
+	rows = [
+		[r['id'], RUNNER_DESCRIPTIONS.get(r['id'], ''), runner_link(r, page_depth)]
+		for r in runners
+		if r['latest']
+	]
+	parts += [make_table(rows, ['Runner', 'Description', 'Hash']), '']
+	parts += [rst_heading('All', '-'), '']
+	rows = [
+		[
+			r['id'],
+			runner_link(r, page_depth)
+			+ (f' :gl-latest-{status}:`latest`' if r['latest'] else ''),
+			f'``{r["fork"]}``' if r['fork'] else '',
+			f'``{r["supersedes"]}``' if r['supersedes'] else '',
+		]
+		for r in runners
+	]
+	parts += [make_table(rows, ['Runner', 'Hash', 'Fork', 'Supersedes']), '']
+	return '\n'.join(parts)
 
 
-runners_rst = [
-	"""\
-Available Runners
-=================
-"""
-]
+SDK_REFERENCE_RUNNERS = ['py-lib-genlayer-std', 'py-lib-genlayer-embeddings']
 
-# Tier 1
-runners_rst.append(rst_heading('Contract runners', '-'))
-runners_rst.append('')
-for rid in TIER_1:
-	if rid in latest_runners:
-		render_runner_section(rid, runners_rst)
 
-# Tier 2
-runners_rst.append(rst_heading('Optional runners', '-'))
-runners_rst.append('')
-for rid in TIER_2:
-	if rid in latest_runners:
-		render_runner_section(rid, runners_rst)
+def line_reference_rst(line: str, page_depth: int) -> str:
+	latest = [r for r in all_runners if r['line'] == line and r['latest']]
+	parts = [
+		rst_heading('API Reference', '='),
+		'',
+		'The reference is published with each runner version; the ones this executor ships:',
+		'',
+	]
+	for rid in SDK_REFERENCE_RUNNERS:
+		parts += [
+			f'- ``{rid}`` {runner_link(r, page_depth)}' for r in latest if r['id'] == rid
+		]
+	return '\n'.join(parts) + '\n'
 
-# Tier 3
-runners_rst.append(rst_heading('Internal dependencies', '-'))
-runners_rst.append('')
-for rid in TIER_3:
-	if rid in latest_runners:
-		render_runner_section(rid, runners_rst)
 
-# Also include any runners not in the tier lists
-known_runners = set(TIER_1 + TIER_2 + TIER_3)
-extra_runners = sorted(set(latest_runners.keys()) - known_runners)
-if extra_runners:
-	runners_rst.append(rst_heading('Other', '-'))
-	runners_rst.append('')
-	for rid in extra_runners:
-		render_runner_section(rid, runners_rst)
-
-runners_rst_path = json_path.with_name('available-runners.rst')
-runners_rst_path.write_text('\n'.join(runners_rst) + '\n')
+for line in monorepo['executor-lines']:
+	sdk_dir = (
+		genvm_root_dir
+		/ 'executors'
+		/ f'{line}.x'
+		/ 'docs'
+		/ 'website'
+		/ 'src'
+		/ 'python-sdk'
+	)
+	if sdk_dir.is_dir():
+		(sdk_dir / 'available-runners.rst').write_text(line_runners_rst(line, 1))
+		if not (sdk_dir / 'reference').is_dir():
+			(sdk_dir / 'reference.rst').write_text(line_reference_rst(line, 1))
 
 # --- Generate changelog ---
 
-# Sphinx resolves include paths relative to the top-level source file,
-changelog_notes_dir = docs_src_root_dir / 'python-sdk' / 'changelog-notes'
-changelog_rst_path = docs_src_root_dir / 'python-sdk' / 'changelog.rst'
-changelog_notes_include_prefix = changelog_notes_dir.relative_to(
-	changelog_rst_path.parent
-).as_posix()
+# Written into the current line's SDK docs, from runner data only the manager has
+sdk_src_root_dir = executor_dir / 'docs' / 'website' / 'src'
+
+changelog_rst_path = sdk_src_root_dir / 'python-sdk' / 'changelog.rst'
 
 changelog_rst = []
 
@@ -463,18 +448,6 @@ for entry in enriched_versions:
 	changelog_rst.append('')
 	if desc:
 		changelog_rst.append(f'*{desc}*')
-		changelog_rst.append('')
-
-	# Check for hand-written notes — try exact version and base version (e.g. v0.1.8 for v0.1.8-runner-hash)
-	notes_file = changelog_notes_dir / f'{ver}.rst'
-	if not notes_file.exists():
-		base_ver = SEMVER_RE.match(ver)
-		if base_ver:
-			base_name = f'v{base_ver.group(1)}.{base_ver.group(2)}.{base_ver.group(3)}'
-			notes_file = changelog_notes_dir / f'{base_name}.rst'
-	if notes_file.exists():
-		rel_notes = f'{changelog_notes_include_prefix}/{notes_file.name}'
-		changelog_rst.append(f'.. include:: {rel_notes}')
 		changelog_rst.append('')
 
 	if changes:
@@ -517,3 +490,16 @@ for entry in enriched_versions:
 		changelog_rst.append('')
 
 changelog_rst_path.write_text('\n'.join(changelog_rst) + '\n')
+
+# --- Executor sites this manager ships, included by overview/index.rst ---
+
+
+# The overview page sits 1 level below manager/
+executor_links = []
+for line, entry in monorepo['executor-lines'].items():
+	ver = conf_common.executor_version(line)
+	target = '../' + conf_common.relative('manager', conf_common.executor_path(ver))
+	executor_links.append(f'- `{ver} <{target}index.html>`__ ({entry["status"]})')
+(docs_src_root_dir / 'overview' / 'executor-lines_generated.rst').write_text(
+	'\n'.join(executor_links) + '\n'
+)

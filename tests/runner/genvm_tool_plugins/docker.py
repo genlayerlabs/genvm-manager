@@ -122,8 +122,18 @@ def _stop_cleanup(container_id: str) -> functools.partial:
 
 
 class ContainerHandle(genvm_tool.tests.exec.service.Handle):
-	def __init__(self, container_id: str):
+	# The webdriver image asks for a 10s start-period and probes every 30s, so a
+	# first verdict lands well after half a minute and each retry costs another
+	# interval. Room for several of them, not for all ten the image allows.
+	STARTUP_TIMEOUT = 180.0
+	# Outlasts the teardown chain: the watchdog's ack budget, and behind it a
+	# `docker stop` capped at 30s.
+	INTERRUPT_TIMEOUT = 120.0
+
+	def __init__(self, container_id: str, *, ci: bool):
 		self._container_id = container_id
+		self._ci = ci
+		self._last_inspect: 'genvm_tool.tests.exec.command.Result | None' = None
 		self._watchdog_token = local_ctx.shared.watchdog.register(
 			_stop_cleanup(container_id)
 		)
@@ -147,6 +157,7 @@ class ContainerHandle(genvm_tool.tests.exec.service.Handle):
 		cwd: Path,
 		env: dict[str, str] | None = None,
 		log_context: dict | None = None,
+		ci: bool = False,
 	) -> 'ContainerHandle':
 		if env is None:
 			env = copy.deepcopy(DEFAULT_ENV)
@@ -183,43 +194,62 @@ class ContainerHandle(genvm_tool.tests.exec.service.Handle):
 			)
 			raise DockerRunError(f'Docker run failed with exit code {res.exit_code}')
 		container_id = res.stdout.strip()
-		return ContainerHandle(container_id=container_id)
+		return ContainerHandle(container_id=container_id, ci=ci)
+
+	async def _inspect(self) -> 'genvm_tool.tests.exec.command.Result':
+		"""
+		State and health of the container in one call, cached for one probe.
+
+		:meth:`healthy` runs immediately before :meth:`death_reason` on every
+		poll, so the second reads what the first fetched rather than forking a
+		docker of its own.
+		"""
+		cmd = genvm_tool.tests.exec.command.Command(
+			args=[
+				'docker',
+				'inspect',
+				'--format',
+				'{{.State.Status}}|'
+				'{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}',
+				self._container_id,
+			],
+			cwd=local_ctx.shared.root_dir,
+			env=DEFAULT_ENV,
+		)
+		self._last_inspect = await cmd.run(
+			ctx=local_ctx.shared, mode=genvm_tool.tests.exec.command.RunMode.SILENT
+		)
+		return self._last_inspect
+
+	@staticmethod
+	def _split_inspect(res: 'genvm_tool.tests.exec.command.Result') -> tuple[str, str]:
+		state, _, health = res.stdout.strip().partition('|')
+		return state, health
 
 	async def healthy(self) -> bool:
 		try:
-			cmd = genvm_tool.tests.exec.command.Command(
-				args=[
-					'docker',
-					'inspect',
-					'--format',
-					'{{.State.Health.Status}}',
-					self._container_id,
-				],
-				cwd=local_ctx.shared.root_dir,
-				env=DEFAULT_ENV,
-			)
-			res = await cmd.run(
-				ctx=local_ctx.shared, mode=genvm_tool.tests.exec.command.RunMode.SILENT
-			)
+			res = await self._inspect()
 			if res.exit_code != 0:
-				logs = await self.get_logs()
-				local_ctx.shared.logger.warning(
-					'Docker health check failed',
-					container_id=self._container_id,
-					returncode=res.exit_code,
-					logs=logs,
-				)
+				if self._ci:
+					logs = await self.get_logs()
+					local_ctx.shared.logger.warning(
+						'Docker health check failed',
+						container_id=self._container_id,
+						returncode=res.exit_code,
+						logs=logs,
+					)
 				return False
-			status = res.stdout.strip()
-			if status != 'healthy':
-				logs = await self.get_logs()
-				local_ctx.shared.logger.warning(
-					'Container not healthy',
-					container_id=self._container_id,
-					status=status,
-					logs=logs,
-				)
-			return status == 'healthy'
+			_, health = self._split_inspect(res)
+			if health != 'healthy':
+				if self._ci:
+					logs = await self.get_logs()
+					local_ctx.shared.logger.warning(
+						'Container not healthy',
+						container_id=self._container_id,
+						status=health,
+						logs=logs,
+					)
+			return health == 'healthy'
 		except Exception as e:
 			local_ctx.shared.logger.error(
 				'Failed to check container health',
@@ -227,6 +257,28 @@ class ContainerHandle(genvm_tool.tests.exec.service.Handle):
 				error=e,
 			)
 			return False
+
+	async def death_reason(self) -> str | None:
+		res, self._last_inspect = self._last_inspect, None
+		try:
+			if res is None:
+				res = await self._inspect()
+				# a probe of our own is not a probe the next call may reuse
+				self._last_inspect = None
+		except Exception:
+			return None  # healthy() reports the probe itself failing
+		if res.exit_code != 0:
+			# `docker run --rm` drops the container the moment it exits; any
+			# other inspect failure is the daemon being flaky, so keep waiting
+			if 'no such' in (res.stdout + res.stderr).lower():
+				return f'container {self._container_id} is gone'
+			return None
+		state, health = self._split_inspect(res)
+		if state in ('exited', 'dead'):
+			return f'container {state}, logs: {await self.get_logs()}'
+		if health == 'unhealthy':
+			return f'container unhealthy, logs: {await self.get_logs()}'
+		return None
 
 	async def interrupt(self) -> None:
 		# Tear the container down through the watchdog so creation and teardown

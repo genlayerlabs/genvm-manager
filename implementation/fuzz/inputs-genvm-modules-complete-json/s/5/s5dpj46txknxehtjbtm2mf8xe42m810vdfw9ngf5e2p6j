@@ -1,0 +1,19 @@
+{
+    "foo": [
+        "bar",
+        "baz\n\\z",
+                                   -1e10,
+        1e20,
+        null,
+    true,
+        false,
+        [1, 2, 3]
+    ],
+    "bar": [
+        "рус本",
+      [1, 2, 3]
+    ],
+    "bau":      "mbbbbbbbbbbbbbbaz\t\uabbbbb",
+        "mau":      "\t\\rabbbbb"
+ 
+}

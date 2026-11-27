@@ -48,6 +48,9 @@ in
 
   extraLibs ? [ ],
 
+  # Crates a release must not link or build, e.g. fuzzing support or vendored Lua
+  forbiddenCrates ? builtins.fromJSON (builtins.readFile ./release-forbidden-crates.json),
+
   depsExtraArgs ? { },
 
   # Toggles whether a custom sysroot is created when the target is a .json file.
@@ -169,6 +172,18 @@ stdenv.mkDerivation (
 
       echo "PATH=$PATH"
       echo "RUSTFLAGS=$RUSTFLAGS"
+
+      # The graph `cargo build` below resolves: same target, features and dependency kinds
+      cargo tree --target ${targetAsRust} --offline -e normal,build --prefix none --format '{p}' \
+        | cut -d' ' -f1 | sort -u > $NIX_BUILD_TOP/release-crates
+      forbidden=$(grep -Fxf ${pkgs.writeText "forbidden-crates" (lib.concatLines forbiddenCrates)} $NIX_BUILD_TOP/release-crates || true)
+      if [[ -n "$forbidden" ]]
+      then
+      echo "forbidden crates in the release graph: $forbidden"
+      cargo tree --target ${targetAsRust} --offline -e normal,build $(printf -- '-i %s ' $forbidden)
+      exit 1
+      fi
+
       echo cargo build --target ${targetAsRust} -j $NIX_BUILD_CORES --offline --profile=${profile} ${verbose}
       cargo build --target ${targetAsRust} -j $NIX_BUILD_CORES --offline --profile=${profile} ${verbose}
       runHook postBuild

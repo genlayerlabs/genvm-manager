@@ -22,15 +22,22 @@ local value2json = require("value2json")
 ---@field as_user_error fun(val: any): nil | ModuleError
 ---@field url_encode fun(url: string): string
 ---@field filter_text fun(text: string, filters: string[]): string
+---@field escape_html fun(text: string): string
 ---@field filter_image fun(image: string, filters: any[]): string
 ---@field random_bytes fun(length: integer): string
+---@field sha2_256 fun(data: string): string
+---@field sha3_256 fun(data: string): string
+---@field keccak256 fun(data: string): string
+---@field monotonic_ms fun(): integer
 ---@field random_float fun(): number
 ---@field data_dir string
 
 ---@type RS
 M.rs = __dflt ---@diagnostic disable-line
 
---- Log a message or structured data. The argument table may contain `level` and `message` fields.
+--- Log a message or structured data. The argument table may contain `level`, `message` and
+--- `audience` fields. `audience` is `"user" | "operator" | "introspector"` and defaults to
+--- `"introspector"`.
 ---@param arg any value to log; converted to JSON via `value2json` before sending
 M.log = function(arg)
 	M.rs.log_json(value2json(arg))

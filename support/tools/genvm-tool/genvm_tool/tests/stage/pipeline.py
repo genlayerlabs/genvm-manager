@@ -30,6 +30,7 @@ def wrap[A, R](stage: Stage[A, R]) -> RunStage[A, R]:
 		res = await stage.run(ctx, arg)
 		end_t = time.monotonic()
 		delta_t = end_t - start_t
+		ctx.bump_metric(f'stage_time.{stage.name}', 0.0, delta_t)
 		ctx.logger.trace('stage end', name=stage.name, elapsed=delta_t)
 		if delta_t > 1.0 and not stage.is_slow:
 			ctx.logger.warning('stage is slow', name=stage.name, elapsed=delta_t)

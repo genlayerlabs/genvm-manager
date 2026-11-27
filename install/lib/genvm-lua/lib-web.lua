@@ -121,4 +121,33 @@ M.check_url = function(url)
 	return false
 end
 
+--- Re-raise a failure of *our own* webdriver sidecar.
+---
+--- Deliberately fatal. A broken sidecar means this validator has no valid
+--- observation of the page at all, so it must not produce a contract-visible
+--- result: doing that would let it assert a claim it never observed, and then
+--- vote on it. Fatal becomes `ResultCode::InternalError`, which a node turns
+--- into a Timeout vote -- the truthful answer, "I could not do the work".
+--- A failure of the *remote site* is a real observation and stays non-fatal;
+--- only this node's own infrastructure takes this path.
+---
+--- The cause is prepended rather than replacing what the transport reported,
+--- so `STATUS_NOT_OK` / `SENDING_REQUEST` / `READING_BODY` survive as the
+--- underlying detail. It is not contract-visible: a fatal `ModuleError` is
+--- stringified into `FatalError` and never reaches the runner as `causes`, so
+--- this word is for operators and for the node's logs.
+---@param e any the caught error value
+M.reraise_as_webdriver_unavailable = function(e)
+	local err = lib.rs.as_user_error(e)
+	if err == nil then
+		-- Not a module error, so it carries no fatality flag; unclassified is
+		-- already treated as fatal downstream. Re-raised untouched.
+		error(e)
+	end
+
+	table.insert(err.causes, 1, "WEBDRIVER_UNAVAILABLE")
+	err.fatal = true
+	lib.rs.user_error(err)
+end
+
 return M

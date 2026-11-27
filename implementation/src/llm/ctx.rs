@@ -147,7 +147,7 @@ pub fn create_global(vm: &mlua::Lua, config: &Config) -> anyhow::Result<mlua::Va
     let llm = vm.create_table()?;
     llm.set(
         "exec_prompt_in_provider",
-        vm.create_async_function(exec_prompt_in_provider)?,
+        scripting::cancellation::create_async_function(vm, exec_prompt_in_provider)?,
     )?;
 
     let all_providers =
